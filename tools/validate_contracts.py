@@ -1762,6 +1762,7 @@ def windows_audio_wasapi_contract() -> None:
         raise ContractError("root CMake is missing the WASAPI audio boundary")
     for token in [
         "palmier_audio_wasapi",
+        "PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN",
         "/W4 /WX /permissive- /Zc:__cplusplus /utf-8",
         "audio_wasapi.clock_math",
         "audio_wasapi.environment_contract",

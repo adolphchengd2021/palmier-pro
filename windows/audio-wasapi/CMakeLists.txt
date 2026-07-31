@@ -11,6 +11,10 @@ target_include_directories(
     PUBLIC "${audio_wasapi_include_dir}"
 )
 target_compile_features(palmier_audio_wasapi PUBLIC cxx_std_20)
+target_compile_definitions(
+    palmier_audio_wasapi
+    PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN
+)
 target_compile_options(
     palmier_audio_wasapi
     PRIVATE /W4 /WX /permissive- /Zc:__cplusplus /utf-8
