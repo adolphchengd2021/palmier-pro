@@ -119,6 +119,12 @@ RenderedFrame renderExportFrame(
 
 void validateSourceFrame(const SourceFrame& frame, std::string_view layerPointer);
 
+void validateSourceFrameDimensions(
+    std::uint32_t width,
+    std::uint32_t height,
+    std::string_view pointer
+);
+
 std::vector<const SourceFrame*> resolveAndValidateSourceFrames(
     const RenderPlan& plan,
     const FrameResolver& resolveFrame

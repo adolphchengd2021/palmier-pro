@@ -1615,6 +1615,19 @@ def windows_render_plan_contract() -> None:
         False,
     )
     require_equal(
+        "decoded source adapter",
+        contract["decodedSourceAdapter"],
+        {
+            "available": True,
+            "input": "ffmpeg-decoded-rgba8",
+            "output": "top-left-straight-srgb-rgba32-float",
+            "displayTransform": "baked-cardinal-counterclockwise",
+            "acceptedAlphaModes": ["opaque", "straight"],
+            "refusedAlphaModes": ["unspecified", "premultiplied"],
+            "rowStorage": "explicit-stride-exact-height",
+        },
+    )
+    require_equal(
         "render plan backend concurrency",
         contract["rendererConcurrency"],
         "serialized-immediate-context-per-backend-instance",
@@ -1652,6 +1665,7 @@ def windows_render_plan_contract() -> None:
         contract["runtimeGates"],
         {
             "windowsServer2022Warp": "required-ci",
+            "ffmpegDecodedSourceAdapter": "required-ffmpeg-ci",
             "windows10Build19045": "pending-clean-vm",
             "physicalGpuVendors": "pending-hardware-matrix",
             "ffmpegDecodeEncode": "pending",
@@ -1738,6 +1752,98 @@ def windows_render_plan_contract() -> None:
     ]:
         if token not in adr:
             raise ContractError(f"render plan ADR missing token {token!r}")
+
+
+def windows_media_render_adapter_contract() -> None:
+    root_cmake = read_text("CMakeLists.txt")
+    adapter_cmake = read_text("windows/media-render/CMakeLists.txt")
+    adapter_header = read_text(
+        "windows/media-render/include/palmier/media/render_source_adapter.hpp"
+    )
+    adapter_source = read_text("windows/media-render/render_source_adapter.cpp")
+    adapter_hooks = read_text(
+        "windows/media-render/internal/render_source_adapter_testing.hpp"
+    )
+    adapter_tests = read_text(
+        "windows/media-render/tests/render_source_adapter_tests.cpp"
+    )
+    media_tests = read_text(
+        "windows/media-ffmpeg/tests/ffmpeg_media_reader_tests.cpp"
+    )
+    for token in [
+        "add_subdirectory(windows/media-render)",
+        "PALMIER_ENABLE_FFMPEG_PROTOTYPE",
+    ]:
+        if token not in root_cmake:
+            raise ContractError(f"root CMake missing media-render token {token!r}")
+    for token in [
+        "palmier_media_render",
+        "palmier_media_ffmpeg palmier_render",
+        "palmier_render_d3d11",
+        "media_render.adapter_parity",
+        "RUN_SERIAL TRUE TIMEOUT 60",
+        "/W4 /WX /permissive- /Zc:__cplusplus /utf-8",
+    ]:
+        if token not in adapter_cmake:
+            raise ContractError(f"media-render CMake missing token {token!r}")
+    for token in [
+        "class RenderSourceError final",
+        "render::SourceFrame makeRenderSourceFrame(",
+        "std::stop_token cancellation",
+    ]:
+        if token not in adapter_header:
+            raise ContractError(f"media-render API missing token {token!r}")
+    for token in [
+        "validateSourceFrameDimensions(",
+        "decoded.rowBytes * sourceHeight != decoded.rgba8.size()",
+        "AlphaMode::opaque",
+        "AlphaMode::straight",
+        '"unsupportedAlphaMode"',
+        '"inconsistentOpaqueAlpha"',
+        "destinationIndex(",
+        "cancellation.stop_requested()",
+    ]:
+        if token not in adapter_source:
+            raise ContractError(f"media-render source missing token {token!r}")
+    for token in [
+        "RenderSourceAdapterHooks",
+        "allocatePixels",
+        "didConvertRow",
+        "willPublish",
+    ]:
+        if token not in adapter_hooks:
+            raise ContractError(f"media-render test hooks missing token {token!r}")
+    for token in [
+        "cardinalRotationsAndPaddedStride",
+        "refusalBoundaries",
+        "deterministicCancellationBoundaries",
+        "allocationAttempted",
+        "unsupportedPrimaries",
+        "unsupportedTransfer",
+        "unsupportedMatrix",
+        "unsupportedRange",
+        "unspecifiedRange",
+        "adapterFeedsSharedPreviewAndExport",
+        "renderPreviewFrame",
+        "renderExportFrame",
+        "D3d11WarpRenderer",
+    ]:
+        if token not in adapter_tests:
+            raise ContractError(f"media-render tests missing token {token!r}")
+    if "makeRenderSourceFrame(frame)" not in media_tests:
+        raise ContractError("real FFmpeg decode is not checked at the adapter boundary")
+
+    adr = read_text(
+        "docs/windows/adr/0012-decoded-frame-render-source-adapter.md"
+    )
+    for token in [
+        "resolver never performs file I/O",
+        "Unspecified and premultiplied alpha are hard refusals",
+        "does not define a mapping for arbitrary RenderPlan",
+        "does not yet prove a successfully adapted real media fixture",
+    ]:
+        if token not in adr:
+            raise ContractError(f"media-render ADR missing token {token!r}")
 
 
 def windows_audio_wasapi_contract() -> None:
@@ -1892,6 +1998,7 @@ def main() -> int:
         ("Windows toolchain and compiled probe", windows_bootstrap_contract),
         ("Windows read-only project reader", windows_project_reader_contract),
         ("Windows render plan and D3D11 WARP", windows_render_plan_contract),
+        ("Windows decoded-frame render adapter", windows_media_render_adapter_contract),
         ("Windows WASAPI clock and environment probe", windows_audio_wasapi_contract),
     ]
     for label, check in checks:

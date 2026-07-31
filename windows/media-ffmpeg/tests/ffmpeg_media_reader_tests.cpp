@@ -1,5 +1,6 @@
 #include "media_test_fixtures.hpp"
 #include "palmier/media/ffmpeg_media_reader.hpp"
+#include "palmier/media/render_source_adapter.hpp"
 
 #include <Windows.h>
 
@@ -22,6 +23,7 @@ using palmier::media::DecodeLimits;
 using palmier::media::FfmpegMediaReader;
 using palmier::media::MediaError;
 using palmier::media::MediaFailureCode;
+using palmier::media::RenderSourceError;
 using palmier::media::StreamKind;
 
 void require(bool condition, const std::string& message) {
@@ -198,6 +200,13 @@ void decodesStraightAlphaAndRotation(const std::filesystem::path& input) {
         "decoded RGBA pixels differ"
     );
     require(frame.alphaMode == AlphaMode::unspecified, "wrong alpha mode");
+    try {
+        palmier::media::makeRenderSourceFrame(frame);
+    } catch (const RenderSourceError& error) {
+        require(error.code == "unsupportedAlphaMode", "wrong adapter refusal");
+        return;
+    }
+    throw std::runtime_error("unknown alpha reached the render source");
 }
 
 void validatesFailureBoundaries(

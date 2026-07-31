@@ -184,17 +184,21 @@ RenderedFrame renderExportFrame(
     return backend.render(plan, resolveFrame);
 }
 
-void validateSourceFrame(const SourceFrame& frame, std::string_view layerPointer) {
-    const auto pointer = std::string(layerPointer);
+void validateSourceFrameDimensions(
+    std::uint32_t width,
+    std::uint32_t height,
+    std::string_view pointerValue
+) {
+    const auto pointer = std::string(pointerValue);
     if (
-        frame.width == 0
-        || frame.height == 0
-        || frame.width > maximumTextureDimension
-        || frame.height > maximumTextureDimension
+        width == 0
+        || height == 0
+        || width > maximumTextureDimension
+        || height > maximumTextureDimension
     ) {
         fail("invalidSourceSize", pointer, "source dimensions are invalid");
     }
-    const auto expected = static_cast<std::uint64_t>(frame.width) * frame.height;
+    const auto expected = static_cast<std::uint64_t>(width) * height;
     if (expected > maximumFramePixels) {
         fail(
             "sourceBudgetExceeded",
@@ -202,6 +206,12 @@ void validateSourceFrame(const SourceFrame& frame, std::string_view layerPointer
             "the synthetic reference source is limited to 8294400 pixels"
         );
     }
+}
+
+void validateSourceFrame(const SourceFrame& frame, std::string_view layerPointer) {
+    const auto pointer = std::string(layerPointer);
+    validateSourceFrameDimensions(frame.width, frame.height, pointer);
+    const auto expected = static_cast<std::uint64_t>(frame.width) * frame.height;
     if (expected != frame.pixels.size()) {
         fail("invalidSourceStorage", pointer, "source pixel count does not match dimensions");
     }

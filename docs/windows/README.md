@@ -81,6 +81,15 @@ through FFmpeg 8.1.2 LGPL DLLs. This is a bounded media-reader proof, not a
 player: WASAPI, D3D11VA, synchronized audio, 1080p performance, Windows 10, and
 packaged DLL verification remain open. See ADR 0010.
 
+The FFmpeg preset also builds `windows/media-render`. Its adapter validates the
+decoded frame before allocation, honors padded row stride, bakes pure cardinal
+display rotation into a top-left `SourceFrame`, and feeds the existing CPU and
+D3D11 WARP preview/export path. Only explicit opaque and straight alpha are
+accepted; unknown and premultiplied alpha are hard refusals. The positive
+adapter fixture is synthetic, while the real QTRLE fixture proves that unknown
+alpha cannot enter rendering. This does not provide arbitrary-frame decode,
+cache ownership, a playback loop, or Swift pixel parity. See ADR 0012.
+
 The default Windows build also compiles a bounded WASAPI environment probe and
 pure integer audio-clock conversion tests. The probe opens the default
 multimedia render endpoint in event-driven shared mode, validates its engine

@@ -417,13 +417,9 @@ bool supportedPrototypeColor(const AVFrame& frame, const ColorMetadata& color) {
     const auto* descriptor = av_pix_fmt_desc_get(
         static_cast<AVPixelFormat>(frame.format)
     );
-    return color.primaries == AVCOL_PRI_BT709
-        && color.transfer == AVCOL_TRC_IEC61966_2_1
-        && color.matrix == AVCOL_SPC_RGB
+    return isPrototypeSrgbColor(color)
         && descriptor != nullptr
-        && (descriptor->flags & AV_PIX_FMT_FLAG_RGB) != 0
-        && (color.range == AVCOL_RANGE_JPEG
-            || color.range == AVCOL_RANGE_UNSPECIFIED);
+        && (descriptor->flags & AV_PIX_FMT_FLAG_RGB) != 0;
 }
 
 std::size_t checkedFrameBytes(
@@ -516,6 +512,14 @@ DecodedVideoFrame convertFrame(
     return result;
 }
 
+}
+
+bool isPrototypeSrgbColor(const ColorMetadata& color) noexcept {
+    return color.primaries == AVCOL_PRI_BT709
+        && color.transfer == AVCOL_TRC_IEC61966_2_1
+        && color.matrix == AVCOL_SPC_RGB
+        && (color.range == AVCOL_RANGE_JPEG
+            || color.range == AVCOL_RANGE_UNSPECIFIED);
 }
 
 MediaError::MediaError(

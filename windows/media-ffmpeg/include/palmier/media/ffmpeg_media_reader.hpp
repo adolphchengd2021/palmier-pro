@@ -28,6 +28,8 @@ struct ColorMetadata final {
     std::int32_t chromaLocation{};
 };
 
+bool isPrototypeSrgbColor(const ColorMetadata& color) noexcept;
+
 enum class AlphaMode {
     opaque,
     unspecified,

@@ -29,6 +29,21 @@
     "sampling": "nearest-point",
     "orientation": "top-left"
   },
+  "decodedSourceAdapter": {
+    "available": true,
+    "input": "ffmpeg-decoded-rgba8",
+    "output": "top-left-straight-srgb-rgba32-float",
+    "displayTransform": "baked-cardinal-counterclockwise",
+    "acceptedAlphaModes": [
+      "opaque",
+      "straight"
+    ],
+    "refusedAlphaModes": [
+      "unspecified",
+      "premultiplied"
+    ],
+    "rowStorage": "explicit-stride-exact-height"
+  },
   "pipeline": [
     "sample-straight-source",
     "srgb-to-linear",
@@ -95,6 +110,7 @@
   "resolverLifetime": "immutable-source-through-render-call",
   "runtimeGates": {
     "windowsServer2022Warp": "required-ci",
+    "ffmpegDecodedSourceAdapter": "required-ffmpeg-ci",
     "windows10Build19045": "pending-clean-vm",
     "physicalGpuVendors": "pending-hardware-matrix",
     "ffmpegDecodeEncode": "pending",
