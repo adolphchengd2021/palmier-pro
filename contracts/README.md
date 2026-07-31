@@ -29,14 +29,15 @@ source and contract change in the same review.
   inventory, defaults, enums, and client decode behavior are incomplete.
 - Media schema: complete known-field structural inventory for the current
   Swift models, checked against field signatures, optionality, required decode
-  fields, enum payloads, and focused source-body digests. Real client
-  writer/decode behavior still requires Swift golden tests.
-- Unknown-field client load-edit-save round trip: blocked.
+  fields, enum payloads, focused source-body digests, and Swift golden tests.
+- Unknown-field client load-edit-save round trip: enforced by a declared-canary
+  integration test through the macOS production `NSDocument` Save As path; the
+  future Windows implementation still requires differential proof.
 - Full effect parameter snapshot: not yet captured.
 - Complete MCP input-schema snapshot: not yet captured.
 
 The provisional project schema is not an implementation-ready Windows format
 specification. The media schema is stricter: its properties, `ClipType`, and
 `MediaSource` cases are checked against `media-model.json` and Swift
-declarations, but it still does not replace real Swift writer/decode and
-load-edit-save tests.
+declarations, and it does not replace the Swift writer/decode and load-edit-save
+tests or future cross-platform differential coverage.

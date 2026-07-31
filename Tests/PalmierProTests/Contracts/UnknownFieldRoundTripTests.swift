@@ -1,77 +1,78 @@
+import AppKit
 import Foundation
 import Testing
 @testable import PalmierPro
 
+private struct ContractCanaryError: Error, CustomStringConvertible, Sendable {
+    let description: String
+}
+
 @Suite("Unknown project field preservation")
 struct UnknownFieldRoundTripTests {
-    @Test
-    @concurrent
+    @Test @MainActor
     func declaredCanariesSurviveProductionLoadEditSave() async throws {
         let fixture = Self.fixturePackage("unknown-fields.palmier")
-        let loaded = try VideoProject.readProjectPackage(at: fixture)
+        let loaded = try await Task.detached {
+            try VideoProject.readProjectPackage(at: fixture)
+        }.value
         let manifest = try #require(loaded.manifest)
 
-        let (projectSnapshot, manifestSnapshot) = await MainActor.run {
-            let editor = EditorViewModel()
-            editor.applyProjectFile(loaded.projectFile)
-            editor.projectURL = fixture
-            editor.mediaManifest = manifest
+        let document = VideoProject()
+        document.fileURL = fixture
+        document.fileType = VideoProject.typeIdentifier
+        let editor = document.editorViewModel
+        editor.applyProjectFile(loaded.projectFile)
+        editor.projectURL = fixture
+        editor.mediaManifest = manifest
 
-            var timeline = editor.timelines[0]
-            timeline.name = "Edited canary"
-            var clip = timeline.tracks[0].clips[0]
-            clip.startFrame = 12
-            clip.transform.centerX = 0.625
-            if var effects = clip.effects, var parameter = effects[0].params["ev"] {
-                parameter.value = 1.25
-                effects[0].params["ev"] = parameter
-                clip.effects = effects
-            }
-            timeline.tracks[0].clips[0] = clip
-            editor.timelines[0] = timeline
-
-            let entry = editor.mediaManifest.entries[0]
-            let asset = MediaAsset(
-                entry: entry,
-                resolvedURL: fixture.appendingPathComponent("media/canary.mp4")
-            )
-            asset.name = "Edited media"
-            editor.updateManifestMetadata(for: [asset])
-
-            return (editor.projectFileSnapshot(), editor.mediaManifest)
+        var timeline = editor.timelines[0]
+        timeline.name = "Edited canary"
+        var clip = timeline.tracks[0].clips[0]
+        clip.startFrame = 12
+        clip.mediaType = .text
+        clip.transform.centerX = 0.625
+        if var effects = clip.effects, var parameter = effects[0].params["ev"] {
+            parameter.value = 1.25
+            effects[0].params["ev"] = parameter
+            clip.effects = effects
         }
+        timeline.tracks[0].clips[0] = clip
+        editor.timelines[0] = timeline
 
-        let projectData = try ProjectJSONCodec.encode(projectSnapshot)
-        let mediaData = try ProjectJSONCodec.encode(manifestSnapshot)
-        try Self.expectDeclaredCanaries(projectData: projectData, mediaData: mediaData)
+        let entry = editor.mediaManifest.entries[0]
+        let asset = MediaAsset(
+            entry: entry,
+            resolvedURL: fixture.appendingPathComponent("media/canary.mp4")
+        )
+        asset.name = "Edited media"
+        editor.updateManifestMetadata(for: [asset])
+        document.updateChangeCount(.changeDone)
 
         let destination = FileManager.default.temporaryDirectory
             .appendingPathComponent("unknown-roundtrip-\(UUID().uuidString).palmier", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: destination) }
-        try VideoProject.writeProjectPackage(
-            ProjectPackageSnapshot(
-                timeline: projectData,
-                manifest: mediaData,
-                thumbnail: nil,
-                chatSessionFiles: []
-            ),
-            to: destination,
-            sourceURL: nil
-        )
-
-        let reopened = try VideoProject.readProjectPackage(at: destination)
-        #expect(reopened.projectFile.timelines[0].name == "Edited canary")
-        #expect(reopened.projectFile.timelines[0].tracks[0].clips[0].startFrame == 12)
-        #expect(reopened.projectFile.timelines[0].tracks[0].clips[0].transform.centerX == 0.625)
-        #expect(
-            reopened.projectFile.timelines[0].tracks[0].clips[0]
-                .effects?[0].params["ev"]?.value == 1.25
-        )
-        #expect(reopened.manifest?.entries[0].name == "Edited media")
-        try Self.expectDeclaredCanaries(
-            projectData: ProjectJSONCodec.encode(reopened.projectFile),
-            mediaData: ProjectJSONCodec.encode(try #require(reopened.manifest))
-        )
+        do {
+            try await Self.saveAs(document, to: destination)
+            let reopened = try await Task.detached {
+                try VideoProject.readProjectPackage(at: destination)
+            }.value
+            #expect(reopened.projectFile.timelines[0].name == "Edited canary")
+            #expect(reopened.projectFile.timelines[0].tracks[0].clips[0].startFrame == 12)
+            #expect(reopened.projectFile.timelines[0].tracks[0].clips[0].mediaType == .text)
+            #expect(reopened.projectFile.timelines[0].tracks[0].clips[0].transform.centerX == 0.625)
+            #expect(
+                reopened.projectFile.timelines[0].tracks[0].clips[0]
+                    .effects?[0].params["ev"]?.value == 1.25
+            )
+            #expect(reopened.manifest?.entries[0].name == "Edited media")
+            try await Self.expectDeclaredCanaries(
+                projectData: ProjectJSONCodec.encode(reopened.projectFile),
+                mediaData: ProjectJSONCodec.encode(try #require(reopened.manifest))
+            )
+        } catch {
+            try await Self.removeTemporaryPackage(at: destination)
+            throw error
+        }
+        try await Self.removeTemporaryPackage(at: destination)
     }
 
     @Test
@@ -222,23 +223,56 @@ struct UnknownFieldRoundTripTests {
         }
     }
 
-    private static func expectDeclaredCanaries(projectData: Data, mediaData: Data) throws {
-        let contract = try object(Data(contentsOf: contractRoot
-            .appendingPathComponent("project/v1/canaries.json")))
-        let canaries = try #require(objectArray(contract["canaries"]))
-        let documents = [
-            "project.json": try JSONSerialization.jsonObject(with: projectData),
-            "media.json": try JSONSerialization.jsonObject(with: mediaData),
-        ]
+    private static func expectDeclaredCanaries(projectData: Data, mediaData: Data) async throws {
+        try await Task.detached {
+            let contract = try Self.object(Data(contentsOf: Self.contractRoot
+                .appendingPathComponent("project/v1/canaries.json")))
+            guard let canaries = Self.objectArray(contract["canaries"]) else {
+                throw ContractCanaryError(description: "Canary contract has no canaries array")
+            }
+            let documents = [
+                "project.json": try JSONSerialization.jsonObject(with: projectData),
+                "media.json": try JSONSerialization.jsonObject(with: mediaData),
+            ]
 
-        for canary in canaries {
-            let file = try #require(canary["file"] as? String)
-            let pointer = try #require(canary["pointer"] as? String)
-            let expected = try #require(canary["value"])
-            let document = try #require(documents[file])
-            let actual = try value(at: pointer, in: document)
-            #expect(try canonicalJSON(actual) == canonicalJSON(expected), "Canary \(file)\(pointer) changed")
+            for canary in canaries {
+                guard let file = canary["file"] as? String,
+                      let pointer = canary["pointer"] as? String,
+                      let expected = canary["value"],
+                      let document = documents[file] else {
+                    throw ContractCanaryError(description: "Canary entry is malformed")
+                }
+                let actual = try Self.value(at: pointer, in: document)
+                guard try Self.canonicalJSON(actual) == Self.canonicalJSON(expected) else {
+                    throw ContractCanaryError(description: "Canary \(file)\(pointer) changed")
+                }
+            }
+        }.value
+    }
+
+    @MainActor
+    private static func saveAs(_ document: VideoProject, to url: URL) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            document.save(
+                to: url,
+                ofType: VideoProject.typeIdentifier,
+                for: .saveAsOperation
+            ) { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
         }
+    }
+
+    private static func removeTemporaryPackage(at url: URL) async throws {
+        try await Task.detached {
+            let fileManager = FileManager.default
+            guard fileManager.fileExists(atPath: url.path) else { return }
+            try fileManager.removeItem(at: url)
+        }.value
     }
 
     private static func value(at pointer: String, in document: Any) throws -> Any {
@@ -247,18 +281,24 @@ struct UnknownFieldRoundTripTests {
             let key = component.replacingOccurrences(of: "~1", with: "/")
                 .replacingOccurrences(of: "~0", with: "~")
             if let object = current as? [String: Any] {
-                current = try #require(object[key])
+                guard let next = object[key] else {
+                    throw ContractCanaryError(description: "Missing canary path \(pointer)")
+                }
+                current = next
             } else if let array = current as? [Any], let index = Int(key), array.indices.contains(index) {
                 current = array[index]
             } else {
-                throw CocoaError(.fileReadCorruptFile)
+                throw ContractCanaryError(description: "Invalid canary path \(pointer)")
             }
         }
         return current
     }
 
     private static func object(_ data: Data) throws -> [String: Any] {
-        try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ContractCanaryError(description: "Expected a JSON object")
+        }
+        return object
     }
 
     private static func objectArray(_ value: Any?) -> [[String: Any]]? {

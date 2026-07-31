@@ -573,14 +573,25 @@ def validator_self_check() -> None:
             "self-check",
         ),
     )
+    swift_sample = """
+// func contractProbe() { document.save(.saveAsOperation) }
+func contractProbe() {
+    let ignored = "document.save(.saveAsOperation)"
+    /* VideoProject.writeProjectPackage */
+    realCall()
+}
+"""
+    swift_body = swift_function_code_body(swift_sample, "contractProbe", "self-check")
+    if "realCall()" not in swift_body:
+        raise ContractError("Swift function scanner dropped executable code")
+    for ignored_token in ["document.save", ".saveAsOperation", "writeProjectPackage"]:
+        if ignored_token in swift_body:
+            raise ContractError(
+                f"Swift function scanner retained comment/string token {ignored_token!r}"
+            )
 
 
-def swift_type_body(relative_path: str, kind: str, name: str) -> str:
-    source = read_text(relative_path)
-    match = re.search(rf"\b{kind}\s+{re.escape(name)}\b[^{{]*\{{", source)
-    if not match:
-        raise ContractError(f"{relative_path}: {kind} {name} was not found")
-    opening = source.find("{", match.start())
+def swift_braced_body(source: str, opening: int, label: str) -> str:
     depth = 0
     state = "code"
     escaped = False
@@ -617,7 +628,75 @@ def swift_type_body(relative_path: str, kind: str, name: str) -> str:
             if depth == 0:
                 return source[opening + 1:index]
         index += 1
-    raise ContractError(f"{relative_path}: {kind} {name} has no closing brace")
+    raise ContractError(f"{label} has no closing brace")
+
+
+def swift_code_mask(source: str) -> str:
+    result: list[str] = []
+    state = "code"
+    escaped = False
+    index = 0
+    while index < len(source):
+        char = source[index]
+        next_char = source[index + 1] if index + 1 < len(source) else ""
+        if state == "code":
+            if char == "/" and next_char == "/":
+                result.extend("  ")
+                state = "line-comment"
+                index += 1
+            elif char == "/" and next_char == "*":
+                result.extend("  ")
+                state = "block-comment"
+                index += 1
+            elif char == '"':
+                result.append(" ")
+                state = "string"
+            else:
+                result.append(char)
+        elif state == "line-comment":
+            if char == "\n":
+                result.append("\n")
+                state = "code"
+            else:
+                result.append(" ")
+        elif state == "block-comment":
+            result.append("\n" if char == "\n" else " ")
+            if char == "*" and next_char == "/":
+                result.append(" ")
+                state = "code"
+                index += 1
+        else:
+            result.append("\n" if char == "\n" else " ")
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                state = "code"
+        index += 1
+    return "".join(result)
+
+
+def swift_type_body(relative_path: str, kind: str, name: str) -> str:
+    source = read_text(relative_path)
+    match = re.search(rf"\b{kind}\s+{re.escape(name)}\b[^{{]*\{{", source)
+    if not match:
+        raise ContractError(f"{relative_path}: {kind} {name} was not found")
+    opening = source.find("{", match.start())
+    return swift_braced_body(source, opening, f"{relative_path}: {kind} {name}")
+
+
+def swift_function_code_body(source: str, name: str, label: str) -> str:
+    code = swift_code_mask(source)
+    match = re.search(rf"\bfunc\s+{re.escape(name)}\s*\([^{{]*\{{", code)
+    if not match:
+        raise ContractError(f"{label}: func {name} was not found")
+    opening = code.find("{", match.start())
+    return swift_braced_body(code, opening, f"{label}: func {name}")
+
+
+def swift_function_body(relative_path: str, name: str) -> str:
+    return swift_function_code_body(read_text(relative_path), name, relative_path)
 
 
 def swift_top_level_lines(body: str) -> list[str]:
@@ -1084,16 +1163,28 @@ def project_fixtures() -> None:
             "load-edit-save test"
         )
     enforcement_test = canary_contract["enforcementTest"]
-    enforcement_source = read_text(enforcement_test)
-    for token in [
+    enforcement_body = swift_function_body(
+        enforcement_test,
         "declaredCanariesSurviveProductionLoadEditSave",
+    )
+    for token in [
         "VideoProject.readProjectPackage",
-        "VideoProject.writeProjectPackage",
+        "Self.saveAs(document, to: destination)",
         "ProjectJSONCodec.encode",
     ]:
-        if token not in enforcement_source:
+        if token not in enforcement_body:
             raise ContractError(
                 f"{enforcement_test}: missing enforcement token {token!r}"
+            )
+    if "VideoProject.writeProjectPackage" in enforcement_body:
+        raise ContractError(
+            f"{enforcement_test}: runtime canary must not use the static package writer"
+        )
+    save_as_body = swift_function_body(enforcement_test, "saveAs")
+    for token in ["document.save(", ".saveAsOperation"]:
+        if token not in save_as_body:
+            raise ContractError(
+                f"{enforcement_test}: saveAs helper missing token {token!r}"
             )
     package = Path(canary_contract["fixture"])
     documents: dict[str, Any] = {}

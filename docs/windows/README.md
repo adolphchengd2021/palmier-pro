@@ -22,9 +22,10 @@ python -B tools/validate_contracts.py --check
 
 The audit verifies source snapshots, a supported local JSON Schema subset,
 fixture structure, and type-sensitive canaries. It is not a complete Draft
-2020-12 validator and does not prove that the current Swift serializer
-preserves unknown fields. That runtime gate remains blocked until a real
-load-edit-save implementation passes the canary round trip.
+2020-12 validator. A macOS integration test additionally requires declared
+unknown-field canaries to survive a production load, edit, `NSDocument` Save
+As, and reopen. Full known-field coverage and the future Windows writer remain
+separate gates.
 
 The media contract additionally compares every persisted Swift field signature,
 optionality, required decode field, `ClipType`, and `MediaSource` payload with
