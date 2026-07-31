@@ -252,7 +252,7 @@ struct UnknownFieldRoundTripTests {
 
     @MainActor
     private static func saveAs(_ document: VideoProject, to url: URL) async throws {
-        try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             document.save(
                 to: url,
                 ofType: VideoProject.typeIdentifier,
