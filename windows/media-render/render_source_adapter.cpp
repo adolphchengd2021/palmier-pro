@@ -30,9 +30,9 @@ void requireNotCancelled(std::stop_token cancellation) {
 }
 
 std::int16_t normalizedRotation(const DecodedVideoFrame& decoded) {
-    const auto rotation = decoded.displayTransform
+    const std::int16_t rotation = decoded.displayTransform
         ? decoded.displayTransform->counterClockwiseDegrees
-        : 0;
+        : std::int16_t{0};
     if (rotation != 0 && rotation != 90 && rotation != -90 && rotation != 180) {
         fail(
             "unsupportedDisplayTransform",
