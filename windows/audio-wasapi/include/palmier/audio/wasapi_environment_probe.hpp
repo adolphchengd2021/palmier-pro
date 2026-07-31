@@ -41,6 +41,7 @@ struct WasapiEnvironmentProbeResult final {
     std::uint32_t sampleRate{};
     std::uint16_t channelCount{};
     std::uint16_t bitsPerSample{};
+    std::uint16_t blockAlign{};
     std::uint32_t defaultPeriodFrames{};
     std::uint32_t bufferFrames{};
     std::uint64_t clockFrequency{};

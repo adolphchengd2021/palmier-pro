@@ -1,15 +1,13 @@
 #include "palmier/audio/wasapi_environment_probe.hpp"
 
 #include "wasapi_environment_session.hpp"
+#include "wasapi_native_stream.hpp"
 
 #include <audioclient.h>
 #include <mmdeviceapi.h>
-#include <wrl/client.h>
 
 #include <exception>
 #include <iomanip>
-#include <limits>
-#include <memory>
 #include <new>
 #include <optional>
 #include <sstream>
@@ -20,42 +18,6 @@
 
 namespace palmier::audio {
 namespace {
-
-using Microsoft::WRL::ComPtr;
-
-class ComApartment final {
-public:
-    ComApartment() : result_(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)) {}
-    ~ComApartment() {
-        if (result_ == S_OK || result_ == S_FALSE) {
-            CoUninitialize();
-        }
-    }
-
-    ComApartment(const ComApartment&) = delete;
-    ComApartment& operator=(const ComApartment&) = delete;
-
-    HRESULT result() const { return result_; }
-
-private:
-    HRESULT result_{};
-};
-
-struct CoTaskMemory final {
-    void operator()(void* value) const { CoTaskMemFree(value); }
-};
-
-struct HandleCloser final {
-    void operator()(void* value) const {
-        if (value != nullptr) {
-            CloseHandle(value);
-        }
-    }
-};
-
-using WaveFormatOwner = std::unique_ptr<WAVEFORMATEX, CoTaskMemory>;
-using WideStringOwner = std::unique_ptr<wchar_t, CoTaskMemory>;
-using EventOwner = std::unique_ptr<void, HandleCloser>;
 
 WasapiEnvironmentProbeResult terminalResult(
     WasapiProbeStage stage,
@@ -126,178 +88,6 @@ std::string jsonEscape(std::string_view value) {
     }
     return output.str();
 }
-
-std::optional<std::string> utf8(std::wstring_view value) {
-    if (value.empty()) {
-        return std::string{};
-    }
-    if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-        SetLastError(ERROR_ARITHMETIC_OVERFLOW);
-        return std::nullopt;
-    }
-    const auto valueSize = static_cast<int>(value.size());
-    const int required = WideCharToMultiByte(
-        CP_UTF8,
-        WC_ERR_INVALID_CHARS,
-        value.data(),
-        valueSize,
-        nullptr,
-        0,
-        nullptr,
-        nullptr
-    );
-    if (required <= 0) {
-        return std::nullopt;
-    }
-    std::string output(static_cast<std::size_t>(required), '\0');
-    const int converted = WideCharToMultiByte(
-        CP_UTF8,
-        WC_ERR_INVALID_CHARS,
-        value.data(),
-        valueSize,
-        output.data(),
-        required,
-        nullptr,
-        nullptr
-    );
-    if (converted != required) {
-        return std::nullopt;
-    }
-    return output;
-}
-
-class NativeWasapiEnvironmentSession final : public WasapiEnvironmentSession {
-public:
-    HRESULT initializeApartment() override {
-        return apartment_.result();
-    }
-
-    HRESULT createEnumerator() override {
-        return CoCreateInstance(
-            __uuidof(MMDeviceEnumerator),
-            nullptr,
-            CLSCTX_ALL,
-            IID_PPV_ARGS(&enumerator_)
-        );
-    }
-
-    HRESULT selectDefaultRenderEndpoint(std::string& endpointId) override {
-        HRESULT result = enumerator_->GetDefaultAudioEndpoint(
-            eRender,
-            eMultimedia,
-            &device_
-        );
-        if (FAILED(result)) {
-            return result;
-        }
-        wchar_t* rawEndpointId = nullptr;
-        result = device_->GetId(&rawEndpointId);
-        if (FAILED(result)) {
-            return result;
-        }
-        WideStringOwner endpointIdOwner(rawEndpointId);
-        if (rawEndpointId == nullptr || rawEndpointId[0] == L'\0') {
-            return E_UNEXPECTED;
-        }
-        SetLastError(ERROR_SUCCESS);
-        const auto convertedEndpointId = utf8(rawEndpointId);
-        if (!convertedEndpointId.has_value()) {
-            const DWORD conversionError = GetLastError();
-            return conversionError == ERROR_SUCCESS
-                ? E_UNEXPECTED
-                : HRESULT_FROM_WIN32(conversionError);
-        }
-        endpointId = *convertedEndpointId;
-        return S_OK;
-    }
-
-    HRESULT activateAudioClient() override {
-        return device_->Activate(
-            __uuidof(IAudioClient3),
-            CLSCTX_ALL,
-            nullptr,
-            reinterpret_cast<void**>(client_.GetAddressOf())
-        );
-    }
-
-    HRESULT loadMixFormat(WasapiMixFormat& format) override {
-        WAVEFORMATEX* rawFormat = nullptr;
-        const HRESULT result = client_->GetMixFormat(&rawFormat);
-        if (FAILED(result)) {
-            return result;
-        }
-        format_.reset(rawFormat);
-        if (!format_) {
-            return E_UNEXPECTED;
-        }
-        format.sampleRate = format_->nSamplesPerSec;
-        format.channelCount = format_->nChannels;
-        format.bitsPerSample = format_->wBitsPerSample;
-        return S_OK;
-    }
-
-    HRESULT setClientProperties() override {
-        AudioClientProperties properties{};
-        properties.cbSize = sizeof(properties);
-        properties.bIsOffload = FALSE;
-        properties.eCategory = AudioCategory_Media;
-        properties.Options = AUDCLNT_STREAMOPTIONS_NONE;
-        return client_->SetClientProperties(&properties);
-    }
-
-    HRESULT loadSharedModePeriods(WasapiSharedModePeriods& periods) override {
-        return client_->GetSharedModeEnginePeriod(
-            format_.get(),
-            &periods.defaultPeriod,
-            &periods.fundamentalPeriod,
-            &periods.minimumPeriod,
-            &periods.maximumPeriod
-        );
-    }
-
-    HRESULT initializeSharedAudioStream(std::uint32_t periodFrames) override {
-        return client_->InitializeSharedAudioStream(
-            AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-            periodFrames,
-            format_.get(),
-            nullptr
-        );
-    }
-
-    HRESULT loadBufferFrames(std::uint32_t& bufferFrames) override {
-        return client_->GetBufferSize(&bufferFrames);
-    }
-
-    HRESULT attachRenderEvent() override {
-        renderEvent_.reset(CreateEventW(nullptr, FALSE, FALSE, nullptr));
-        if (!renderEvent_) {
-            return HRESULT_FROM_WIN32(GetLastError());
-        }
-        return client_->SetEventHandle(renderEvent_.get());
-    }
-
-    HRESULT loadRenderService() override {
-        return client_->GetService(IID_PPV_ARGS(&renderClient_));
-    }
-
-    HRESULT loadClockService() override {
-        return client_->GetService(IID_PPV_ARGS(&clock_));
-    }
-
-    HRESULT loadClockFrequency(std::uint64_t& frequency) override {
-        return clock_->GetFrequency(&frequency);
-    }
-
-private:
-    ComApartment apartment_;
-    ComPtr<IMMDeviceEnumerator> enumerator_;
-    ComPtr<IMMDevice> device_;
-    EventOwner renderEvent_;
-    ComPtr<IAudioClient3> client_;
-    WaveFormatOwner format_;
-    ComPtr<IAudioRenderClient> renderClient_;
-    ComPtr<IAudioClock> clock_;
-};
 
 }
 
@@ -383,7 +173,8 @@ WasapiEnvironmentProbeResult runWasapiEnvironmentProbe(
     if (FAILED(result)) {
         return terminalResult(WasapiProbeStage::mixFormat, result);
     }
-    if (format.sampleRate == 0 || format.channelCount == 0 || format.bitsPerSample == 0) {
+    if (format.sampleRate == 0 || format.channelCount == 0
+        || format.bitsPerSample == 0 || format.blockAlign == 0) {
         return terminalResult(WasapiProbeStage::mixFormatInvariant, E_UNEXPECTED);
     }
     result = session.setClientProperties();
@@ -442,6 +233,7 @@ WasapiEnvironmentProbeResult runWasapiEnvironmentProbe(
     probe.sampleRate = format.sampleRate;
     probe.channelCount = format.channelCount;
     probe.bitsPerSample = format.bitsPerSample;
+    probe.blockAlign = format.blockAlign;
     probe.defaultPeriodFrames = periods.defaultPeriod;
     return probe;
 }
@@ -453,7 +245,7 @@ WasapiEnvironmentProbeResult probeDefaultWasapiRenderEndpoint() {
         {
             std::jthread worker([&probe, &exception] {
                 try {
-                    NativeWasapiEnvironmentSession session;
+                    WasapiNativeStream session;
                     probe = runWasapiEnvironmentProbe(session);
                 } catch (...) {
                     exception = std::current_exception();
@@ -488,6 +280,7 @@ std::string wasapiProbeJson(const WasapiEnvironmentProbeResult& result) {
            << "\",\"sampleRate\":" << result.sampleRate
            << ",\"channelCount\":" << result.channelCount
            << ",\"bitsPerSample\":" << result.bitsPerSample
+           << ",\"blockAlign\":" << result.blockAlign
            << ",\"defaultPeriodFrames\":" << result.defaultPeriodFrames
            << ",\"bufferFrames\":" << result.bufferFrames
            << ",\"clockFrequency\":" << result.clockFrequency << '}';

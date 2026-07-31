@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "owner": "windows/audio-wasapi",
+  "stateOwner": "one serial audio worker; PCM queue is private",
+  "states": [
+    "ready",
+    "primed",
+    "running",
+    "stopped",
+    "invalidated",
+    "failed",
+    "closed"
+  ],
+  "outcomes": [
+    "changed",
+    "noOp",
+    "cancelled",
+    "refused",
+    "failed",
+    "invalidated"
+  ],
+  "receiptFields": [
+    "operation",
+    "outcome",
+    "previousState",
+    "currentState",
+    "stage",
+    "hresult",
+    "generation",
+    "bufferFrames",
+    "paddingFrames",
+    "availableFrames",
+    "requestedFrames",
+    "mediaFrames",
+    "silenceFrames",
+    "releasedFrames",
+    "underrunEventsDelta",
+    "underrunEventsTotal",
+    "lateCancellation",
+    "clockSample"
+  ],
+  "invariants": {
+    "start": "prime before Start",
+    "availableFrames": "bufferFrames - paddingFrames after validation",
+    "bufferLease": "one same-thread ReleaseBuffer for every successful nonzero GetBuffer",
+    "commit": "consume PCM only after successful ReleaseBuffer",
+    "cancellationInsideLease": "ReleaseBuffer(0, 0) and preserve PCM",
+    "partialUnderrun": "zero the tail and release the complete packet",
+    "emptyPacket": "AUDCLNT_BUFFERFLAGS_SILENT",
+    "reset": "only while stopped or primed; increment generation",
+    "invalidation": "increment generation and reject the old stream"
+  },
+  "nativeSmoke": {
+    "payload": "silence only",
+    "timeoutMilliseconds": 2000,
+    "sequence": [
+      "GetCurrentPadding",
+      "GetBuffer",
+      "ReleaseBuffer",
+      "Start",
+      "render event",
+      "GetPosition",
+      "Stop",
+      "Reset",
+      "close"
+    ]
+  },
+  "excluded": [
+    "audible PCM",
+    "decode or resampling",
+    "default-device notifications",
+    "automatic recovery",
+    "A/V synchronization",
+    "physical-device compatibility",
+    "Windows 10 runtime certification"
+  ]
+}

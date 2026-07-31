@@ -1857,6 +1857,7 @@ def windows_audio_wasapi_contract() -> None:
         "windows/audio-wasapi/include/palmier/audio/wasapi_environment_probe.hpp"
     )
     probe_source = read_text("windows/audio-wasapi/wasapi_environment_probe.cpp")
+    native_source = read_text("windows/audio-wasapi/wasapi_native_stream.cpp")
     session_header = read_text(
         "windows/audio-wasapi/wasapi_environment_session.hpp"
     )
@@ -1921,8 +1922,8 @@ def windows_audio_wasapi_contract() -> None:
         "IAudioClock",
         "GetFrequency",
     ]:
-        if token not in probe_source:
-            raise ContractError(f"WASAPI probe source missing token {token!r}")
+        if token not in probe_source and token not in native_source:
+            raise ContractError(f"WASAPI native setup missing token {token!r}")
     for token in [
         "class WasapiEnvironmentSession",
         "initializeApartment",
@@ -1978,6 +1979,123 @@ def windows_audio_wasapi_contract() -> None:
             raise ContractError(f"WASAPI ADR missing token {token!r}")
 
 
+def windows_wasapi_output_contract() -> None:
+    contract = load_json("contracts/audio/v1/wasapi-output.json")
+    output_header = read_text(
+        "windows/audio-wasapi/include/palmier/audio/wasapi_output.hpp"
+    )
+    backend_header = read_text("windows/audio-wasapi/wasapi_output_backend.hpp")
+    output_source = read_text("windows/audio-wasapi/wasapi_output.cpp")
+    native_source = read_text("windows/audio-wasapi/wasapi_native_stream.cpp")
+    smoke_source = read_text("windows/audio-wasapi/wasapi_silent_output_probe.cpp")
+    tests = read_text("windows/audio-wasapi/tests/wasapi_output_tests.cpp")
+    audio_cmake = read_text("windows/audio-wasapi/CMakeLists.txt")
+
+    if contract.get("version") != CONTRACT_VERSION:
+        raise ContractError("WASAPI output contract version changed")
+    expected_states = [
+        "ready",
+        "primed",
+        "running",
+        "stopped",
+        "invalidated",
+        "failed",
+        "closed",
+    ]
+    if contract.get("states") != expected_states:
+        raise ContractError("WASAPI output states drifted")
+    expected_outcomes = [
+        "changed",
+        "noOp",
+        "cancelled",
+        "refused",
+        "failed",
+        "invalidated",
+    ]
+    if contract.get("outcomes") != expected_outcomes:
+        raise ContractError("WASAPI output outcomes drifted")
+    for token in expected_states + expected_outcomes + contract["receiptFields"]:
+        if token not in output_header:
+            raise ContractError(f"WASAPI output API missing token {token!r}")
+    for token in [
+        "class WasapiOutputBackend",
+        "waitForRenderEvent",
+        "loadCurrentPadding",
+        "acquireBuffer",
+        "releaseBuffer",
+        "loadClockPosition",
+        "WasapiOutputCheckpoints",
+    ]:
+        if token not in backend_header:
+            raise ContractError(f"WASAPI output seam missing token {token!r}")
+    for token in [
+        "value.paddingFrames > config_.bufferFrames",
+        "backend_.releaseBuffer(0, 0)",
+        "AUDCLNT_BUFFERFLAGS_SILENT",
+        "queue_.commitFrames(value.mediaFrames)",
+        "value.lateCancellation = stopToken.stop_requested()",
+        "++config_.generation",
+        "isWasapiOutputInvalidation",
+    ]:
+        if token not in output_source:
+            raise ContractError(f"WASAPI output invariant missing token {token!r}")
+    for token in [
+        "WaitForMultipleObjects",
+        "std::stop_callback",
+        "GetCurrentPadding",
+        "GetBuffer",
+        "ReleaseBuffer",
+        "GetPosition",
+        "impl_->client->Start()",
+        "impl_->client->Stop()",
+        "impl_->client->Reset()",
+    ]:
+        if token not in native_source:
+            raise ContractError(f"WASAPI native output missing token {token!r}")
+    for token in [
+        "runWasapiEnvironmentProbe(stream)",
+        "machine.start()",
+        "machine.renderOnce(2'000)",
+        "machine.pause()",
+        "machine.reset()",
+        "machine.close()",
+        '"completed-silent-cycle"',
+    ]:
+        if token not in smoke_source:
+            raise ContractError(f"WASAPI silent smoke missing token {token!r}")
+    for token in [
+        "primesBeforeStartAndCommitsOnlyReleasedPcm",
+        "rendersOnlyAfterAnEventAndCountsUnderrun",
+        "cancellationInsideLeaseAbandonsAndRollsBack",
+        "cancellationAfterReleaseReportsCommittedEffect",
+        "cancellationInterruptsTheNativeEventWait",
+        "validatesPaddingBeforeSubtraction",
+        "invalidationRejectsTheOldGeneration",
+        "pauseResumeResetAndRepeatedCommandsAreExact",
+        "preservesPrecisionAndFailureReceipts",
+        "closeStopsRunningStreamAndReleasesBackend",
+    ]:
+        if token not in tests:
+            raise ContractError(f"WASAPI output tests missing token {token!r}")
+    for token in [
+        "audio_wasapi.output_state",
+        "audio_wasapi.output_silence_smoke",
+        "RUN_SERIAL TRUE TIMEOUT 30",
+    ]:
+        if token not in audio_cmake:
+            raise ContractError(f"WASAPI output CMake missing token {token!r}")
+
+    adr = read_text("docs/windows/adr/0013-bounded-wasapi-output.md")
+    for token in [
+        "prime-before-start",
+        "Cancellation after acquire",
+        "proves only classification",
+        "Windows 10 build 19045 behavior",
+    ]:
+        if token not in adr:
+            raise ContractError(f"WASAPI output ADR missing token {token!r}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Palmier contract snapshots")
     parser.add_argument(
@@ -2000,6 +2118,7 @@ def main() -> int:
         ("Windows render plan and D3D11 WARP", windows_render_plan_contract),
         ("Windows decoded-frame render adapter", windows_media_render_adapter_contract),
         ("Windows WASAPI clock and environment probe", windows_audio_wasapi_contract),
+        ("Windows bounded WASAPI output", windows_wasapi_output_contract),
     ]
     for label, check in checks:
         check()

@@ -47,7 +47,7 @@ public:
     HRESULT loadMixFormat(WasapiMixFormat& format) override {
         const HRESULT result = record("mix-format");
         if (SUCCEEDED(result)) {
-            format = {48'000, 2, 32};
+            format = {48'000, 2, 32, 8};
         }
         return result;
     }
@@ -183,6 +183,7 @@ void executesTheNoStartSetupInOrder() {
     require(result.stage == "ready-without-start", "wrong success stage");
     require(result.endpointId == "test-endpoint", "endpoint ID missing");
     require(result.sampleRate == 48'000, "sample rate missing");
+    require(result.blockAlign == 8, "block align missing");
     require(result.bufferFrames == 960, "buffer size missing");
     require(result.clockFrequency == 48'000, "clock frequency missing");
     require(session.initializedPeriod == 480, "default period was not selected");
@@ -248,6 +249,7 @@ void emitsMachineReadableTerminalState() {
             == "{\"status\":\"unavailable\",\"stage\":\"default-endpoint\","
                "\"hresult\":\"0x80070490\",\"endpointId\":\"\","
                "\"sampleRate\":0,\"channelCount\":0,\"bitsPerSample\":0,"
+               "\"blockAlign\":0,"
                "\"defaultPeriodFrames\":0,\"bufferFrames\":0,"
                "\"clockFrequency\":0}",
         "unavailable JSON changed"
@@ -260,6 +262,7 @@ void emitsMachineReadableTerminalState() {
     result.sampleRate = 48'000;
     result.channelCount = 2;
     result.bitsPerSample = 32;
+    result.blockAlign = 8;
     result.defaultPeriodFrames = 480;
     result.bufferFrames = 960;
     result.clockFrequency = 48'000;
@@ -268,6 +271,7 @@ void emitsMachineReadableTerminalState() {
             == "{\"status\":\"available\",\"stage\":\"ready-without-start\","
                "\"hresult\":\"0x00000000\",\"endpointId\":\"speaker\\\\\\\"id\","
                "\"sampleRate\":48000,\"channelCount\":2,\"bitsPerSample\":32,"
+               "\"blockAlign\":8,"
                "\"defaultPeriodFrames\":480,\"bufferFrames\":960,"
                "\"clockFrequency\":48000}",
         "available JSON changed"

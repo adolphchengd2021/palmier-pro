@@ -98,3 +98,12 @@ starting the stream. It is safe on CI machines with no audio endpoint or a
 stopped audio service. It does not prove audible output, callback behavior,
 device recovery, long-run A/V synchronization, or Windows 10 runtime behavior.
 See ADR 0011.
+
+The separate WASAPI output prototype adds a bounded PCM queue, transactional
+same-thread buffer leases, prime-before-start ordering, event-driven refill,
+pause/reset generation rules, invalidation receipts, and clock samples. Its
+serial native smoke writes silence only, waits at most two seconds for one
+render event, then stops and resets. An unavailable CI endpoint remains a
+classified diagnostic, not output evidence. It does not yet provide media PCM,
+format conversion, automatic device recovery, audible playback, or A/V sync.
+See ADR 0013 and `contracts/audio/v1/wasapi-output.json`.

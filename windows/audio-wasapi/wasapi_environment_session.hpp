@@ -20,6 +20,7 @@ struct WasapiMixFormat final {
     std::uint32_t sampleRate{};
     std::uint16_t channelCount{};
     std::uint16_t bitsPerSample{};
+    std::uint16_t blockAlign{};
 };
 
 class WasapiEnvironmentSession {
