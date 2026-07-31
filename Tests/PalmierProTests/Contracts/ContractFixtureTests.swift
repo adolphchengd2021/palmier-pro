@@ -59,7 +59,7 @@ struct ContractFixtureTests {
             package: "media-complete.palmier",
             file: Project.manifestFilename
         )
-        let manifest = try JSONDecoder().decode(MediaManifest.self, from: fixture)
+        let manifest = try MediaManifest.decode(fixture)
 
         #expect(manifest.version == 2)
         #expect(manifest.entries.map(\.id) == [
@@ -96,7 +96,7 @@ struct ContractFixtureTests {
             package: "media-complete.palmier",
             file: Project.manifestFilename
         )
-        let manifest = try JSONDecoder().decode(MediaManifest.self, from: input)
+        let manifest = try MediaManifest.decode(input)
         let encoded = try ProjectJSONCodec.encode(manifest)
         let expected = try Self.mediaFixtureData("swift-writer-complete.json")
 
@@ -116,7 +116,7 @@ struct ContractFixtureTests {
             package: "media-complete.palmier",
             file: Project.manifestFilename
         )
-        let manifest = try JSONDecoder().decode(MediaManifest.self, from: manifestData)
+        let manifest = try MediaManifest.decode(manifestData)
         let root = fileManager.temporaryDirectory
             .appendingPathComponent("contract-writer-\(UUID().uuidString)", isDirectory: true)
         let destination = root.appendingPathComponent("Writer.palmier", isDirectory: true)

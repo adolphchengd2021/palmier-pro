@@ -4,7 +4,7 @@
   "types": {
     "MediaManifest": {
       "source": "Sources/PalmierPro/Models/MediaManifest.swift",
-      "bodySha256": "65582839b6b6c1d23d050248ca71dd24f0daa4118dd260a949b4d375f2d6b00b",
+      "bodySha256": "5892e43c741a06a2312af9ac256ace927264d003e55908494320faf53139d8e8",
       "requiredOnDecode": [],
       "fields": [
         { "name": "version", "declaration": "var", "swiftType": "Int" },

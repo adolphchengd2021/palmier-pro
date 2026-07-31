@@ -400,7 +400,12 @@ extension Clip {
         wordTimings = timings.map { timing in
             let start = min(max(0, Int((Double(timing.startFrame) * scale).rounded())), max(0, durationFrames - 1))
             let end = min(max(start + 1, Int((Double(timing.endFrame) * scale).rounded())), durationFrames)
-            return WordTiming(text: timing.text, startFrame: start, endFrame: end)
+            return WordTiming(
+                text: timing.text,
+                startFrame: start,
+                endFrame: end,
+                unknownFields: timing.unknownFields
+            )
         }
     }
 

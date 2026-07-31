@@ -8,6 +8,52 @@ struct Keyframe<Value: Codable & Sendable & Equatable>: Codable, Sendable, Equat
     var frame: Int
     var value: Value
     var interpolationOut: Interpolation = .smooth
+    var unknownFields: [String: OpaqueJSONValue] = [:]
+
+    init(
+        frame: Int,
+        value: Value,
+        interpolationOut: Interpolation = .smooth,
+        unknownFields: [String: OpaqueJSONValue] = [:]
+    ) {
+        self.frame = frame
+        self.value = value
+        self.interpolationOut = interpolationOut
+        self.unknownFields = unknownFields
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case frame, value, interpolationOut
+    }
+
+    init(from decoder: Decoder) throws {
+        let known = try decoder.container(keyedBy: CodingKeys.self)
+        frame = try known.decode(Int.self, forKey: .frame)
+        value = try known.decode(Value.self, forKey: .value)
+        interpolationOut = try known.decodeIfPresent(
+            Interpolation.self,
+            forKey: .interpolationOut
+        ) ?? .smooth
+
+        let dynamic = try decoder.container(keyedBy: JSONFieldKey.self)
+        let knownNames = Set(CodingKeys.allCases.map(\.rawValue))
+        unknownFields = try dynamic.allKeys.reduce(into: [:]) { result, key in
+            guard !knownNames.contains(key.stringValue) else { return }
+            result[key.stringValue] = try dynamic.decode(OpaqueJSONValue.self, forKey: key)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var known = encoder.container(keyedBy: CodingKeys.self)
+        try known.encode(frame, forKey: .frame)
+        try known.encode(value, forKey: .value)
+        try known.encode(interpolationOut, forKey: .interpolationOut)
+
+        var dynamic = encoder.container(keyedBy: JSONFieldKey.self)
+        for (key, value) in unknownFields {
+            try dynamic.encode(value, forKey: JSONFieldKey(key))
+        }
+    }
 }
 
 struct KeyframeTrack<Value: Codable & Sendable & Equatable>: Codable, Sendable, Equatable {
@@ -17,7 +63,12 @@ struct KeyframeTrack<Value: Codable & Sendable & Equatable>: Codable, Sendable, 
 
     mutating func upsert(_ kf: Keyframe<Value>) {
         if let i = keyframes.firstIndex(where: { $0.frame == kf.frame }) {
-            keyframes[i] = kf
+            var replacement = kf
+            replacement.unknownFields = keyframes[i].unknownFields.merging(
+                kf.unknownFields,
+                uniquingKeysWith: { _, new in new }
+            )
+            keyframes[i] = replacement
         } else {
             let at = keyframes.firstIndex { $0.frame > kf.frame } ?? keyframes.endIndex
             keyframes.insert(kf, at: at)
@@ -43,7 +94,14 @@ extension KeyframeTrack where Value: KeyframeInterpolatable {
         let boundary = sample(at: offset, fallback: fallback)
         var kfs = keyframes
             .filter { $0.frame >= offset }
-            .map { Keyframe(frame: $0.frame - offset, value: $0.value, interpolationOut: $0.interpolationOut) }
+            .map {
+                Keyframe(
+                    frame: $0.frame - offset,
+                    value: $0.value,
+                    interpolationOut: $0.interpolationOut,
+                    unknownFields: $0.unknownFields
+                )
+            }
         if kfs.first?.frame != 0 {
             let interp = keyframes.last { $0.frame < offset }?.interpolationOut ?? .smooth
             kfs.insert(Keyframe(frame: 0, value: boundary, interpolationOut: interp), at: 0)

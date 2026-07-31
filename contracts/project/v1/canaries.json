@@ -1,7 +1,8 @@
 {
   "contractVersion": 1,
   "fixture": "fixtures/contracts/projects/unknown-fields.palmier",
-  "runtimeRoundTripStatus": "blocked",
+  "runtimeRoundTripStatus": "enforced",
+  "enforcementTest": "Tests/PalmierProTests/Contracts/UnknownFieldRoundTripTests.swift",
   "canaries": [
     {
       "file": "project.json",
@@ -10,6 +11,11 @@
         "kind": "root",
         "revision": 7
       }
+    },
+    {
+      "file": "project.json",
+      "pointer": "/x-contract-null",
+      "value": null
     },
     {
       "file": "project.json",
@@ -45,6 +51,16 @@
       "value": {
         "unit": "ev"
       }
+    },
+    {
+      "file": "project.json",
+      "pointer": "/timelines/0/tracks/0/clips/0/opacityTrack/keyframes/0/x-contract-keyframe",
+      "value": "zero"
+    },
+    {
+      "file": "project.json",
+      "pointer": "/timelines/0/tracks/0/clips/0/wordTimings/0/x-contract-word-timing",
+      "value": "timing"
     },
     {
       "file": "media.json",

@@ -45,6 +45,29 @@
                   "x-contract-effect": "effect"
                 }
               ],
+              "opacityTrack": {
+                "keyframes": [
+                  {
+                    "frame": 0,
+                    "value": 0.4,
+                    "interpolationOut": "linear",
+                    "x-contract-keyframe": "zero"
+                  },
+                  {
+                    "frame": 30,
+                    "value": 0.8,
+                    "interpolationOut": "smooth"
+                  }
+                ]
+              },
+              "wordTimings": [
+                {
+                  "text": "clip",
+                  "startFrame": 0,
+                  "endFrame": 30,
+                  "x-contract-word-timing": "timing"
+                }
+              ],
               "x-contract-clip": [
                 "clip",
                 1
@@ -64,5 +87,6 @@
   "x-contract-root": {
     "kind": "root",
     "revision": 7
-  }
+  },
+  "x-contract-null": null
 }

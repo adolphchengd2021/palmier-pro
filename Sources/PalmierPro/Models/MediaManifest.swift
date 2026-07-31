@@ -1,9 +1,10 @@
 import Foundation
 
-struct MediaManifest: Codable, Sendable, Equatable {
+struct MediaManifest: Codable, Sendable, Equatable, JSONCompatibilityCarrying {
     var version: Int = 2
     var entries: [MediaManifestEntry] = []
     var folders: [MediaFolder] = []
+    var compatibilitySnapshot: JSONCompatibilitySnapshot? = nil
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -15,6 +16,22 @@ struct MediaManifest: Codable, Sendable, Equatable {
     init() {}
 
     private enum CodingKeys: String, CodingKey { case version, entries, folders }
+
+    static func decode(_ data: Data) throws -> MediaManifest {
+        var manifest = try JSONDecoder().decode(MediaManifest.self, from: data)
+        manifest.compatibilitySnapshot = try JSONCompatibilitySnapshot(
+            kind: .media,
+            original: data,
+            baseline: ProjectJSONCodec.encodeKnownFields(manifest)
+        )
+        return manifest
+    }
+
+    static func == (lhs: MediaManifest, rhs: MediaManifest) -> Bool {
+        lhs.version == rhs.version
+            && lhs.entries == rhs.entries
+            && lhs.folders == rhs.folders
+    }
 }
 
 struct MediaManifestEntry: Codable, Sendable, Equatable, Identifiable {

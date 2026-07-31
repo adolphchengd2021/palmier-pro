@@ -15,6 +15,7 @@ extension EditorViewModel {
 
     func applyProjectFile(_ file: ProjectFile) {
         guard !file.timelines.isEmpty else { return }
+        projectCompatibilitySnapshot = file.compatibilitySnapshot
         timelines = file.timelines
         liveViewStates = file.viewStates ?? [:]
         let ids = Set(file.timelines.map(\.id))
@@ -40,7 +41,8 @@ extension EditorViewModel {
             openTimelineIds: openTimelineIds,
             viewStates: liveViewStates.filter { ids.contains($0.key) },
             speakers: speakerRegistry.isEmpty ? nil : speakerRegistry,
-            multicamGroups: savedMulticamGroups()
+            multicamGroups: savedMulticamGroups(),
+            compatibilitySnapshot: projectCompatibilitySnapshot
         )
     }
 

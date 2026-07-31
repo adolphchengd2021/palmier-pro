@@ -37,6 +37,7 @@ final class EditorViewModel {
     var activeTimelineId: String
     var openTimelineIds: [String]
     @ObservationIgnored var liveViewStates: [String: TimelineViewState] = [:]
+    @ObservationIgnored var projectCompatibilitySnapshot: JSONCompatibilitySnapshot?
     var timelineTabRenameRequest: String?
 
     /// Active-timeline proxy; assignment routes by id and activates so undo lands on its timeline.

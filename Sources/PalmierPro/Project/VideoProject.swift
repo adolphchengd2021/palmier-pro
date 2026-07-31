@@ -112,7 +112,7 @@ class VideoProject: NSDocument {
         let manifest: MediaManifest?
         let manifestUnreadable: Bool
         if let manifestData = try optionalData(Project.manifestFilename, in: url) {
-            if let decoded = try? JSONDecoder().decode(MediaManifest.self, from: manifestData) {
+            if let decoded = try? MediaManifest.decode(manifestData) {
                 manifest = decoded
                 manifestUnreadable = false
             } else {

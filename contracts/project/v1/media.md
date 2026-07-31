@@ -44,5 +44,6 @@ required decode fields, stable enums, associated-value payloads, and focused
 type-body digests with `media-model.json`, then validates positive and negative
 fixtures for their expected reasons. It does not run `JSONEncoder` or
 `JSONDecoder`. `ContractFixtureTests` exercises the production Swift decoder,
-shared writer, and package exporter in macOS CI. Unknown-field load-edit-save
-preservation remains a separate blocked requirement.
+shared writer, and package exporter in macOS CI. `UnknownFieldRoundTripTests`
+enforces media-root, entry, generation, import, and source-payload canaries
+through the production package load-edit-save path.

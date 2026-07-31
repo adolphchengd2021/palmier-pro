@@ -850,6 +850,11 @@ def media_source_contract() -> None:
         type_snapshot = model_snapshot["types"][type_name]
         source = type_snapshot["source"]
         actual_fields = swift_stored_field_signatures(source, type_name)
+        if type_name == "MediaManifest":
+            actual_fields = [
+                field for field in actual_fields
+                if field["name"] != "compatibilitySnapshot"
+            ]
         require_equal(
             f"{type_name} schema fields",
             set(contract["properties"]),
@@ -1073,11 +1078,23 @@ def project_fixtures() -> None:
         canary_contract["contractVersion"],
         CONTRACT_VERSION,
     )
-    if canary_contract["runtimeRoundTripStatus"] != "blocked":
+    if canary_contract["runtimeRoundTripStatus"] != "enforced":
         raise ContractError(
-            "unknown-field runtime round trip must stay blocked until a client "
-            "load-edit-save test passes"
+            "unknown-field runtime round trip must be enforced by a client "
+            "load-edit-save test"
         )
+    enforcement_test = canary_contract["enforcementTest"]
+    enforcement_source = read_text(enforcement_test)
+    for token in [
+        "declaredCanariesSurviveProductionLoadEditSave",
+        "VideoProject.readProjectPackage",
+        "VideoProject.writeProjectPackage",
+        "ProjectJSONCodec.encode",
+    ]:
+        if token not in enforcement_source:
+            raise ContractError(
+                f"{enforcement_test}: missing enforcement token {token!r}"
+            )
     package = Path(canary_contract["fixture"])
     documents: dict[str, Any] = {}
     for canary in canary_contract["canaries"]:
@@ -1112,7 +1129,7 @@ def main() -> int:
     for label, check in checks:
         check()
         print(f"PASS {label}")
-    print("BLOCKED unknown-field client load-edit-save round trip")
+    print("DECLARED unknown-field round trip enforced by macOS Swift tests")
     print(f"PASS {len(checks)} contract audit groups")
     return 0
 

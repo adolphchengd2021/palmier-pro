@@ -4,6 +4,49 @@ struct WordTiming: Codable, Sendable, Equatable {
     var text: String
     var startFrame: Int
     var endFrame: Int
+    var unknownFields: [String: OpaqueJSONValue] = [:]
+
+    init(
+        text: String,
+        startFrame: Int,
+        endFrame: Int,
+        unknownFields: [String: OpaqueJSONValue] = [:]
+    ) {
+        self.text = text
+        self.startFrame = startFrame
+        self.endFrame = endFrame
+        self.unknownFields = unknownFields
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case text, startFrame, endFrame
+    }
+
+    init(from decoder: Decoder) throws {
+        let known = try decoder.container(keyedBy: CodingKeys.self)
+        text = try known.decode(String.self, forKey: .text)
+        startFrame = try known.decode(Int.self, forKey: .startFrame)
+        endFrame = try known.decode(Int.self, forKey: .endFrame)
+
+        let dynamic = try decoder.container(keyedBy: JSONFieldKey.self)
+        let knownNames = Set(CodingKeys.allCases.map(\.rawValue))
+        unknownFields = try dynamic.allKeys.reduce(into: [:]) { result, key in
+            guard !knownNames.contains(key.stringValue) else { return }
+            result[key.stringValue] = try dynamic.decode(OpaqueJSONValue.self, forKey: key)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var known = encoder.container(keyedBy: CodingKeys.self)
+        try known.encode(text, forKey: .text)
+        try known.encode(startFrame, forKey: .startFrame)
+        try known.encode(endFrame, forKey: .endFrame)
+
+        var dynamic = encoder.container(keyedBy: JSONFieldKey.self)
+        for (key, value) in unknownFields {
+            try dynamic.encode(value, forKey: JSONFieldKey(key))
+        }
+    }
 }
 
 struct TextAnimation: Codable, Sendable, Equatable {
