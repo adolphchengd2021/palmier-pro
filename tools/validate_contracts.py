@@ -1284,7 +1284,7 @@ def windows_bootstrap_contract() -> None:
         "Windows prototype dependency locks",
         dependencies,
         {
-            "Qt": ["6.11.1", "prototype-locked"],
+            "Qt": ["6.10.3", "prototype-locked"],
             "FFmpeg": ["8.1.2", "prototype-locked"],
             "ONNX Runtime": ["1.28.0", "prototype-locked"],
             "Inno Setup": ["7.0.2", "prototype-locked"],
@@ -1403,7 +1403,7 @@ def windows_bootstrap_contract() -> None:
         "MSVC v143 14.44",
         "Windows SDK 10.0.26100.0",
         "CMake 3.31.6",
-        "Qt 6.11.1",
+        "Qt 6.10.3",
         "FFmpeg 8.1.2",
         "ONNX Runtime 1.28.0",
         "Inno Setup 7.0.2",
@@ -2202,7 +2202,7 @@ def windows_qt_read_only_shell_contract() -> None:
         },
     )
     for token in [
-        "Qt6 6.11.1 EXACT REQUIRED",
+        "Qt6 6.10.3 EXACT REQUIRED",
         "Qt6::Concurrent",
         "Qt6::QuickDialogs2",
         "qt_add_executable(palmier_qt_shell",
@@ -2295,7 +2295,7 @@ def windows_qt_read_only_shell_contract() -> None:
     for token in [
         "aqtinstall==3.3.0",
         "py7zr==1.0.0",
-        "6.11.1",
+        "6.10.3",
         "win64_msvc2022_64",
         "cmake version 3.31.6",
         "^17\\.14\\.",
