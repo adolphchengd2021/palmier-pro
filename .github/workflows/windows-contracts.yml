@@ -9,15 +9,18 @@ concurrency:
   group: windows-contracts-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   contracts:
     name: Contract snapshots and fixtures
     runs-on: windows-2022
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.10"
 
@@ -26,3 +29,41 @@ jobs:
 
       - name: Validate contracts
         run: python -B tools/validate_contracts.py --check
+
+  msvc-contract-probe:
+    name: MSVC contract probe
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify toolchain baseline
+        shell: pwsh
+        run: |
+          $cmake = (cmake --version | Select-Object -First 1)
+          if ($cmake -ne "cmake version 3.31.6") {
+            throw "Expected CMake 3.31.6, got: $cmake"
+          }
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $version = & $vswhere -latest -products * -property installationVersion
+          if ($version -notmatch '^17\.14\.') {
+            throw "Expected Visual Studio 17.14.x, got: $version"
+          }
+          $tools = (Get-Content -LiteralPath "$vs\VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt").Trim()
+          if ($tools -notmatch '^14\.44\.') {
+            throw "Expected MSVC 14.44.x, got: $tools"
+          }
+          if (-not (Test-Path -LiteralPath "${env:ProgramFiles(x86)}\Windows Kits\10\Include\10.0.26100.0")) {
+            throw "Windows SDK 10.0.26100.0 is missing"
+          }
+          Write-Host "$cmake; Visual Studio $version; MSVC $tools; SDK 10.0.26100.0"
+
+      - name: Configure
+        run: cmake --preset windows-msvc-x64
+
+      - name: Build
+        run: cmake --build --preset windows-msvc-x64-release --parallel
+
+      - name: Test
+        run: ctest --preset windows-msvc-x64-release

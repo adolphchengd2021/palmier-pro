@@ -1,0 +1,36 @@
+#include "palmier/contracts/repository_contract_probe.hpp"
+
+#include <filesystem>
+#include <iostream>
+#include <string_view>
+
+namespace {
+
+int printResult(const palmier::contracts::ProbeResult& result) {
+    auto& stream = result.code == palmier::contracts::ProbeExitCode::success
+        ? std::cout
+        : std::cerr;
+    stream << result.marker << ' ' << result.detail << '\n';
+    return static_cast<int>(result.code);
+}
+
+}
+
+int wmain(int argumentCount, wchar_t* arguments[]) {
+    if (argumentCount != 3) {
+        std::cerr << "PALMIER_CONTRACT_E_USAGE expected --repo-root <path> or --contract-version-file <path>\n";
+        return static_cast<int>(palmier::contracts::ProbeExitCode::usage);
+    }
+
+    const std::wstring_view command(arguments[1]);
+    const std::filesystem::path path(arguments[2]);
+    if (command == L"--repo-root") {
+        return printResult(palmier::contracts::probeRepository(path));
+    }
+    if (command == L"--contract-version-file") {
+        return printResult(palmier::contracts::probeContractVersionFile(path));
+    }
+
+    std::cerr << "PALMIER_CONTRACT_E_USAGE unknown command\n";
+    return static_cast<int>(palmier::contracts::ProbeExitCode::usage);
+}

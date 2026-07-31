@@ -1,0 +1,60 @@
+{
+  "contractVersion": 1,
+  "reviewedOn": "2026-08-01",
+  "target": {
+    "minimumOs": "Windows 10 22H2",
+    "minimumBuild": 19045,
+    "architecture": "x86_64",
+    "graphicsBaseline": "Direct3D 11 Feature Level 11_0"
+  },
+  "build": {
+    "ciRunner": "windows-2022",
+    "visualStudio": "2022 17.14",
+    "visualStudioReferenceBuild": "17.14.37",
+    "msvcToolset": "v143 14.44",
+    "windowsSdkTarget": "10.0.26100.0",
+    "windowsSdkServicingReference": "10.0.26100.8038",
+    "cmakeMinimum": "3.31.0",
+    "cmakeCiVersion": "3.31.6",
+    "cmakeUpgradeCandidate": "4.3.3",
+    "ninjaReservedVersion": "1.13.2",
+    "cppStandard": 20
+  },
+  "dependencyManager": {
+    "name": "vcpkg manifest mode",
+    "release": "2026.06.24",
+    "builtinBaseline": "cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3",
+    "metrics": "disabled",
+    "activation": "Add vcpkg.json with the first third-party C++ dependency"
+  },
+  "prototypeDependencies": [
+    {
+      "name": "Qt",
+      "version": "6.11.1",
+      "variant": "MSVC 2022 x86_64",
+      "status": "prototype-locked",
+      "releaseGate": "Re-evaluate the first qualified Qt 6.12.x release on Windows 10 19045"
+    },
+    {
+      "name": "FFmpeg",
+      "version": "8.1.2",
+      "variant": "LGPL dynamic libraries",
+      "status": "prototype-locked",
+      "releaseGate": "Freeze configure flags, DLL hashes, matching source and codec patent review"
+    },
+    {
+      "name": "ONNX Runtime",
+      "version": "1.28.0",
+      "variant": "CPU required; DirectML optional",
+      "status": "prototype-locked",
+      "releaseGate": "Validate model parity, driver fallback, cancellation and session serialization"
+    },
+    {
+      "name": "Inno Setup",
+      "version": "7.0.2",
+      "variant": "x64 installer",
+      "status": "prototype-locked",
+      "releaseGate": "Validate signing, install, upgrade, downgrade refusal, uninstall and procurement"
+    }
+  ]
+}

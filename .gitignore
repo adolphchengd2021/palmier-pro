@@ -2,6 +2,9 @@
 .swiftpm/
 .build/
 .vscode/
+out/
+__pycache__/
+*.pyc
 
 # Xcode
 xcuserdata/

@@ -1213,6 +1213,146 @@ def project_fixtures() -> None:
         )
 
 
+def windows_bootstrap_contract() -> None:
+    toolchain = load_json("windows/toolchain.json")
+    require_equal(
+        "Windows toolchain contract version",
+        toolchain["contractVersion"],
+        CONTRACT_VERSION,
+    )
+    require_equal(
+        "Windows minimum target",
+        toolchain["target"],
+        {
+            "minimumOs": "Windows 10 22H2",
+            "minimumBuild": 19045,
+            "architecture": "x86_64",
+            "graphicsBaseline": "Direct3D 11 Feature Level 11_0",
+        },
+    )
+    build = toolchain["build"]
+    expected_build = {
+        "ciRunner": "windows-2022",
+        "visualStudio": "2022 17.14",
+        "visualStudioReferenceBuild": "17.14.37",
+        "msvcToolset": "v143 14.44",
+        "windowsSdkTarget": "10.0.26100.0",
+        "windowsSdkServicingReference": "10.0.26100.8038",
+        "cmakeMinimum": "3.31.0",
+        "cmakeCiVersion": "3.31.6",
+        "cmakeUpgradeCandidate": "4.3.3",
+        "ninjaReservedVersion": "1.13.2",
+        "cppStandard": 20,
+    }
+    require_equal("Windows build toolchain", build, expected_build)
+
+    manager = toolchain["dependencyManager"]
+    require_equal("dependency manager", manager["name"], "vcpkg manifest mode")
+    require_equal("vcpkg release", manager["release"], "2026.06.24")
+    baseline = manager["builtinBaseline"]
+    require_equal(
+        "vcpkg builtin baseline",
+        baseline,
+        "cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3",
+    )
+    require_equal("vcpkg metrics", manager["metrics"], "disabled")
+    if (ROOT / "vcpkg.json").exists():
+        raise ContractError(
+            "vcpkg.json must be added with the first third-party C++ dependency"
+        )
+
+    dependencies = {
+        entry["name"]: [entry["version"], entry["status"]]
+        for entry in toolchain["prototypeDependencies"]
+    }
+    require_equal(
+        "Windows prototype dependency locks",
+        dependencies,
+        {
+            "Qt": ["6.11.1", "prototype-locked"],
+            "FFmpeg": ["8.1.2", "prototype-locked"],
+            "ONNX Runtime": ["1.28.0", "prototype-locked"],
+            "Inno Setup": ["7.0.2", "prototype-locked"],
+        },
+    )
+
+    cmake = read_text("CMakeLists.txt")
+    for token in [
+        "cmake_minimum_required(VERSION 3.31)",
+        "project(PalmierProWindowsContracts LANGUAGES CXX)",
+        "if(NOT WIN32)",
+        "if(NOT MSVC)",
+        "if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)",
+        "include(CTest)",
+        "add_subdirectory(windows/contract-probe)",
+    ]:
+        if token not in cmake:
+            raise ContractError(f"CMake bootstrap missing token {token!r}")
+
+    presets = load_json("CMakePresets.json")
+    require_equal("CMake preset schema version", presets["version"], 6)
+    configure = presets["configurePresets"][0]
+    require_equal("CMake generator", configure["generator"], "Visual Studio 17 2022")
+    require_equal("CMake architecture", configure["architecture"], "x64")
+    require_equal("CMake toolset", configure["toolset"], "v143")
+    require_equal(
+        "CMake SDK target",
+        configure["cacheVariables"]["CMAKE_SYSTEM_VERSION"],
+        "10.0.26100.0",
+    )
+    require_equal(
+        "CMake preset minimum",
+        presets["cmakeMinimumRequired"],
+        {"major": 3, "minor": 31, "patch": 0},
+    )
+
+    probe_cmake = read_text("windows/contract-probe/CMakeLists.txt")
+    for token in [
+        "palmier_contract_probe_core",
+        "palmier_contract_probe",
+        "/W4 /WX /permissive- /Zc:__cplusplus /utf-8",
+        "contract_probe.repository_v1",
+        "add_probe_failure(rejects_duplicate_version",
+        "contract_probe.unicode_path",
+        "add_probe_failure(unicode_missing_file",
+        "add_probe_failure(rejects_above_unicode_range",
+    ]:
+        if token not in probe_cmake:
+            raise ContractError(f"Windows probe CMake missing token {token!r}")
+
+    workflow = read_text(".github/workflows/windows-contracts.yml")
+    for token in [
+        "runs-on: windows-2022",
+        "actions/checkout@v6",
+        "actions/setup-python@v6",
+        "cmake version 3.31.6",
+        "^17\\.14\\.",
+        "^14\\.44\\.",
+        "Windows Kits\\10\\Include\\10.0.26100.0",
+        "cmake --preset windows-msvc-x64",
+        "cmake --build --preset windows-msvc-x64-release --parallel",
+        "ctest --preset windows-msvc-x64-release",
+    ]:
+        if token not in workflow:
+            raise ContractError(f"Windows workflow missing token {token!r}")
+
+    adr = read_text(
+        "docs/windows/adr/0007-windows-toolchain-and-prototype-dependencies.md"
+    )
+    for version in [
+        "Visual Studio 2022 17.14",
+        "MSVC v143 14.44",
+        "Windows SDK 10.0.26100.0",
+        "CMake 3.31.6",
+        "Qt 6.11.1",
+        "FFmpeg 8.1.2",
+        "ONNX Runtime 1.28.0",
+        "Inno Setup 7.0.2",
+    ]:
+        if version not in adr:
+            raise ContractError(f"Windows toolchain ADR missing {version!r}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Palmier contract snapshots")
     parser.add_argument(
@@ -1230,6 +1370,7 @@ def main() -> int:
         ("effect and blend snapshots", effect_snapshot),
         ("media schema and Swift source", media_source_contract),
         ("project fixtures and canaries", project_fixtures),
+        ("Windows toolchain and compiled probe", windows_bootstrap_contract),
     ]
     for label, check in checks:
         check()
