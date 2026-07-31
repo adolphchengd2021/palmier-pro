@@ -82,15 +82,15 @@ float4 psMain(VertexOutput input) : SV_Target {
     );
     const float4 source = sourceTexture.Load(int3(sourcePixel, 0));
     const float multiplier = exp2(exposureEv);
-    const float3 linear = float3(
+    const float3 linearColor = float3(
         srgbToLinear(source.r),
         srgbToLinear(source.g),
         srgbToLinear(source.b)
     ) * multiplier;
     const float3 processed = float3(
-        linearToSrgb(linear.r),
-        linearToSrgb(linear.g),
-        linearToSrgb(linear.b)
+        linearToSrgb(linearColor.r),
+        linearToSrgb(linearColor.g),
+        linearToSrgb(linearColor.b)
     );
     const float alpha = source.a * opacity;
     return float4(processed * alpha, alpha);

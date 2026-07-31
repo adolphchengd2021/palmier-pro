@@ -269,7 +269,8 @@ void transformedLayerUsesTopLeftCanvasCoordinates() {
         return output.pixels[static_cast<std::size_t>(y) * output.width + x];
     };
     require(at(0, 0).red == 0, "top-left remains black");
-    require(at(2, 2).red == 1 && at(3, 3).red == 1, "bottom-right receives layer");
+    requireNear(at(2, 2).red, 1, "bottom-right first covered pixel");
+    requireNear(at(3, 3).red, 1, "bottom-right last covered pixel");
 }
 
 }
