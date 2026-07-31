@@ -1,0 +1,127 @@
+{
+  "contractVersion": 1,
+  "sourceCommit": "83916cffc996496a51d3bf8b3ac346a70fe425ef",
+  "types": {
+    "MediaManifest": {
+      "source": "Sources/PalmierPro/Models/MediaManifest.swift",
+      "bodySha256": "65582839b6b6c1d23d050248ca71dd24f0daa4118dd260a949b4d375f2d6b00b",
+      "requiredOnDecode": [],
+      "fields": [
+        { "name": "version", "declaration": "var", "swiftType": "Int" },
+        { "name": "entries", "declaration": "var", "swiftType": "[MediaManifestEntry]" },
+        { "name": "folders", "declaration": "var", "swiftType": "[MediaFolder]" }
+      ]
+    },
+    "MediaManifestEntry": {
+      "source": "Sources/PalmierPro/Models/MediaManifest.swift",
+      "bodySha256": "ba6a6dafa0fcf34ac5019a675726268c641f2065205c2705935f90b0e4c77ed3",
+      "requiredOnDecode": ["id", "name", "type", "source", "duration"],
+      "fields": [
+        { "name": "id", "declaration": "let", "swiftType": "String" },
+        { "name": "name", "declaration": "var", "swiftType": "String" },
+        { "name": "type", "declaration": "var", "swiftType": "ClipType" },
+        { "name": "source", "declaration": "var", "swiftType": "MediaSource" },
+        { "name": "duration", "declaration": "var", "swiftType": "Double" },
+        { "name": "generationInput", "declaration": "var", "swiftType": "GenerationInput?" },
+        { "name": "sourceWidth", "declaration": "var", "swiftType": "Int?" },
+        { "name": "sourceHeight", "declaration": "var", "swiftType": "Int?" },
+        { "name": "sourceFPS", "declaration": "var", "swiftType": "Double?" },
+        { "name": "hasAudio", "declaration": "var", "swiftType": "Bool?" },
+        { "name": "folderId", "declaration": "var", "swiftType": "String?" },
+        { "name": "cachedRemoteURL", "declaration": "var", "swiftType": "String?" },
+        { "name": "cachedRemoteURLExpiresAt", "declaration": "var", "swiftType": "Date?" },
+        { "name": "generationStatus", "declaration": "var", "swiftType": "String?" },
+        { "name": "importInput", "declaration": "var", "swiftType": "MediaImportInput?" }
+      ]
+    },
+    "MediaImportInput": {
+      "source": "Sources/PalmierPro/Models/MediaManifest.swift",
+      "bodySha256": "246e7be3ca8a10f4c5778d3ef701e36bf413a6649d021158ed3f65639ca5e7c3",
+      "requiredOnDecode": [],
+      "fields": [
+        { "name": "sourceURL", "declaration": "var", "swiftType": "String?" },
+        { "name": "sourcePath", "declaration": "var", "swiftType": "String?" },
+        { "name": "createdAt", "declaration": "var", "swiftType": "Date?" }
+      ]
+    },
+    "GenerationInput": {
+      "source": "Sources/PalmierPro/Models/MediaManifest.swift",
+      "bodySha256": "69ca43f03e07970605a436816075b2bc8039403224b63717b7c4229fc5c08323",
+      "requiredOnDecode": ["prompt", "model", "duration", "aspectRatio"],
+      "fields": [
+        { "name": "prompt", "declaration": "var", "swiftType": "String" },
+        { "name": "model", "declaration": "var", "swiftType": "String" },
+        { "name": "duration", "declaration": "var", "swiftType": "Int" },
+        { "name": "aspectRatio", "declaration": "var", "swiftType": "String" },
+        { "name": "resolution", "declaration": "var", "swiftType": "String?" },
+        { "name": "upscaleSettings", "declaration": "var", "swiftType": "UpscaleSettings?" },
+        { "name": "upscaleSourceWidth", "declaration": "var", "swiftType": "Int?" },
+        { "name": "upscaleSourceHeight", "declaration": "var", "swiftType": "Int?" },
+        { "name": "upscaleSourceFPS", "declaration": "var", "swiftType": "Double?" },
+        { "name": "quality", "declaration": "var", "swiftType": "String?" },
+        { "name": "imageURLs", "declaration": "var", "swiftType": "[String]?" },
+        { "name": "numImages", "declaration": "var", "swiftType": "Int?" },
+        { "name": "voice", "declaration": "var", "swiftType": "String?" },
+        { "name": "lyrics", "declaration": "var", "swiftType": "String?" },
+        { "name": "styleInstructions", "declaration": "var", "swiftType": "String?" },
+        { "name": "instrumental", "declaration": "var", "swiftType": "Bool?" },
+        { "name": "targetLanguage", "declaration": "var", "swiftType": "String?" },
+        { "name": "multilingual", "declaration": "var", "swiftType": "Bool?" },
+        { "name": "audioInput", "declaration": "var", "swiftType": "String?" },
+        { "name": "generateAudio", "declaration": "var", "swiftType": "Bool?" },
+        { "name": "referenceImageURLs", "declaration": "var", "swiftType": "[String]?" },
+        { "name": "referenceVideoURLs", "declaration": "var", "swiftType": "[String]?" },
+        { "name": "referenceAudioURLs", "declaration": "var", "swiftType": "[String]?" },
+        { "name": "imageURLAssetIds", "declaration": "var", "swiftType": "[String]?" },
+        { "name": "referenceImageAssetIds", "declaration": "var", "swiftType": "[String]?" },
+        { "name": "referenceVideoAssetIds", "declaration": "var", "swiftType": "[String]?" },
+        { "name": "referenceAudioAssetIds", "declaration": "var", "swiftType": "[String]?" },
+        { "name": "createdAt", "declaration": "var", "swiftType": "Date?" },
+        { "name": "backendJobId", "declaration": "var", "swiftType": "String?" },
+        { "name": "outputIndex", "declaration": "var", "swiftType": "Int?" },
+        { "name": "resultURLs", "declaration": "var", "swiftType": "[String]?" }
+      ]
+    },
+    "MediaFolder": {
+      "source": "Sources/PalmierPro/Models/MediaFolder.swift",
+      "bodySha256": "987531fefd2af786794a168fc3943d198a8b63abbc74179a647e4914eff3d469",
+      "requiredOnDecode": ["id", "name"],
+      "fields": [
+        { "name": "id", "declaration": "let", "swiftType": "String" },
+        { "name": "name", "declaration": "var", "swiftType": "String" },
+        { "name": "parentFolderId", "declaration": "var", "swiftType": "String?" }
+      ]
+    },
+    "UpscaleSettings": {
+      "source": "Sources/PalmierPro/Generation/Catalog/UpscaleModelConfig.swift",
+      "bodySha256": "64d6836effc8ccd4eea0ab9f0c28764d5c09bad84884228c16c01f817ebdc2d3",
+      "requiredOnDecode": ["selections", "numbers", "toggles"],
+      "fields": [
+        { "name": "selections", "declaration": "var", "swiftType": "[String: String]" },
+        { "name": "numbers", "declaration": "var", "swiftType": "[String: Double]" },
+        { "name": "toggles", "declaration": "var", "swiftType": "[String: Bool]" }
+      ]
+    }
+  },
+  "enums": {
+    "ClipType": {
+      "source": "Sources/PalmierPro/Models/ClipType.swift",
+      "cases": [
+        "video",
+        "audio",
+        "image",
+        "text",
+        "lottie",
+        "sequence"
+      ]
+    },
+    "MediaSource": {
+      "source": "Sources/PalmierPro/Models/MediaManifest.swift",
+      "bodySha256": "9ff0f04ad7229c09083e3f5da3a3819841a27748743d58763e4b97d58fe206e9",
+      "cases": [
+        "external(absolutePath: String)",
+        "project(relativePath: String)"
+      ]
+    }
+  }
+}

@@ -16,6 +16,11 @@
       "path": "unknown-fields.palmier",
       "kind": "forward-compatibility-canary",
       "origin": "hand-authored M0 contract fixture"
+    },
+    {
+      "path": "media-complete.palmier",
+      "kind": "complete-known-media-fields",
+      "origin": "hand-authored from HEAD 83916cff Codable declarations"
     }
   ]
 }

@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "id": "media-missing-generation-model",
+      "name": "Missing generation model",
+      "type": "image",
+      "source": {
+        "project": {
+          "relativePath": "media/generated.png"
+        }
+      },
+      "duration": 1,
+      "generationInput": {
+        "prompt": "fixture",
+        "duration": 1,
+        "aspectRatio": "1:1"
+      }
+    }
+  ],
+  "folders": []
+}

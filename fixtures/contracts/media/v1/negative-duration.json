@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "id": "media-negative-duration",
+      "name": "Negative duration",
+      "type": "video",
+      "source": {
+        "project": {
+          "relativePath": "media/negative-duration.mp4"
+        }
+      },
+      "duration": -1
+    }
+  ],
+  "folders": []
+}

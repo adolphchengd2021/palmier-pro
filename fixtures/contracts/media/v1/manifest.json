@@ -1,0 +1,45 @@
+{
+  "contractVersion": 1,
+  "fixtures": [
+    {
+      "path": "unknown-source.json",
+      "valid": false,
+      "errorContains": "expected exactly one schema match, got 0"
+    },
+    {
+      "path": "ambiguous-source.json",
+      "valid": false,
+      "errorContains": "expected exactly one schema match, got 0"
+    },
+    {
+      "path": "ambiguous-source-invalid-payload.json",
+      "valid": false,
+      "errorContains": "expected exactly one schema match, got 0"
+    },
+    {
+      "path": "missing-generation-model.json",
+      "valid": false,
+      "errorContains": "missing required keys ['model']"
+    },
+    {
+      "path": "unknown-clip-type.json",
+      "valid": false,
+      "errorContains": "value is outside the declared enum"
+    },
+    {
+      "path": "project-path-backslash.json",
+      "valid": false,
+      "errorContains": "project path must use '/'"
+    },
+    {
+      "path": "version-zero.json",
+      "valid": false,
+      "errorContains": "value is below minimum"
+    },
+    {
+      "path": "negative-duration.json",
+      "valid": false,
+      "errorContains": "value is below minimum"
+    }
+  ]
+}

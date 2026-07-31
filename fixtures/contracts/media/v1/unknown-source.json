@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "id": "media-unknown-source",
+      "name": "Future source",
+      "type": "video",
+      "source": {
+        "cloud": {
+          "provider": "future"
+        }
+      },
+      "duration": 1
+    }
+  ],
+  "folders": []
+}

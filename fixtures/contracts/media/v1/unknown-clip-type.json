@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "id": "media-unknown-clip-type",
+      "name": "Future media type",
+      "type": "spatialVideo",
+      "source": {
+        "project": {
+          "relativePath": "media/spatial.mov"
+        }
+      },
+      "duration": 1
+    }
+  ],
+  "folders": []
+}

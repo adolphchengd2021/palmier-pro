@@ -25,12 +25,18 @@ source and contract change in the same review.
 
 - Source identifier drift checks: required.
 - Fixture and canary integrity: required.
-- Project/media schemas: provisional structural validation only; known-field
+- Project schema: provisional structural validation only; known-field
   inventory, defaults, enums, and client decode behavior are incomplete.
+- Media schema: complete known-field structural inventory for the current
+  Swift models, checked against field signatures, optionality, required decode
+  fields, enum payloads, and focused source-body digests. Real client
+  writer/decode behavior still requires Swift golden tests.
 - Unknown-field client load-edit-save round trip: blocked.
 - Full effect parameter snapshot: not yet captured.
 - Complete MCP input-schema snapshot: not yet captured.
 
-The provisional project/media schemas are not an implementation-ready Windows
-format specification. They reject structural fixture drift while the complete
-known-field contract and real Swift load-edit-save tests are built.
+The provisional project schema is not an implementation-ready Windows format
+specification. The media schema is stricter: its properties, `ClipType`, and
+`MediaSource` cases are checked against `media-model.json` and Swift
+declarations, but it still does not replace real Swift writer/decode and
+load-edit-save tests.

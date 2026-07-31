@@ -26,5 +26,11 @@ fixture structure, and type-sensitive canaries. It is not a complete Draft
 preserves unknown fields. That runtime gate remains blocked until a real
 load-edit-save implementation passes the canary round trip.
 
+The media contract additionally compares every persisted Swift field signature,
+optionality, required decode field, `ClipType`, and `MediaSource` payload with
+`media-model.json` and `media.schema.json`. Its positive and negative fixtures
+cover both source cases, nullable values, complete generation metadata, missing
+required fields, ambiguous sources, path separators, and future enum values.
+
 Do not add an empty CMake project. Add CMake, MSVC, and CTest together with the
 first compilable Windows contract probe and a Windows CI build.

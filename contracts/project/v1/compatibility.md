@@ -28,9 +28,10 @@ import input, and media-source payload.
 Runtime round-trip status: **Blocked**. The current Swift serializer is known to
 drop these canaries.
 
-The accompanying JSON Schemas are provisional structural checks. They do not
-yet enumerate every Swift field, enum, default, or missing-value behavior and
-must not be used alone to implement the Windows reader.
+The project JSON Schema remains a provisional structural check and must not be
+used alone to implement the Windows reader. The media JSON Schema enumerates
+all current known Swift fields and stable enums, but client defaults and
+writer/decode behavior still require Swift golden tests.
 
 ## Paths
 

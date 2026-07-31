@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "id": "media-backslash-path",
+      "name": "Backslash project path",
+      "type": "video",
+      "source": {
+        "project": {
+          "relativePath": "media\\backslash.mp4"
+        }
+      },
+      "duration": 1
+    }
+  ],
+  "folders": []
+}

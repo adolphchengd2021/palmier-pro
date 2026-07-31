@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "id": "media-ambiguous-invalid-payload",
+      "name": "Ambiguous invalid payload",
+      "type": "video",
+      "source": {
+        "external": {},
+        "project": {
+          "relativePath": "media/ambiguous.mp4"
+        }
+      },
+      "duration": 1
+    }
+  ],
+  "folders": []
+}

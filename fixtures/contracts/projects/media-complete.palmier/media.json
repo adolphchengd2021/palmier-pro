@@ -1,0 +1,123 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "id": "media-external-complete",
+      "name": "External generated source",
+      "type": "video",
+      "source": {
+        "external": {
+          "absolutePath": "C:\\Fixture\\external.mp4"
+        }
+      },
+      "duration": 12.5,
+      "generationInput": {
+        "prompt": "contract fixture",
+        "model": "fixture-model",
+        "duration": 12,
+        "aspectRatio": "16:9",
+        "resolution": "1080p",
+        "upscaleSettings": {
+          "selections": {
+            "targetResolution": "4k"
+          },
+          "numbers": {
+            "noise": 0.2
+          },
+          "toggles": {
+            "restoreFaces": true
+          }
+        },
+        "upscaleSourceWidth": 1920,
+        "upscaleSourceHeight": 1080,
+        "upscaleSourceFPS": 29.97,
+        "quality": "high",
+        "imageURLs": [
+          "https://fixture.invalid/input.png"
+        ],
+        "numImages": 1,
+        "voice": "fixture-voice",
+        "lyrics": "fixture lyrics",
+        "styleInstructions": "neutral",
+        "instrumental": false,
+        "targetLanguage": "en",
+        "multilingual": true,
+        "audioInput": "fixture-audio",
+        "generateAudio": true,
+        "referenceImageURLs": [
+          "https://fixture.invalid/reference.png"
+        ],
+        "referenceVideoURLs": [
+          "https://fixture.invalid/reference.mp4"
+        ],
+        "referenceAudioURLs": [
+          "https://fixture.invalid/reference.wav"
+        ],
+        "imageURLAssetIds": [
+          "asset-image-input"
+        ],
+        "referenceImageAssetIds": [
+          "asset-image-reference"
+        ],
+        "referenceVideoAssetIds": [
+          "asset-video-reference"
+        ],
+        "referenceAudioAssetIds": [
+          "asset-audio-reference"
+        ],
+        "createdAt": 123456789.25,
+        "backendJobId": "backend-job-fixture",
+        "outputIndex": 0,
+        "resultURLs": [
+          "https://fixture.invalid/result.mp4"
+        ]
+      },
+      "sourceWidth": 1920,
+      "sourceHeight": 1080,
+      "sourceFPS": 29.97,
+      "hasAudio": true,
+      "folderId": "folder-generated",
+      "cachedRemoteURL": "https://fixture.invalid/cached.mp4",
+      "cachedRemoteURLExpiresAt": 123456999.25,
+      "generationStatus": "rendering",
+      "importInput": {
+        "sourceURL": "https://fixture.invalid/original.mp4",
+        "sourcePath": "C:\\Fixture\\original.mp4",
+        "createdAt": 123456700.5
+      }
+    },
+    {
+      "id": "media-project-complete",
+      "name": "Project image",
+      "type": "image",
+      "source": {
+        "project": {
+          "relativePath": "media/still.png"
+        }
+      },
+      "duration": 5,
+      "generationInput": null,
+      "sourceWidth": null,
+      "sourceHeight": null,
+      "sourceFPS": null,
+      "hasAudio": null,
+      "folderId": null,
+      "cachedRemoteURL": null,
+      "cachedRemoteURLExpiresAt": null,
+      "generationStatus": null,
+      "importInput": null
+    }
+  ],
+  "folders": [
+    {
+      "id": "folder-root",
+      "name": "Root",
+      "parentFolderId": null
+    },
+    {
+      "id": "folder-generated",
+      "name": "Generated",
+      "parentFolderId": "folder-root"
+    }
+  ]
+}

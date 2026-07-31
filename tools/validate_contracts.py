@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -11,6 +12,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_VERSION = 1
 BASELINE_COMMIT = "457e853a789e16eb104a0bfb43d2485d9e1ac0c8"
+MEDIA_SOURCE_COMMIT = "83916cffc996496a51d3bf8b3ac346a70fe425ef"
 
 
 class ContractError(RuntimeError):
@@ -269,9 +271,11 @@ SCHEMA_KEYWORDS = {
     "$schema",
     "additionalProperties",
     "exclusiveMinimum",
+    "enum",
     "items",
     "minimum",
     "minItems",
+    "not",
     "oneOf",
     "properties",
     "required",
@@ -332,6 +336,13 @@ def validate_schema_node(
             or not set(values).issubset(SCHEMA_TYPES)
         ):
             raise ContractError(f"{location}/type: unsupported type declaration")
+    if "enum" in schema:
+        values = schema["enum"]
+        if not isinstance(values, list) or not values:
+            raise ContractError(f"{location}/enum: must be a non-empty array")
+        canonical = [canonical_json_value(value) for value in values]
+        if len(canonical) != len(set(canonical)):
+            raise ContractError(f"{location}/enum: values must be unique")
     if "required" in schema:
         required = schema["required"]
         if (
@@ -384,6 +395,8 @@ def validate_schema_node(
                 root_schema,
                 f"{location}/oneOf/{index}",
             )
+    if "not" in schema:
+        validate_schema_node(schema["not"], root_schema, f"{location}/not")
 
 
 def validate_schema_document(schema: Any, label: str) -> dict[str, Any]:
@@ -419,6 +432,13 @@ def validate_instance(
             raise ContractError(
                 f"{location}: expected exactly one schema match, got {matches}"
             )
+    if "not" in schema:
+        try:
+            validate_instance(value, schema["not"], root_schema, location)
+        except ContractError:
+            pass
+        else:
+            raise ContractError(f"{location}: value matched a forbidden schema")
     if "type" in schema:
         declared = schema["type"]
         expected_types = declared if isinstance(declared, list) else [declared]
@@ -427,6 +447,11 @@ def validate_instance(
                 f"{location}: expected type {expected_types}, "
                 f"got {type(value).__name__}"
             )
+    if "enum" in schema and not any(
+        canonical_json_value(value) == canonical_json_value(candidate)
+        for candidate in schema["enum"]
+    ):
+        raise ContractError(f"{location}: value is outside the declared enum")
     if isinstance(value, dict):
         required = schema.get("required", [])
         missing = [key for key in required if key not in value]
@@ -487,6 +512,23 @@ def expect_failure(label: str, operation: Any) -> None:
     raise ContractError(f"{label}: negative self-check unexpectedly passed")
 
 
+def expect_failure_containing(
+    label: str,
+    expected_message: str,
+    operation: Any,
+) -> None:
+    try:
+        operation()
+    except ContractError as error:
+        if expected_message not in str(error):
+            raise ContractError(
+                f"{label}: expected error containing {expected_message!r}, "
+                f"got {str(error)!r}"
+            ) from error
+        return
+    raise ContractError(f"{label}: invalid fixture unexpectedly passed")
+
+
 def validator_self_check() -> None:
     expect_failure("type-sensitive equality", lambda: require_equal("canary", True, 1))
     integer_schema = {"type": "integer"}
@@ -513,6 +555,463 @@ def validator_self_check() -> None:
             "self-check",
         ),
     )
+    expect_failure(
+        "enum membership",
+        lambda: validate_instance(
+            "future",
+            {"type": "string", "enum": ["known"]},
+            {"type": "string", "enum": ["known"]},
+            "self-check",
+        ),
+    )
+    expect_failure(
+        "not schema",
+        lambda: validate_instance(
+            {"future": True},
+            {"not": {"required": ["future"]}},
+            {"not": {"required": ["future"]}},
+            "self-check",
+        ),
+    )
+
+
+def swift_type_body(relative_path: str, kind: str, name: str) -> str:
+    source = read_text(relative_path)
+    match = re.search(rf"\b{kind}\s+{re.escape(name)}\b[^{{]*\{{", source)
+    if not match:
+        raise ContractError(f"{relative_path}: {kind} {name} was not found")
+    opening = source.find("{", match.start())
+    depth = 0
+    state = "code"
+    escaped = False
+    index = opening
+    while index < len(source):
+        char = source[index]
+        next_char = source[index + 1] if index + 1 < len(source) else ""
+        if state == "line-comment":
+            if char == "\n":
+                state = "code"
+        elif state == "block-comment":
+            if char == "*" and next_char == "/":
+                state = "code"
+                index += 1
+        elif state == "string":
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                state = "code"
+        elif char == "/" and next_char == "/":
+            state = "line-comment"
+            index += 1
+        elif char == "/" and next_char == "*":
+            state = "block-comment"
+            index += 1
+        elif char == '"':
+            state = "string"
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[opening + 1:index]
+        index += 1
+    raise ContractError(f"{relative_path}: {kind} {name} has no closing brace")
+
+
+def swift_top_level_lines(body: str) -> list[str]:
+    result: list[str] = []
+    depth = 0
+    for line in body.splitlines():
+        if depth == 0:
+            result.append(line)
+        code = line.split("//", 1)[0]
+        depth += code.count("{") - code.count("}")
+    return result
+
+
+def swift_stored_field_signatures(
+    relative_path: str,
+    name: str,
+) -> list[dict[str, str]]:
+    body = swift_type_body(relative_path, "struct", name)
+    fields: list[dict[str, str]] = []
+    for line in swift_top_level_lines(body):
+        match = re.match(r"^\s*(let|var)\s+(\w+)\s*:\s*(.+)$", line)
+        if match and "{" not in line:
+            swift_type = re.split(r"\s+=\s+", match.group(3), maxsplit=1)[0]
+            fields.append(
+                {
+                    "name": match.group(2),
+                    "declaration": match.group(1),
+                    "swiftType": swift_type.strip(),
+                }
+            )
+    if not fields:
+        raise ContractError(f"{relative_path}: no stored fields found for {name}")
+    return fields
+
+
+def swift_stored_fields(relative_path: str, name: str) -> list[str]:
+    return [
+        field["name"]
+        for field in swift_stored_field_signatures(relative_path, name)
+    ]
+
+
+def swift_type_body_sha256(relative_path: str, kind: str, name: str) -> str:
+    body = swift_type_body(relative_path, kind, name)
+    normalized = "\n".join(line.rstrip() for line in body.strip().splitlines())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def swift_enum_case_signatures(relative_path: str, name: str) -> list[str]:
+    body = swift_type_body(relative_path, "enum", name)
+    signatures: list[str] = []
+    for line in swift_top_level_lines(body):
+        match = re.match(r"^\s*case\s+(.+)$", line)
+        if match:
+            signatures.extend(
+                declaration.strip()
+                for declaration in match.group(1).split(",")
+                if declaration.strip()
+            )
+    if not signatures:
+        raise ContractError(f"{relative_path}: no enum cases found for {name}")
+    return signatures
+
+
+def swift_enum_cases(relative_path: str, name: str) -> list[str]:
+    return [
+        signature.split("(", 1)[0].split("=", 1)[0].strip()
+        for signature in swift_enum_case_signatures(relative_path, name)
+    ]
+
+
+def schema_allows_null(
+    schema: dict[str, Any],
+    root_schema: dict[str, Any],
+) -> bool:
+    if "$ref" in schema:
+        target = resolve_local_ref(root_schema, schema["$ref"], "nullability")
+        return schema_allows_null(target, root_schema)
+    declared = schema.get("type")
+    if isinstance(declared, list):
+        return "null" in declared
+    return declared == "null"
+
+
+def schema_non_null_shape(
+    schema: dict[str, Any],
+    root_schema: dict[str, Any],
+) -> str:
+    if "$ref" in schema:
+        resolve_local_ref(root_schema, schema["$ref"], "shape")
+        return f"ref:{schema['$ref']}"
+    if "oneOf" in schema:
+        shapes = {
+            schema_non_null_shape(alternative, root_schema)
+            for alternative in schema["oneOf"]
+        }
+        if len(shapes) != 1:
+            raise ContractError(f"schema has incompatible oneOf shapes: {shapes}")
+        return next(iter(shapes))
+    declared = schema.get("type")
+    types = declared if isinstance(declared, list) else [declared]
+    non_null = [value for value in types if value != "null"]
+    if len(non_null) != 1:
+        raise ContractError(f"schema must have one non-null type: {types}")
+    shape = non_null[0]
+    if shape == "array":
+        return f"array<{schema_non_null_shape(schema['items'], root_schema)}>"
+    if shape == "object" and isinstance(schema.get("additionalProperties"), dict):
+        return (
+            "map<"
+            f"{schema_non_null_shape(schema['additionalProperties'], root_schema)}"
+            ">"
+        )
+    return shape
+
+
+def swift_json_shape(swift_type: str) -> str:
+    references = {
+        "ClipType": "#/$defs/clipType",
+        "GenerationInput?": "#/$defs/nullableGenerationInput",
+        "MediaFolder": "#/$defs/mediaFolder",
+        "MediaImportInput?": "#/$defs/nullableMediaImportInput",
+        "MediaManifestEntry": "#/$defs/entry",
+        "MediaSource": "#/$defs/source",
+        "UpscaleSettings?": "#/$defs/nullableUpscaleSettings",
+        "[String]?": "#/$defs/nullableStringArray",
+    }
+    if swift_type in references:
+        return f"ref:{references[swift_type]}"
+    value = swift_type.removesuffix("?")
+    primitives = {
+        "Bool": "boolean",
+        "Date": "number",
+        "Double": "number",
+        "Int": "integer",
+        "String": "string",
+    }
+    if value in primitives:
+        return primitives[value]
+    if value.startswith("[") and value.endswith("]"):
+        inner = value[1:-1]
+        if ": " in inner:
+            key, child = inner.split(": ", 1)
+            if key != "String":
+                raise ContractError(f"unsupported Swift dictionary key: {key}")
+            return f"map<{swift_json_shape(child)}>"
+        return f"array<{swift_json_shape(inner)}>"
+    raise ContractError(f"unsupported persisted Swift type: {swift_type}")
+
+
+def media_source_contract() -> None:
+    schema = validate_schema_document(
+        load_json("contracts/project/v1/media.schema.json"),
+        "media.schema.json",
+    )
+    definitions = schema["$defs"]
+    source_alternatives = definitions["source"]["oneOf"]
+    open_objects = [
+        ("MediaManifest", schema),
+        ("MediaManifestEntry", definitions["entry"]),
+        ("MediaSource.external", source_alternatives[0]),
+        (
+            "MediaSource.external payload",
+            source_alternatives[0]["properties"]["external"],
+        ),
+        ("MediaSource.project", source_alternatives[1]),
+        (
+            "MediaSource.project payload",
+            source_alternatives[1]["properties"]["project"],
+        ),
+        ("GenerationInput", definitions["nullableGenerationInput"]),
+        ("MediaImportInput", definitions["nullableMediaImportInput"]),
+        ("UpscaleSettings", definitions["nullableUpscaleSettings"]),
+        ("MediaFolder", definitions["mediaFolder"]),
+    ]
+    for label, contract in open_objects:
+        require_equal(
+            f"{label} forward-compatible properties",
+            contract.get("additionalProperties"),
+            True,
+        )
+    require_equal(
+        "MediaManifest version minimum",
+        schema["properties"]["version"].get("minimum"),
+        1,
+    )
+    require_equal(
+        "MediaManifestEntry duration minimum",
+        definitions["entry"]["properties"]["duration"].get("minimum"),
+        0,
+    )
+    model_snapshot = load_json("contracts/project/v1/media-model.json")
+    require_equal(
+        "media model contract version",
+        model_snapshot["contractVersion"],
+        CONTRACT_VERSION,
+    )
+    require_equal(
+        "media model source commit",
+        model_snapshot["sourceCommit"],
+        MEDIA_SOURCE_COMMIT,
+    )
+    field_mappings = [
+        (
+            "MediaManifest",
+            schema,
+        ),
+        (
+            "MediaManifestEntry",
+            definitions["entry"],
+        ),
+        (
+            "MediaImportInput",
+            definitions["nullableMediaImportInput"],
+        ),
+        (
+            "GenerationInput",
+            definitions["nullableGenerationInput"],
+        ),
+        (
+            "MediaFolder",
+            definitions["mediaFolder"],
+        ),
+        (
+            "UpscaleSettings",
+            definitions["nullableUpscaleSettings"],
+        ),
+    ]
+    for type_name, contract in field_mappings:
+        type_snapshot = model_snapshot["types"][type_name]
+        source = type_snapshot["source"]
+        actual_fields = swift_stored_field_signatures(source, type_name)
+        require_equal(
+            f"{type_name} schema fields",
+            set(contract["properties"]),
+            {field["name"] for field in actual_fields},
+        )
+        require_equal(
+            f"{type_name} Swift field signatures",
+            actual_fields,
+            type_snapshot["fields"],
+        )
+        require_equal(
+            f"{type_name} Swift body",
+            swift_type_body_sha256(source, "struct", type_name),
+            type_snapshot["bodySha256"],
+        )
+        require_equal(
+            f"{type_name} required decode fields",
+            set(contract.get("required", [])),
+            set(type_snapshot["requiredOnDecode"]),
+        )
+        for field in actual_fields:
+            field_schema = contract["properties"][field["name"]]
+            require_equal(
+                f"{type_name}.{field['name']} nullability",
+                schema_allows_null(
+                    field_schema,
+                    schema,
+                ),
+                field["swiftType"].endswith("?"),
+            )
+            require_equal(
+                f"{type_name}.{field['name']} JSON shape",
+                schema_non_null_shape(field_schema, schema),
+                swift_json_shape(field["swiftType"]),
+            )
+    clip_type_snapshot = model_snapshot["enums"]["ClipType"]
+    require_equal(
+        "ClipType Swift cases",
+        swift_enum_case_signatures(clip_type_snapshot["source"], "ClipType"),
+        clip_type_snapshot["cases"],
+    )
+    require_equal(
+        "ClipType media enum",
+        definitions["clipType"]["enum"],
+        swift_enum_cases(clip_type_snapshot["source"], "ClipType"),
+    )
+    media_source_snapshot = model_snapshot["enums"]["MediaSource"]
+    require_equal(
+        "MediaSource Swift cases",
+        swift_enum_case_signatures(
+            media_source_snapshot["source"],
+            "MediaSource",
+        ),
+        media_source_snapshot["cases"],
+    )
+    require_equal(
+        "MediaSource Swift body",
+        swift_type_body_sha256(
+            media_source_snapshot["source"],
+            "enum",
+            "MediaSource",
+        ),
+        media_source_snapshot["bodySha256"],
+    )
+    source_contract_cases = [
+        alternative["required"][0]
+        for alternative in source_alternatives
+    ]
+    require_equal(
+        "MediaSource cases",
+        source_contract_cases,
+        swift_enum_cases(
+            media_source_snapshot["source"],
+            "MediaSource",
+        ),
+    )
+    complete_fixture = load_json(
+        "fixtures/contracts/projects/media-complete.palmier/media.json"
+    )
+    validate_media_document(
+        complete_fixture,
+        schema,
+        "fixtures/contracts/projects/media-complete.palmier/media.json",
+    )
+    require_equal(
+        "complete media root coverage",
+        set(complete_fixture),
+        set(schema["properties"]),
+    )
+    complete_entry = complete_fixture["entries"][0]
+    require_equal(
+        "complete media entry coverage",
+        set(complete_entry),
+        set(definitions["entry"]["properties"]),
+    )
+    require_equal(
+        "complete generation input coverage",
+        set(complete_entry["generationInput"]),
+        set(definitions["nullableGenerationInput"]["properties"]),
+    )
+    require_equal(
+        "complete upscale settings coverage",
+        set(complete_entry["generationInput"]["upscaleSettings"]),
+        set(definitions["nullableUpscaleSettings"]["properties"]),
+    )
+    require_equal(
+        "complete media import coverage",
+        set(complete_entry["importInput"]),
+        set(definitions["nullableMediaImportInput"]["properties"]),
+    )
+    require_equal(
+        "complete media folder coverage",
+        set(complete_fixture["folders"][0]),
+        set(definitions["mediaFolder"]["properties"]),
+    )
+    require_equal(
+        "complete MediaSource case coverage",
+        {
+            next(iter(entry["source"]))
+            for entry in complete_fixture["entries"]
+        },
+        set(source_contract_cases),
+    )
+    fixture_root = Path("fixtures/contracts/media/v1")
+    fixture_manifest = load_json(fixture_root / "manifest.json")
+    require_equal(
+        "media fixture contract version",
+        fixture_manifest["contractVersion"],
+        CONTRACT_VERSION,
+    )
+    for entry in fixture_manifest["fixtures"]:
+        document = load_json(fixture_root / entry["path"])
+        if entry["valid"]:
+            validate_media_document(
+                document,
+                schema,
+                str(fixture_root / entry["path"]),
+            )
+        else:
+            expect_failure_containing(
+                f"invalid media fixture {entry['path']}",
+                entry["errorContains"],
+                lambda document=document, path=entry["path"]: validate_media_document(
+                    document,
+                    schema,
+                    str(fixture_root / path),
+                ),
+            )
+
+
+def validate_media_document(
+    media: Any,
+    schema: dict[str, Any],
+    label: str,
+) -> None:
+    validate_instance(media, schema, schema, label)
+    if not isinstance(media, dict):
+        return
+    for entry in media.get("entries", []):
+        project_source = entry.get("source", {}).get("project")
+        if project_source and "\\" in project_source.get("relativePath", ""):
+            raise ContractError(f"{label}: project path must use '/'")
 
 
 def validate_timeline(timeline: Any, label: str) -> None:
@@ -560,20 +1059,13 @@ def project_fixtures() -> None:
         media_path = ROOT / package / "media.json"
         if media_path.exists():
             media = load_json(package / "media.json")
-            validate_instance(
+            validate_media_document(
                 media,
-                media_schema,
                 media_schema,
                 f"{package}/media.json",
             )
             if not isinstance(media.get("entries", []), list):
                 raise ContractError(f"{package}/media.json: entries must be an array")
-            for media_entry in media.get("entries", []):
-                project_source = media_entry.get("source", {}).get("project")
-                if project_source and "\\" in project_source.get("relativePath", ""):
-                    raise ContractError(
-                        f"{package}/media.json: project path must use '/'"
-                    )
 
     canary_contract = load_json("contracts/project/v1/canaries.json")
     require_equal(
@@ -614,6 +1106,7 @@ def main() -> int:
         ("validator negative self-checks", validator_self_check),
         ("MCP tool snapshot", tool_snapshot),
         ("effect and blend snapshots", effect_snapshot),
+        ("media schema and Swift source", media_source_contract),
         ("project fixtures and canaries", project_fixtures),
     ]
     for label, check in checks:

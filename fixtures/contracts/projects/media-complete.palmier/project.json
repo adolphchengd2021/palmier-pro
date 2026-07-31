@@ -1,0 +1,17 @@
+{
+  "timelines": [
+    {
+      "id": "timeline-media-complete",
+      "name": "Media contract",
+      "fps": 30,
+      "width": 1920,
+      "height": 1080,
+      "settingsConfigured": true,
+      "tracks": []
+    }
+  ],
+  "activeTimelineId": "timeline-media-complete",
+  "openTimelineIds": [
+    "timeline-media-complete"
+  ]
+}
