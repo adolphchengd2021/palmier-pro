@@ -1,6 +1,6 @@
 # ADR 0003: Preserve project data across platform round trips
 
-- Status: Accepted invariant; implementation blocked
+- Status: Accepted invariant; macOS canary enforced, Windows pending
 - Date: 2026-07-31
 - Owner: Project core
 - Applies to: P0
@@ -29,11 +29,17 @@ read-only and reports why. It must not silently write a downgraded project.
 Project-relative media paths serialize with `/`. An unavailable macOS absolute
 path stays unchanged while Windows reports the asset offline.
 
-## Current gap
+## Current status
 
-The current Swift `Codable` models use closed coding keys and rebuild JSON on
-save. They do not preserve arbitrary unknown fields. The M0 fixtures and audit
-make that gap observable but do not fix it.
+The audited Swift project and manifest paths preserve opaque fields at the
+root, timeline, track, clip, effect, parameter, keyframe, word-timing,
+manifest, entry, generation, import, and media-source layers. The declared
+canaries pass a production `NSDocument` Save As and reopen test in macOS CI.
+The verified reference is commit `29d98f8`, CI run `30644474474`.
+
+The Windows writer does not exist yet. It must implement the same identity and
+replacement rules and pass differential round trips before this invariant is
+complete across platforms.
 
 ## Required proof
 
@@ -49,6 +55,4 @@ Schema acceptance or parser-only round trips do not satisfy this proof.
 
 ## Revisit when
 
-- The opaque JSON representation and migration API are designed.
 - The macOS and Windows serializers both pass the canary round trip.
-

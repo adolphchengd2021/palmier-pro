@@ -233,6 +233,20 @@ def effect_snapshot() -> None:
     require_equal("blend modes", blend_modes, blend["values"])
     require_equal("blend mode count", len(blend_modes), blend["count"])
     require_equal("normal blend mode position", blend_modes[0], "normal")
+    requirements = read_text("docs/WINDOWS_10_PORT_REQUIREMENTS.zh-CN.md")
+    requirement_counts = [
+        int(value)
+        for value in re.findall(r"支持当前\s+(\d+)\s+种混合模式", requirements)
+    ]
+    require_equal(
+        "requirements blend count declarations",
+        requirement_counts,
+        [blend["count"]],
+    )
+    if "`normal`，即 source-over 基线" not in requirements:
+        raise ContractError(
+            "requirements must state that normal is the source-over baseline"
+        )
 
 
 def json_pointer(document: Any, pointer: str) -> Any:
