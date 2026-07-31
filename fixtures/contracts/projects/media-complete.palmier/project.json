@@ -7,11 +7,101 @@
       "width": 1920,
       "height": 1080,
       "settingsConfigured": true,
-      "tracks": []
+      "folderId": "timeline-folder-root",
+      "tracks": [
+        {
+          "id": "track-media-complete-v1",
+          "type": "video",
+          "muted": false,
+          "hidden": false,
+          "syncLocked": true,
+          "clips": [
+            {
+              "id": "clip-media-complete-1",
+              "mediaRef": "media-external-complete",
+              "mediaType": "video",
+              "sourceClipType": "video",
+              "startFrame": 12,
+              "durationFrames": 150,
+              "trimStartFrame": 2,
+              "trimEndFrame": 3,
+              "speed": 1.25,
+              "volume": 0.75,
+              "fadeInFrames": 5,
+              "fadeOutFrames": 6,
+              "fadeInInterpolation": "linear",
+              "fadeOutInterpolation": "hold",
+              "opacity": 0.8,
+              "transform": {
+                "centerX": 0.4,
+                "centerY": 0.6,
+                "width": 0.8,
+                "height": 0.7,
+                "rotation": 15,
+                "flipHorizontal": true,
+                "flipVertical": false
+              },
+              "crop": {
+                "left": 0.1,
+                "top": 0.2,
+                "right": 0.05,
+                "bottom": 0.15
+              },
+              "edgeRounding": 0.2,
+              "edgeSoftness": 0.3,
+              "blendMode": "normal"
+            }
+          ],
+          "displayHeight": 64
+        }
+      ]
     }
   ],
   "activeTimelineId": "timeline-media-complete",
   "openTimelineIds": [
     "timeline-media-complete"
+  ],
+  "viewStates": {
+    "timeline-media-complete": {
+      "playheadFrame": 42,
+      "zoomScale": 4,
+      "scrollOffsetX": 120
+    }
+  },
+  "speakers": [
+    {
+      "id": 1,
+      "name": "Speaker 1",
+      "color": [
+        0.1,
+        0.2,
+        0.3,
+        1
+      ],
+      "centroid": [
+        0.25,
+        0.75
+      ]
+    }
+  ],
+  "multicamGroups": [
+    {
+      "id": "multicam-media-complete",
+      "name": "Interview",
+      "members": [
+        {
+          "id": "multicam-member-camera",
+          "mediaRef": "media-external-complete",
+          "kind": "both",
+          "angleLabel": "Camera A",
+          "sync": {
+            "offsetSeconds": 0.5,
+            "confidence": 0.9,
+            "locked": true
+          }
+        }
+      ],
+      "masterMemberId": "multicam-member-camera"
+    }
   ]
 }

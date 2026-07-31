@@ -247,7 +247,7 @@ class VideoProject: NSDocument {
         unblockUserInteraction()
         mainThreadUnblocked = true
 
-        guard let file, let data = try? JSONEncoder().encode(file) else {
+        guard let file, let data = try? ProjectJSONCodec.encode(file) else {
             Log.project.error("save: project snapshot missing at write()")
             throw CocoaError(.fileWriteUnknown)
         }
@@ -255,7 +255,7 @@ class VideoProject: NSDocument {
         try Self.writeProjectPackage(
             ProjectPackageSnapshot(
                 timeline: data,
-                manifest: manifest.flatMap { try? JSONEncoder().encode($0) },
+                manifest: manifest.flatMap { try? ProjectJSONCodec.encode($0) },
                 thumbnail: thumbnail,
                 chatSessionFiles: chatSessionFiles
             ),

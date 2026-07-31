@@ -1,6 +1,6 @@
 {
   "baselineCommit": "457e853a789e16eb104a0bfb43d2485d9e1ac0c8",
-  "origin": "hand-authored contract fixtures; baseline-writer golden package pending",
+  "origin": "hand-authored contract fixtures paired with Swift decode and writer tests",
   "fixtures": [
     {
       "path": "legacy-bare-timeline.palmier",
@@ -20,7 +20,7 @@
     {
       "path": "media-complete.palmier",
       "kind": "complete-known-media-fields",
-      "origin": "hand-authored from HEAD 83916cff Codable declarations"
+      "origin": "hand-authored from HEAD 83916cff Codable declarations; representative Swift writer output"
     }
   ]
 }

@@ -14,8 +14,8 @@
 - Upscale settings require the `selections`, `numbers`, and `toggles` maps when
   the object is present.
 - Optional values accept either a missing key or explicit JSON `null`.
-- Foundation `Date` values use the default numeric representation. A Swift
-  writer golden test must freeze the exact encoding before Windows writes them.
+- Foundation `Date` values use the default numeric representation. The Swift
+  writer golden fixture freezes the exact encoding Windows must reproduce.
 
 The schema's `version >= 1` and `duration >= 0` rules are normative validity
 requirements. The current Swift decoder does not enforce those numeric bounds,
@@ -43,6 +43,6 @@ The Python audit compares schema properties, Swift field types, optionality,
 required decode fields, stable enums, associated-value payloads, and focused
 type-body digests with `media-model.json`, then validates positive and negative
 fixtures for their expected reasons. It does not run `JSONEncoder` or
-`JSONDecoder`. Real writer/decode fixtures and unknown-field load-edit-save
-tests must run in macOS Swift CI before this contract becomes a cross-platform
-write guarantee.
+`JSONDecoder`. `ContractFixtureTests` exercises the production Swift decoder,
+shared writer, and package exporter in macOS CI. Unknown-field load-edit-save
+preservation remains a separate blocked requirement.

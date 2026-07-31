@@ -30,8 +30,9 @@ drop these canaries.
 
 The project JSON Schema remains a provisional structural check and must not be
 used alone to implement the Windows reader. The media JSON Schema enumerates
-all current known Swift fields and stable enums, but client defaults and
-writer/decode behavior still require Swift golden tests.
+all current known Swift fields and stable enums. `ContractFixtureTests` freezes
+current Swift decoder defaults and representative writer output; it does not
+cover every optional project field or prove unknown-field preservation.
 
 ## Paths
 

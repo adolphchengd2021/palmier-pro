@@ -77,10 +77,13 @@ enum PalmierProjectExporter {
         var newManifest = manifest
         newManifest.entries = newEntries
 
-        let encoder = JSONEncoder()
         try Task.checkCancellation()
-        try encoder.encode(projectFile).write(to: staging.appendingPathComponent(Project.timelineFilename))
-        try encoder.encode(newManifest).write(to: staging.appendingPathComponent(Project.manifestFilename))
+        try ProjectJSONCodec.encode(projectFile).write(
+            to: staging.appendingPathComponent(Project.timelineFilename)
+        )
+        try ProjectJSONCodec.encode(newManifest).write(
+            to: staging.appendingPathComponent(Project.manifestFilename)
+        )
 
         // Carry across non-media bundle contents (thumbnail, chat history) when present.
         if let sourceProjectURL {

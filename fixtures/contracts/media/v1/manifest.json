@@ -40,6 +40,10 @@
       "path": "negative-duration.json",
       "valid": false,
       "errorContains": "value is below minimum"
+    },
+    {
+      "path": "swift-writer-complete.json",
+      "valid": true
     }
   ]
 }
