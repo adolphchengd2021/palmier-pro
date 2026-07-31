@@ -9,11 +9,12 @@
 
 Add Qt as an optional Windows-only target behind
 `PALMIER_ENABLE_QT_SHELL`. Keep the default contract, render, media, and audio
-builds independent of Qt. The prototype remains locked to Qt 6.11.1 for MSVC
+builds independent of Qt. The prototype remains locked to Qt 6.10.3 for MSVC
 2022 x86_64 and uses only Core, Gui, Qml, Quick, Quick Controls, Quick Dialogs,
 and Concurrent at runtime. Qt Test is a test-only module.
 CI installs the exact Qt build with `aqtinstall` 3.3.0 and `py7zr` 1.0.0;
 neither the floating install action nor a Qt account is required.
+Qt 6.10.3 is the newest Windows desktop release exposed by that pinned client.
 
 The open-source Qt artifacts are for prototype and CI evaluation only. This
 decision does not approve product distribution. A release must choose one

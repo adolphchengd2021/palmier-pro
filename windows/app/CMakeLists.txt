@@ -1,9 +1,9 @@
 find_package(
-    Qt6 6.11.1 EXACT REQUIRED
+    Qt6 6.10.3 EXACT REQUIRED
     COMPONENTS Core Gui Qml Quick QuickControls2 QuickDialogs2 Concurrent
 )
 
-qt_standard_project_setup(REQUIRES 6.11.1)
+qt_standard_project_setup(REQUIRES 6.10.3)
 
 set(app_include_dir "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
@@ -45,7 +45,7 @@ foreach(target palmier_qt_shell_core palmier_qt_shell)
 endforeach()
 
 if(BUILD_TESTING)
-    find_package(Qt6 6.11.1 EXACT REQUIRED COMPONENTS Test)
+    find_package(Qt6 6.10.3 EXACT REQUIRED COMPONENTS Test)
     qt_add_executable(palmier_qt_shell_tests
         tests/qt_shell_tests.cpp
     )

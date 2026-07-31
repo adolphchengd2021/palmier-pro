@@ -24,13 +24,15 @@ and CI bootstrap. Do not add an empty `vcpkg.json` before a dependency exists.
 
 The M0 prototype versions are:
 
-- Qt 6.11.1 for MSVC 2022 x86_64.
+- Qt 6.10.3 for MSVC 2022 x86_64.
 - FFmpeg 8.1.2 as LGPL dynamic libraries.
 - ONNX Runtime 1.28.0 with a required CPU path and optional DirectML path.
 - Inno Setup 7.0.2 as the first x64 installer prototype.
 
 These runtime versions are prototype locks, not release approval. The
 machine-readable source of truth is `windows/toolchain.json`.
+Qt 6.10.3 is the newest Windows desktop release discoverable by the pinned
+`aqtinstall` client; later repository layouts remain an explicit upgrade gate.
 
 ## Distribution gates
 

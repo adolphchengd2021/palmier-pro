@@ -30,7 +30,7 @@
   "prototypeDependencies": [
     {
       "name": "Qt",
-      "version": "6.11.1",
+      "version": "6.10.3",
       "variant": "MSVC 2022 x86_64",
       "runtimeModules": [
         "Core",

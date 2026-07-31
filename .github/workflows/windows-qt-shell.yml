@@ -14,11 +14,11 @@ permissions:
 
 jobs:
   qt-shell:
-    name: Qt 6.11.1 MSVC 2022 x64
+    name: Qt 6.10.3 MSVC 2022 x64
     runs-on: windows-2022
     timeout-minutes: 25
     env:
-      QT_ROOT_DIR: C:/Qt/6.11.1/msvc2022_64
+      QT_ROOT_DIR: C:/Qt/6.10.3/msvc2022_64
       QT_QPA_PLATFORM: offscreen
     steps:
       - uses: actions/checkout@v6
@@ -52,7 +52,7 @@ jobs:
         run: python -m pip install --disable-pip-version-check aqtinstall==3.3.0 py7zr==1.0.0
 
       - name: Install Qt
-        run: python -m aqt install-qt windows desktop 6.11.1 win64_msvc2022_64 --outputdir C:/Qt
+        run: python -m aqt install-qt windows desktop 6.10.3 win64_msvc2022_64 --outputdir C:/Qt
 
       - name: Add Qt runtime to PATH
         shell: pwsh

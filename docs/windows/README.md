@@ -112,7 +112,7 @@ See ADR 0013 and `contracts/audio/v1/wasapi-output.json`.
 The first Qt target is an optional read-only project shell:
 
 ```powershell
-$env:QT_ROOT_DIR = "C:\Qt\6.11.1\msvc2022_64"
+$env:QT_ROOT_DIR = "C:\Qt\6.10.3\msvc2022_64"
 cmake --preset windows-msvc-x64-qt-shell
 cmake --build --preset windows-msvc-x64-qt-shell-release --parallel
 ctest --preset windows-msvc-x64-qt-shell-release
