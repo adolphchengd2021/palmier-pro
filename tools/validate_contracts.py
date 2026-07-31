@@ -1740,6 +1740,137 @@ def windows_render_plan_contract() -> None:
             raise ContractError(f"render plan ADR missing token {token!r}")
 
 
+def windows_audio_wasapi_contract() -> None:
+    root_cmake = read_text("CMakeLists.txt")
+    audio_cmake = read_text("windows/audio-wasapi/CMakeLists.txt")
+    clock_header = read_text(
+        "windows/audio-wasapi/include/palmier/audio/audio_clock.hpp"
+    )
+    clock_source = read_text("windows/audio-wasapi/audio_clock.cpp")
+    probe_header = read_text(
+        "windows/audio-wasapi/include/palmier/audio/wasapi_environment_probe.hpp"
+    )
+    probe_source = read_text("windows/audio-wasapi/wasapi_environment_probe.cpp")
+    session_header = read_text(
+        "windows/audio-wasapi/wasapi_environment_session.hpp"
+    )
+    environment_tests = read_text(
+        "windows/audio-wasapi/tests/wasapi_environment_tests.cpp"
+    )
+
+    if "add_subdirectory(windows/audio-wasapi)" not in root_cmake:
+        raise ContractError("root CMake is missing the WASAPI audio boundary")
+    for token in [
+        "palmier_audio_wasapi",
+        "/W4 /WX /permissive- /Zc:__cplusplus /utf-8",
+        "audio_wasapi.clock_math",
+        "audio_wasapi.environment_contract",
+        "audio_wasapi.environment_probe",
+        "RUN_SERIAL TRUE TIMEOUT 30",
+        "ole32",
+    ]:
+        if token not in audio_cmake:
+            raise ContractError(f"WASAPI CMake missing token {token!r}")
+    for token in [
+        "qpc100Nanoseconds",
+        "precisionDegraded",
+        "staleGeneration",
+        "positionDiscontinuity",
+        "arithmeticOverflow",
+    ]:
+        if token not in clock_header:
+            raise ContractError(f"WASAPI clock API missing token {token!r}")
+    for token in [
+        "std::gcd",
+        "_umul128",
+        "_udiv128",
+        "sample.generation != anchor.generation",
+        "sample.devicePosition < anchor.devicePosition",
+    ]:
+        if token not in clock_source:
+            raise ContractError(f"WASAPI clock source missing token {token!r}")
+    for token in [
+        "WasapiProbeStatus",
+        "WasapiProbeStage",
+        "clockFrequency",
+        "isUnavailableWasapiResult",
+        "hasValidSharedModePeriods",
+    ]:
+        if token not in probe_header:
+            raise ContractError(f"WASAPI probe API missing token {token!r}")
+    for token in [
+        "COINIT_APARTMENTTHREADED",
+        "std::jthread",
+        "GetDefaultAudioEndpoint(",
+        "eRender,",
+        "eMultimedia,",
+        "IAudioClient3",
+        "SetClientProperties",
+        "GetSharedModeEnginePeriod",
+        "InitializeSharedAudioStream",
+        "AUDCLNT_STREAMFLAGS_EVENTCALLBACK",
+        "SetEventHandle",
+        "IAudioRenderClient",
+        "IAudioClock",
+        "GetFrequency",
+    ]:
+        if token not in probe_source:
+            raise ContractError(f"WASAPI probe source missing token {token!r}")
+    for token in [
+        "class WasapiEnvironmentSession",
+        "initializeApartment",
+        "initializeSharedAudioStream",
+        "loadClockFrequency",
+        "runWasapiEnvironmentProbe",
+    ]:
+        if token not in session_header:
+            raise ContractError(f"WASAPI session seam missing token {token!r}")
+    for forbidden in ["->Start(", ".Start("]:
+        if forbidden in probe_source:
+            raise ContractError(
+                f"WASAPI environment probe must not start playback: {forbidden!r}"
+            )
+    for token in [
+        "WasapiProbeStage::defaultEndpoint, E_NOTFOUND",
+        "AUDCLNT_E_SERVICE_NOT_RUNNING",
+        "AUDCLNT_E_DEVICE_INVALIDATED",
+        "AUDCLNT_E_RESOURCES_INVALIDATED",
+        "AUDCLNT_E_DEVICE_IN_USE",
+        "AUDCLNT_E_ENDPOINT_CREATE_FAILED",
+        "WasapiProbeStage::createEnumerator, E_NOTFOUND",
+        "WasapiProbeStage::activateClient, E_ACCESSDENIED",
+        "WasapiProbeStage::initializeStream, E_INVALIDARG",
+        "WasapiProbeStage::activateClient, E_NOINTERFACE",
+        "WasapiProbeStage::initializeCom, RPC_E_CHANGED_MODE",
+    ]:
+        if token not in environment_tests:
+            raise ContractError(f"WASAPI environment test missing token {token!r}")
+    for token in [
+        "ScriptedWasapiSession",
+        "executesTheNoStartSetupInOrder",
+        "preservesExternalAndImplementationFailures",
+        '"initialize-stream",',
+        '"clock-frequency",',
+        "session.initializedPeriod == 480",
+        "unavailable.calls.back() == \"initialize-stream\"",
+        "failed.calls.back() == \"activate-client\"",
+    ]:
+        if token not in environment_tests:
+            raise ContractError(f"WASAPI injected test missing token {token!r}")
+
+    adr = read_text("docs/windows/adr/0011-wasapi-clock-and-environment-probe.md")
+    for token in [
+        "never calls `IAudioClient::Start`",
+        "dedicated STA thread",
+        "one JSON line",
+        "It does not prove that audio was",
+        "Long-run drift must be measured",
+        "Windows 10 build 19045 runtime behavior",
+    ]:
+        if token not in adr:
+            raise ContractError(f"WASAPI ADR missing token {token!r}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Palmier contract snapshots")
     parser.add_argument(
@@ -1760,6 +1891,7 @@ def main() -> int:
         ("Windows toolchain and compiled probe", windows_bootstrap_contract),
         ("Windows read-only project reader", windows_project_reader_contract),
         ("Windows render plan and D3D11 WARP", windows_render_plan_contract),
+        ("Windows WASAPI clock and environment probe", windows_audio_wasapi_contract),
     ]
     for label, check in checks:
         check()

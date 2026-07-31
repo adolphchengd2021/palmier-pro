@@ -80,3 +80,12 @@ It probes a tiny H.264/AAC MP4 and software-decodes an exact QTRLE alpha frame
 through FFmpeg 8.1.2 LGPL DLLs. This is a bounded media-reader proof, not a
 player: WASAPI, D3D11VA, synchronized audio, 1080p performance, Windows 10, and
 packaged DLL verification remain open. See ADR 0010.
+
+The default Windows build also compiles a bounded WASAPI environment probe and
+pure integer audio-clock conversion tests. The probe opens the default
+multimedia render endpoint in event-driven shared mode, validates its engine
+period, buffer, render service, and clock frequency, and then exits without
+starting the stream. It is safe on CI machines with no audio endpoint or a
+stopped audio service. It does not prove audible output, callback behavior,
+device recovery, long-run A/V synchronization, or Windows 10 runtime behavior.
+See ADR 0011.
