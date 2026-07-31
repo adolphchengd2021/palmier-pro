@@ -25,7 +25,7 @@
     "release": "2026.06.24",
     "builtinBaseline": "cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3",
     "metrics": "disabled",
-    "activation": "Add vcpkg.json with the first third-party C++ dependency"
+    "activation": "Active for the FFmpeg media prototype"
   },
   "prototypeDependencies": [
     {

@@ -66,3 +66,17 @@ preview/export entry points. This does not yet establish parity with the Swift
 BGRA8 compositor. It has no project compiler, Swift pixel goldens, FFmpeg, WASAPI,
 swapchain, Qt, physical-GPU, or Windows 10 runtime evidence yet. ADR 0009 lists
 the required hard refusals before project integration.
+
+The optional FFmpeg prototype activates the first vcpkg manifest dependency:
+
+```powershell
+$env:VCPKG_ROOT = "C:\path\to\vcpkg"
+cmake --preset windows-msvc-x64-ffmpeg
+cmake --build --preset windows-msvc-x64-ffmpeg-release --parallel
+ctest --preset windows-msvc-x64-ffmpeg-release
+```
+
+It probes a tiny H.264/AAC MP4 and software-decodes an exact QTRLE alpha frame
+through FFmpeg 8.1.2 LGPL DLLs. This is a bounded media-reader proof, not a
+player: WASAPI, D3D11VA, synchronized audio, 1080p performance, Windows 10, and
+packaged DLL verification remain open. See ADR 0010.

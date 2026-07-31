@@ -1256,10 +1256,25 @@ def windows_bootstrap_contract() -> None:
         "cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3",
     )
     require_equal("vcpkg metrics", manager["metrics"], "disabled")
-    if (ROOT / "vcpkg.json").exists():
-        raise ContractError(
-            "vcpkg.json must be added with the first third-party C++ dependency"
-        )
+    require_equal(
+        "vcpkg activation",
+        manager["activation"],
+        "Active for the FFmpeg media prototype",
+    )
+    manifest = load_json("vcpkg.json")
+    require_equal("vcpkg manifest name", manifest["name"], "palmier-pro-windows")
+    require_equal("vcpkg manifest baseline", manifest["builtin-baseline"], baseline)
+    require_equal(
+        "vcpkg FFmpeg dependency",
+        manifest["dependencies"],
+        [
+            {
+                "name": "ffmpeg",
+                "default-features": False,
+                "features": ["avcodec", "avformat", "swscale"],
+            }
+        ],
+    )
 
     dependencies = {
         entry["name"]: [entry["version"], entry["status"]]
@@ -1304,6 +1319,22 @@ def windows_bootstrap_contract() -> None:
         "CMake preset minimum",
         presets["cmakeMinimumRequired"],
         {"major": 3, "minor": 31, "patch": 0},
+    )
+    ffmpeg_configure = next(
+        preset
+        for preset in presets["configurePresets"]
+        if preset["name"] == "windows-msvc-x64-ffmpeg"
+    )
+    require_equal(
+        "FFmpeg CMake preset variables",
+        ffmpeg_configure["cacheVariables"],
+        {
+            "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+            "PALMIER_ENABLE_FFMPEG_PROTOTYPE": "ON",
+            "VCPKG_APPLOCAL_DEPS": "ON",
+            "VCPKG_MANIFEST_INSTALL": "ON",
+            "VCPKG_TARGET_TRIPLET": "x64-windows",
+        },
     )
 
     probe_cmake = read_text("windows/contract-probe/CMakeLists.txt")
@@ -1351,6 +1382,54 @@ def windows_bootstrap_contract() -> None:
     ]:
         if version not in adr:
             raise ContractError(f"Windows toolchain ADR missing {version!r}")
+
+    media_cmake = read_text("windows/media-ffmpeg/CMakeLists.txt")
+    media_header = read_text(
+        "windows/media-ffmpeg/include/palmier/media/ffmpeg_media_reader.hpp"
+    )
+    media_source = read_text("windows/media-ffmpeg/ffmpeg_media_reader.cpp")
+    media_workflow = read_text(".github/workflows/windows-media-prototype.yml")
+    for token in [
+        'FFMPEG_VERSION VERSION_EQUAL "8.1.2"',
+        "media_ffmpeg.direct_api",
+        "/W4 /WX /permissive- /Zc:__cplusplus /utf-8",
+    ]:
+        if token not in media_cmake:
+            raise ContractError(f"FFmpeg CMake missing token {token!r}")
+    for token in [
+        "maximumPixels",
+        "maximumPacketsBeforeFrame",
+        "std::stop_token cancellation",
+        "rgba8",
+        "AlphaMode",
+        "unsupportedInputProtocol",
+        "unsupportedColorMetadata",
+        "unsupportedDisplayTransform",
+    ]:
+        if token not in media_header:
+            raise ContractError(f"FFmpeg API missing token {token!r}")
+    for token in [
+        "AVIOInterruptCB",
+        "avcodec_send_packet",
+        "avcodec_receive_frame",
+        "AV_PIX_FMT_FLAG_HWACCEL",
+        "AV_FRAME_FLAG_CORRUPT",
+        "alpha_mode",
+        "av_display_rotation_get",
+        "max_pixels",
+        "sws_scale",
+    ]:
+        if token not in media_source:
+            raise ContractError(f"FFmpeg source missing token {token!r}")
+    for token in [
+        "VCPKG_DISABLE_METRICS=1",
+        "VCPKG_BINARY_SOURCES=clear;files,$binaryCache,readwrite",
+        "cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3",
+        "cmake --preset windows-msvc-x64-ffmpeg",
+        "ctest --preset windows-msvc-x64-ffmpeg-release",
+    ]:
+        if token not in media_workflow:
+            raise ContractError(f"FFmpeg workflow missing token {token!r}")
 
 
 def windows_project_reader_contract() -> None:

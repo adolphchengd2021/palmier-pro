@@ -1,0 +1,56 @@
+name: Windows media prototype
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: windows-media-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ffmpeg-software-decode:
+    name: FFmpeg software probe and decode
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      VCPKG_DISABLE_METRICS: 1
+      VCPKG_DEFAULT_TRIPLET: x64-windows
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Restore vcpkg caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}\vcpkg-downloads
+            ${{ runner.temp }}\vcpkg-binary-cache
+          key: windows-vcpkg-x64-msvc-14.44-${{ hashFiles('vcpkg.json') }}
+
+      - name: Bootstrap locked vcpkg
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "vcpkg"
+          git clone --filter=blob:none https://github.com/microsoft/vcpkg.git $root
+          git -C $root checkout cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3
+          & "$root\bootstrap-vcpkg.bat" -disableMetrics
+          $downloads = Join-Path $env:RUNNER_TEMP "vcpkg-downloads"
+          $binaryCache = Join-Path $env:RUNNER_TEMP "vcpkg-binary-cache"
+          New-Item -ItemType Directory -Force -Path $downloads, $binaryCache | Out-Null
+          "VCPKG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VCPKG_DISABLE_METRICS=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VCPKG_DOWNLOADS=$downloads" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VCPKG_BINARY_SOURCES=clear;files,$binaryCache,readwrite" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Configure
+        run: cmake --preset windows-msvc-x64-ffmpeg
+
+      - name: Build
+        run: cmake --build --preset windows-msvc-x64-ffmpeg-release --parallel
+
+      - name: Test
+        run: ctest --preset windows-msvc-x64-ffmpeg-release

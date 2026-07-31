@@ -19,3 +19,8 @@ add_subdirectory(core/project)
 add_subdirectory(core/render)
 add_subdirectory(windows/render-d3d11)
 add_subdirectory(windows/contract-probe)
+
+option(PALMIER_ENABLE_FFMPEG_PROTOTYPE "Build the FFmpeg media prototype" OFF)
+if(PALMIER_ENABLE_FFMPEG_PROTOTYPE)
+    add_subdirectory(windows/media-ffmpeg)
+endif()

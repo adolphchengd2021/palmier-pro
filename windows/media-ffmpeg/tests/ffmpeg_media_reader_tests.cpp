@@ -1,0 +1,315 @@
+#include "media_test_fixtures.hpp"
+#include "palmier/media/ffmpeg_media_reader.hpp"
+
+#include <Windows.h>
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <stdexcept>
+#include <stop_token>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace {
+
+using palmier::media::AlphaMode;
+using palmier::media::DecodeLimits;
+using palmier::media::FfmpegMediaReader;
+using palmier::media::MediaError;
+using palmier::media::MediaFailureCode;
+using palmier::media::StreamKind;
+
+void require(bool condition, const std::string& message) {
+    if (!condition) {
+        throw std::runtime_error(message);
+    }
+}
+
+std::vector<std::uint8_t> decodeBase64(std::string_view input) {
+    constexpr std::string_view alphabet =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::array<std::int16_t, 256> table{};
+    table.fill(-1);
+    for (std::size_t index = 0; index < alphabet.size(); ++index) {
+        table[static_cast<std::uint8_t>(alphabet[index])] =
+            static_cast<std::int16_t>(index);
+    }
+
+    std::vector<std::uint8_t> output;
+    output.reserve(input.size() * 3 / 4);
+    std::uint32_t accumulator = 0;
+    int bitCount = 0;
+    for (const char character : input) {
+        if (character == '=') {
+            break;
+        }
+        const auto value = table[static_cast<std::uint8_t>(character)];
+        require(value >= 0, "fixture contains invalid base64");
+        accumulator = (accumulator << 6) | static_cast<std::uint32_t>(value);
+        bitCount += 6;
+        if (bitCount >= 8) {
+            bitCount -= 8;
+            output.push_back(static_cast<std::uint8_t>(
+                (accumulator >> bitCount) & 0xFFU
+            ));
+        }
+    }
+    return output;
+}
+
+class TemporaryDirectory final {
+public:
+    TemporaryDirectory()
+        : path_(std::filesystem::temp_directory_path()
+            / ("palmier-media-" + std::to_string(GetCurrentProcessId()))) {
+        std::filesystem::create_directory(path_);
+    }
+
+    ~TemporaryDirectory() {
+        std::error_code error;
+        std::filesystem::remove_all(path_, error);
+    }
+
+    TemporaryDirectory(const TemporaryDirectory&) = delete;
+    TemporaryDirectory& operator=(const TemporaryDirectory&) = delete;
+
+    std::filesystem::path write(
+        std::string_view name,
+        std::string_view base64
+    ) const {
+        return write(name, decodeBase64(base64));
+    }
+
+    std::filesystem::path write(
+        std::string_view name,
+        const std::vector<std::uint8_t>& bytes
+    ) const {
+        const auto destination = path_ / name;
+        std::ofstream output(destination, std::ios::binary | std::ios::trunc);
+        require(output.is_open(), "fixture file could not be opened");
+        output.write(
+            reinterpret_cast<const char*>(bytes.data()),
+            static_cast<std::streamsize>(bytes.size())
+        );
+        require(output.good(), "fixture file could not be written");
+        return destination;
+    }
+
+    const std::filesystem::path& path() const { return path_; }
+
+private:
+    std::filesystem::path path_;
+};
+
+std::vector<std::uint8_t> replaceBytes(
+    std::string_view base64,
+    const std::vector<std::uint8_t>& pattern,
+    const std::vector<std::uint8_t>& replacement
+) {
+    require(pattern.size() == replacement.size(), "replacement size differs");
+    auto bytes = decodeBase64(base64);
+    const auto position = std::search(
+        bytes.begin(),
+        bytes.end(),
+        pattern.begin(),
+        pattern.end()
+    );
+    require(position != bytes.end(), "fixture mutation pattern is missing");
+    std::copy(replacement.begin(), replacement.end(), position);
+    return bytes;
+}
+
+template<typename Operation>
+void requireError(Operation operation, MediaFailureCode code) {
+    try {
+        operation();
+    } catch (const MediaError& error) {
+        require(error.code == code, "unexpected media error code");
+        return;
+    }
+    throw std::runtime_error("expected media failure");
+}
+
+void dependencyContract() {
+    const auto info = FfmpegMediaReader::runtimeInfo();
+    require(info.version == "8.1.2", "unexpected FFmpeg runtime version");
+    require(info.headersMatchRuntime, "FFmpeg headers and DLLs differ");
+    require(info.license.find("LGPL") != std::string::npos, "FFmpeg is not LGPL");
+    require(
+        info.configuration.find("--enable-gpl") == std::string::npos,
+        "FFmpeg GPL build is outside the prototype contract"
+    );
+    require(
+        info.configuration.find("--enable-nonfree") == std::string::npos,
+        "FFmpeg nonfree build is outside the prototype contract"
+    );
+}
+
+void probesH264AndAac(const std::filesystem::path& input) {
+    const auto probe = FfmpegMediaReader::probe(input);
+    require(probe.containerName.find("mov") != std::string::npos, "wrong container");
+    require(probe.durationMicroseconds == 100'000, "wrong container duration");
+    require(probe.streams.size() == 2, "expected video and audio streams");
+
+    const auto& video = probe.streams[0];
+    require(video.kind == StreamKind::video, "first stream is not video");
+    require(video.codecName == "h264", "video codec is not H.264");
+    require(video.width == 16 && video.height == 16, "wrong video size");
+    require(video.averageFrameRate.numerator == 10, "wrong average frame rate");
+
+    const auto& audio = probe.streams[1];
+    require(audio.kind == StreamKind::audio, "second stream is not audio");
+    require(audio.codecName == "aac", "audio codec is not AAC");
+    require(audio.sampleRate == 48'000, "wrong audio sample rate");
+    require(audio.channelCount == 2, "wrong audio channel count");
+}
+
+void decodesStraightAlphaAndRotation(const std::filesystem::path& input) {
+    const auto frame = FfmpegMediaReader::decodeFirstVideoFrame(input);
+    require(frame.width == 4 && frame.height == 4, "wrong decoded dimensions");
+    require(frame.rowBytes == 16, "wrong decoded stride");
+    require(frame.presentationTimestamp == 0, "wrong presentation timestamp");
+    require(frame.timeBase.numerator == 1, "wrong time-base numerator");
+    require(frame.timeBase.denominator == 16'384, "wrong time-base denominator");
+    require(frame.displayTransform.has_value(), "rotation metadata is missing");
+    require(
+        frame.displayTransform->counterClockwiseDegrees == 90,
+        "wrong display rotation"
+    );
+
+    const std::array<std::uint8_t, 64> expected{
+        255, 0, 0, 255, 255, 0, 0, 255, 0, 255, 0, 128, 0, 255, 0, 128,
+        255, 0, 0, 255, 255, 0, 0, 255, 0, 255, 0, 128, 0, 255, 0, 128,
+        0, 0, 255, 64, 0, 0, 255, 64, 255, 255, 0, 255, 255, 255, 0, 255,
+        0, 0, 255, 64, 0, 0, 255, 64, 255, 255, 0, 255, 255, 255, 0, 255,
+    };
+    require(
+        std::equal(
+            frame.rgba8.begin(),
+            frame.rgba8.end(),
+            expected.begin(),
+            expected.end()
+        ),
+        "decoded RGBA pixels differ"
+    );
+    require(frame.alphaMode == AlphaMode::unspecified, "wrong alpha mode");
+}
+
+void validatesFailureBoundaries(
+    const TemporaryDirectory& directory,
+    const std::filesystem::path& qtrle,
+    const std::filesystem::path& audioOnly
+) {
+    requireError(
+        [&] { FfmpegMediaReader::probe(directory.path() / "missing.mov"); },
+        MediaFailureCode::openFailed
+    );
+    requireError(
+        [&] { FfmpegMediaReader::probe("https://example.invalid/media.mp4"); },
+        MediaFailureCode::unsupportedInputProtocol
+    );
+    requireError(
+        [&] { FfmpegMediaReader::probe(R"(\\?\C:\palmier-missing\media.mov)"); },
+        MediaFailureCode::openFailed
+    );
+    requireError(
+        [&] { FfmpegMediaReader::probe(R"(\\.\PhysicalDrive0)"); },
+        MediaFailureCode::unsupportedInputProtocol
+    );
+
+    DecodeLimits invalidLimits;
+    invalidLimits.maximumProbeBytes = 0;
+    requireError(
+        [&] { FfmpegMediaReader::probe(qtrle, invalidLimits); },
+        MediaFailureCode::invalidLimits
+    );
+
+    std::stop_source source;
+    source.request_stop();
+    requireError(
+        [&] { FfmpegMediaReader::probe(qtrle, {}, source.get_token()); },
+        MediaFailureCode::cancelled
+    );
+
+    DecodeLimits limits;
+    limits.maximumPixels = 15;
+    requireError(
+        [&] { FfmpegMediaReader::decodeFirstVideoFrame(qtrle, limits); },
+        MediaFailureCode::resourceLimitExceeded
+    );
+
+    requireError(
+        [&] { FfmpegMediaReader::decodeFirstVideoFrame(audioOnly); },
+        MediaFailureCode::noVideoStream
+    );
+
+    const auto unsupportedColor = directory.write(
+        "unsupported-color.mov",
+        replaceBytes(
+            palmier::media::test_fixtures::qtrleAlphaRotated,
+            {0x63, 0x6F, 0x6C, 0x72, 0x6E, 0x63, 0x6C, 0x63,
+             0x00, 0x01, 0x00, 0x0D, 0x00, 0x00},
+            {0x63, 0x6F, 0x6C, 0x72, 0x6E, 0x63, 0x6C, 0x63,
+             0x00, 0x01, 0x00, 0x10, 0x00, 0x00}
+        )
+    );
+    requireError(
+        [&] { FfmpegMediaReader::decodeFirstVideoFrame(unsupportedColor); },
+        MediaFailureCode::unsupportedColorMetadata
+    );
+
+    const auto unsupportedMatrix = directory.write(
+        "unsupported-matrix.mov",
+        replaceBytes(
+            palmier::media::test_fixtures::qtrleAlphaRotated,
+            {0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00,
+             0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+             0x40, 0x00, 0x00, 0x00},
+            {0x00, 0x00, 0x01, 0x00, 0xFF, 0xFF, 0x00, 0x00,
+             0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+             0x40, 0x00, 0x00, 0x00}
+        )
+    );
+    requireError(
+        [&] { FfmpegMediaReader::decodeFirstVideoFrame(unsupportedMatrix); },
+        MediaFailureCode::unsupportedDisplayTransform
+    );
+}
+
+}
+
+int main() {
+    try {
+        TemporaryDirectory directory;
+        const auto qtrle = directory.write(
+            "alpha-rotated.mov",
+            palmier::media::test_fixtures::qtrleAlphaRotated
+        );
+        const auto h264Aac = directory.write(
+            "h264-aac.mp4",
+            palmier::media::test_fixtures::h264Aac
+        );
+        const auto audioOnly = directory.write(
+            "audio-only.wav",
+            palmier::media::test_fixtures::audioOnlyWav
+        );
+        dependencyContract();
+        probesH264AndAac(h264Aac);
+        decodesStraightAlphaAndRotation(qtrle);
+        validatesFailureBoundaries(directory, qtrle, audioOnly);
+        std::cout << "FFmpeg media reader tests passed\n";
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
+}

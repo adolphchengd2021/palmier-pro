@@ -19,6 +19,19 @@
         "CMAKE_CXX_STANDARD_REQUIRED": "ON",
         "CMAKE_CXX_EXTENSIONS": "OFF"
       }
+    },
+    {
+      "name": "windows-msvc-x64-ffmpeg",
+      "displayName": "Windows MSVC x64 with FFmpeg",
+      "inherits": "windows-msvc-x64",
+      "binaryDir": "${sourceDir}/out/build/windows-msvc-x64-ffmpeg",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "PALMIER_ENABLE_FFMPEG_PROTOTYPE": "ON",
+        "VCPKG_APPLOCAL_DEPS": "ON",
+        "VCPKG_MANIFEST_INSTALL": "ON",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
     }
   ],
   "buildPresets": [
@@ -26,12 +39,25 @@
       "name": "windows-msvc-x64-release",
       "configurePreset": "windows-msvc-x64",
       "configuration": "Release"
+    },
+    {
+      "name": "windows-msvc-x64-ffmpeg-release",
+      "configurePreset": "windows-msvc-x64-ffmpeg",
+      "configuration": "Release"
     }
   ],
   "testPresets": [
     {
       "name": "windows-msvc-x64-release",
       "configurePreset": "windows-msvc-x64",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-msvc-x64-ffmpeg-release",
+      "configurePreset": "windows-msvc-x64-ffmpeg",
       "configuration": "Release",
       "output": {
         "outputOnFailure": true
