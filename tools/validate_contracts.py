@@ -1392,6 +1392,7 @@ def windows_bootstrap_contract() -> None:
     for token in [
         'FFMPEG_VERSION VERSION_EQUAL "8.1.2"',
         "media_ffmpeg.direct_api",
+        "SYSTEM INTERFACE ${FFMPEG_INCLUDE_DIRS}",
         "/W4 /WX /permissive- /Zc:__cplusplus /utf-8",
     ]:
         if token not in media_cmake:

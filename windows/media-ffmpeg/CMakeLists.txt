@@ -5,7 +5,10 @@ if(NOT FFMPEG_VERSION VERSION_EQUAL "8.1.2")
 endif()
 
 add_library(palmier_ffmpeg INTERFACE)
-target_include_directories(palmier_ffmpeg INTERFACE ${FFMPEG_INCLUDE_DIRS})
+target_include_directories(
+    palmier_ffmpeg
+    SYSTEM INTERFACE ${FFMPEG_INCLUDE_DIRS}
+)
 target_link_libraries(palmier_ffmpeg INTERFACE ${FFMPEG_LIBRARIES})
 
 set(media_ffmpeg_include_dir "${CMAKE_CURRENT_SOURCE_DIR}/include")
