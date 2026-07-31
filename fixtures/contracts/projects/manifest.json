@@ -1,0 +1,21 @@
+{
+  "baselineCommit": "457e853a789e16eb104a0bfb43d2485d9e1ac0c8",
+  "origin": "hand-authored contract fixtures; baseline-writer golden package pending",
+  "fixtures": [
+    {
+      "path": "legacy-bare-timeline.palmier",
+      "kind": "legacy-bare-timeline",
+      "origin": "hand-authored from v0.6.16 decode requirements"
+    },
+    {
+      "path": "current-multitimeline.palmier",
+      "kind": "current-project-file",
+      "origin": "hand-authored from v0.6.16 Codable shape"
+    },
+    {
+      "path": "unknown-fields.palmier",
+      "kind": "forward-compatibility-canary",
+      "origin": "hand-authored M0 contract fixture"
+    }
+  ]
+}

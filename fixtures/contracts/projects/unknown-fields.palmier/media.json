@@ -1,0 +1,33 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "id": "media-canary-1",
+      "name": "Canary clip",
+      "type": "video",
+      "source": {
+        "project": {
+          "relativePath": "media/canary.mp4",
+          "x-contract-source": "source"
+        }
+      },
+      "duration": 2,
+      "generationInput": {
+        "prompt": "fixture",
+        "model": "fixture-model",
+        "duration": 2,
+        "aspectRatio": "16:9",
+        "x-contract-generation": {
+          "provider": "future"
+        }
+      },
+      "importInput": {
+        "sourcePath": "/Volumes/Fixture/canary.mp4",
+        "x-contract-import": "import"
+      },
+      "x-contract-media-entry": 99
+    }
+  ],
+  "folders": [],
+  "x-contract-media-root": "media-root"
+}

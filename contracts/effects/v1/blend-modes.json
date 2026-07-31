@@ -1,0 +1,24 @@
+{
+  "contractVersion": 1,
+  "baselineCommit": "457e853a789e16eb104a0bfb43d2485d9e1ac0c8",
+  "count": 16,
+  "includesNormal": true,
+  "values": [
+    "normal",
+    "darken",
+    "multiply",
+    "colorBurn",
+    "lighten",
+    "screen",
+    "colorDodge",
+    "overlay",
+    "softLight",
+    "hardLight",
+    "difference",
+    "exclusion",
+    "hue",
+    "saturation",
+    "color",
+    "luminosity"
+  ]
+}

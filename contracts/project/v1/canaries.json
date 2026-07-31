@@ -1,0 +1,77 @@
+{
+  "contractVersion": 1,
+  "fixture": "fixtures/contracts/projects/unknown-fields.palmier",
+  "runtimeRoundTripStatus": "blocked",
+  "canaries": [
+    {
+      "file": "project.json",
+      "pointer": "/x-contract-root",
+      "value": {
+        "kind": "root",
+        "revision": 7
+      }
+    },
+    {
+      "file": "project.json",
+      "pointer": "/timelines/0/x-contract-timeline",
+      "value": "timeline"
+    },
+    {
+      "file": "project.json",
+      "pointer": "/timelines/0/tracks/0/x-contract-track",
+      "value": true
+    },
+    {
+      "file": "project.json",
+      "pointer": "/timelines/0/tracks/0/clips/0/x-contract-clip",
+      "value": [
+        "clip",
+        1
+      ]
+    },
+    {
+      "file": "project.json",
+      "pointer": "/timelines/0/tracks/0/clips/0/transform/x-contract-transform",
+      "value": 0.125
+    },
+    {
+      "file": "project.json",
+      "pointer": "/timelines/0/tracks/0/clips/0/effects/0/x-contract-effect",
+      "value": "effect"
+    },
+    {
+      "file": "project.json",
+      "pointer": "/timelines/0/tracks/0/clips/0/effects/0/params/ev/x-contract-param",
+      "value": {
+        "unit": "ev"
+      }
+    },
+    {
+      "file": "media.json",
+      "pointer": "/x-contract-media-root",
+      "value": "media-root"
+    },
+    {
+      "file": "media.json",
+      "pointer": "/entries/0/x-contract-media-entry",
+      "value": 99
+    },
+    {
+      "file": "media.json",
+      "pointer": "/entries/0/generationInput/x-contract-generation",
+      "value": {
+        "provider": "future"
+      }
+    },
+    {
+      "file": "media.json",
+      "pointer": "/entries/0/importInput/x-contract-import",
+      "value": "import"
+    },
+    {
+      "file": "media.json",
+      "pointer": "/entries/0/source/project/x-contract-source",
+      "value": "source"
+    }
+  ]
+}

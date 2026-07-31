@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "id": "media-main-1",
+      "name": "Main clip",
+      "type": "video",
+      "source": {
+        "project": {
+          "relativePath": "media/main.mp4"
+        }
+      },
+      "duration": 5,
+      "sourceWidth": 1920,
+      "sourceHeight": 1080,
+      "sourceFPS": 30,
+      "hasAudio": true
+    }
+  ],
+  "folders": []
+}

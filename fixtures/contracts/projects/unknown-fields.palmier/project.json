@@ -1,0 +1,68 @@
+{
+  "timelines": [
+    {
+      "id": "timeline-canary",
+      "name": "Canary",
+      "fps": 30,
+      "width": 1920,
+      "height": 1080,
+      "settingsConfigured": true,
+      "tracks": [
+        {
+          "id": "track-canary-v1",
+          "type": "video",
+          "clips": [
+            {
+              "id": "clip-canary-1",
+              "mediaRef": "media-canary-1",
+              "mediaType": "video",
+              "sourceClipType": "video",
+              "startFrame": 0,
+              "durationFrames": 60,
+              "transform": {
+                "centerX": 0.5,
+                "centerY": 0.5,
+                "width": 1,
+                "height": 1,
+                "rotation": 0,
+                "flipHorizontal": false,
+                "flipVertical": false,
+                "x-contract-transform": 0.125
+              },
+              "effects": [
+                {
+                  "id": "effect-canary-1",
+                  "type": "color.exposure",
+                  "enabled": true,
+                  "params": {
+                    "ev": {
+                      "value": 0.5,
+                      "x-contract-param": {
+                        "unit": "ev"
+                      }
+                    }
+                  },
+                  "x-contract-effect": "effect"
+                }
+              ],
+              "x-contract-clip": [
+                "clip",
+                1
+              ]
+            }
+          ],
+          "x-contract-track": true
+        }
+      ],
+      "x-contract-timeline": "timeline"
+    }
+  ],
+  "activeTimelineId": "timeline-canary",
+  "openTimelineIds": [
+    "timeline-canary"
+  ],
+  "x-contract-root": {
+    "kind": "root",
+    "revision": 7
+  }
+}

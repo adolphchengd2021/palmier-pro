@@ -1,0 +1,22 @@
+{
+  "id": "timeline-legacy",
+  "name": "Legacy timeline",
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "settingsConfigured": true,
+  "tracks": [
+    {
+      "id": "track-legacy-v1",
+      "type": "video",
+      "clips": [
+        {
+          "id": "clip-legacy-1",
+          "mediaRef": "media-legacy-1",
+          "startFrame": 0,
+          "durationFrames": 90
+        }
+      ]
+    }
+  ]
+}

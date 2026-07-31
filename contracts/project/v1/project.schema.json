@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:palmier:contract:project:v1",
+  "title": "Palmier project.json provisional structural contract",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/projectFile"
+    },
+    {
+      "$ref": "#/$defs/timeline"
+    }
+  ],
+  "$defs": {
+    "projectFile": {
+      "type": "object",
+      "required": [
+        "timelines"
+      ],
+      "properties": {
+        "timelines": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/timeline"
+          }
+        },
+        "activeTimelineId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "openTimelineIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "viewStates": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
+        "speakers": {
+          "type": "array"
+        },
+        "multicamGroups": {
+          "type": "array"
+        }
+      },
+      "additionalProperties": true
+    },
+    "timeline": {
+      "type": "object",
+      "required": [
+        "fps",
+        "width",
+        "height",
+        "tracks"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "fps": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "settingsConfigured": {
+          "type": "boolean"
+        },
+        "folderId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tracks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/track"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "track": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "muted": {
+          "type": "boolean"
+        },
+        "hidden": {
+          "type": "boolean"
+        },
+        "syncLocked": {
+          "type": "boolean"
+        },
+        "displayHeight": {
+          "type": "number"
+        },
+        "clips": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/clip"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "clip": {
+      "type": "object",
+      "required": [
+        "mediaRef",
+        "startFrame",
+        "durationFrames"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "mediaRef": {
+          "type": "string"
+        },
+        "mediaType": {
+          "type": "string"
+        },
+        "sourceClipType": {
+          "type": "string"
+        },
+        "startFrame": {
+          "type": "integer"
+        },
+        "durationFrames": {
+          "type": "integer"
+        },
+        "trimStartFrame": {
+          "type": "integer"
+        },
+        "trimEndFrame": {
+          "type": "integer"
+        },
+        "speed": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "volume": {
+          "type": "number"
+        },
+        "opacity": {
+          "type": "number"
+        },
+        "transform": {
+          "$ref": "#/$defs/extensibleObject"
+        },
+        "crop": {
+          "$ref": "#/$defs/extensibleObject"
+        },
+        "effects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/effect"
+          }
+        },
+        "blendMode": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "effect": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/effectParam"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "effectParam": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "number"
+        },
+        "string": {
+          "type": "string"
+        },
+        "track": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true
+    },
+    "extensibleObject": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

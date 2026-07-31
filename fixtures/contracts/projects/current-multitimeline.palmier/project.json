@@ -1,0 +1,48 @@
+{
+  "timelines": [
+    {
+      "id": "timeline-main",
+      "name": "Main",
+      "fps": 30,
+      "width": 1920,
+      "height": 1080,
+      "settingsConfigured": true,
+      "tracks": [
+        {
+          "id": "track-main-v1",
+          "type": "video",
+          "muted": false,
+          "hidden": false,
+          "syncLocked": true,
+          "clips": [
+            {
+              "id": "clip-main-1",
+              "mediaRef": "media-main-1",
+              "mediaType": "video",
+              "sourceClipType": "video",
+              "startFrame": 0,
+              "durationFrames": 150,
+              "speed": 1,
+              "opacity": 1,
+              "blendMode": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "timeline-nested",
+      "name": "Nested",
+      "fps": 30,
+      "width": 1920,
+      "height": 1080,
+      "settingsConfigured": true,
+      "tracks": []
+    }
+  ],
+  "activeTimelineId": "timeline-main",
+  "openTimelineIds": [
+    "timeline-main",
+    "timeline-nested"
+  ]
+}
