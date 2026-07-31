@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
 #include <string_view>
 
@@ -21,6 +22,16 @@ public:
 
 ProjectDocument readProject(std::string_view source, const IdGenerator& idGenerator);
 ProjectDocument readProject(palmier::json::Value source, const IdGenerator& idGenerator);
+ProjectDocument readProject(
+    std::string_view source,
+    const IdGenerator& idGenerator,
+    std::stop_token cancellation
+);
+ProjectDocument readProject(
+    palmier::json::Value source,
+    const IdGenerator& idGenerator,
+    std::stop_token cancellation
+);
 std::string normalizedModelJson(const ProjectDocument& document);
 
 }

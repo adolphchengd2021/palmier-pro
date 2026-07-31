@@ -26,3 +26,8 @@ if(PALMIER_ENABLE_FFMPEG_PROTOTYPE)
     add_subdirectory(windows/media-ffmpeg)
     add_subdirectory(windows/media-render)
 endif()
+
+option(PALMIER_ENABLE_QT_SHELL "Build the optional Qt/QML read-only shell" OFF)
+if(PALMIER_ENABLE_QT_SHELL)
+    add_subdirectory(windows/app)
+endif()

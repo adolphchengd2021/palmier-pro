@@ -1,5 +1,7 @@
 #include "palmier/json/json_document.hpp"
 
+#include "json_document_testing.hpp"
+
 #include <charconv>
 #include <fstream>
 #include <iterator>
@@ -12,15 +14,21 @@ namespace {
 
 class Parser final {
 public:
-    explicit Parser(std::string_view source) : source_(source) {
+    Parser(
+        std::string_view source,
+        std::stop_token cancellation,
+        testing::ParseCheckpoints* checkpoints
+    ) : source_(source), cancellation_(cancellation), checkpoints_(checkpoints) {
         if (source_.starts_with("\xEF\xBB\xBF")) {
             position_ = 3;
         }
     }
 
     Value parseDocument() {
+        checkCancellation();
         skipWhitespace();
         auto result = parseValue(0);
+        checkCancellation();
         skipWhitespace();
         if (position_ != source_.size()) {
             fail("trailing content after JSON document");
@@ -32,6 +40,10 @@ private:
     static constexpr std::size_t maximumDepth = 256;
 
     Value parseValue(std::size_t depth) {
+        if (checkpoints_ != nullptr) {
+            checkpoints_->arrive(testing::ParseCheckpoint::value, 1);
+        }
+        checkCancellation();
         if (depth > maximumDepth) {
             fail("maximum nesting depth exceeded");
         }
@@ -67,6 +79,7 @@ private:
             return result;
         }
         while (true) {
+            checkCancellation();
             skipWhitespace();
             result.push_back(parseValue(depth));
             skipWhitespace();
@@ -85,6 +98,7 @@ private:
             return result;
         }
         while (true) {
+            checkCancellation();
             skipWhitespace();
             const auto key = parseString();
             if (result.contains(key)) {
@@ -146,8 +160,18 @@ private:
         expect('"');
         std::string result;
         while (position_ < source_.size()) {
+            if (checkpoints_ != nullptr) {
+                checkpoints_->arrive(testing::ParseCheckpoint::progress, 0);
+            }
+            checkCancellation();
             const auto character = static_cast<unsigned char>(source_[position_++]);
             if (character == '"') {
+                if (checkpoints_ != nullptr) {
+                    checkpoints_->arrive(
+                        testing::ParseCheckpoint::stringBytes,
+                        result.size()
+                    );
+                }
                 return result;
             }
             if (character < 0x20) {
@@ -300,6 +324,7 @@ private:
     void requireDigits() {
         const auto start = position_;
         while (position_ < source_.size() && isDigit(source_[position_])) {
+            checkCancellation();
             ++position_;
         }
         if (position_ == start) {
@@ -320,6 +345,7 @@ private:
 
     void skipWhitespace() {
         while (position_ < source_.size()) {
+            checkCancellation();
             const auto character = source_[position_];
             if (character != ' ' && character != '\t' && character != '\r' && character != '\n') {
                 return;
@@ -346,7 +372,15 @@ private:
         throw Error(detail + " at byte " + std::to_string(position_));
     }
 
+    void checkCancellation() const {
+        if (cancellation_.stop_requested()) {
+            throw Error("JSON parse cancelled at byte " + std::to_string(position_));
+        }
+    }
+
     std::string_view source_;
+    std::stop_token cancellation_;
+    testing::ParseCheckpoints* checkpoints_;
     std::size_t position_ = 0;
 };
 
@@ -452,7 +486,23 @@ const Value* Value::find(std::string_view key) const {
 }
 
 Value parse(std::string_view source) {
-    return Parser(source).parseDocument();
+    return parse(source, {});
+}
+
+Value parse(std::string_view source, std::stop_token cancellation) {
+    return testing::parse(source, cancellation, nullptr);
+}
+
+namespace testing {
+
+Value parse(
+    std::string_view source,
+    std::stop_token cancellation,
+    ParseCheckpoints* checkpoints
+) {
+    return Parser(source, cancellation, checkpoints).parseDocument();
+}
+
 }
 
 std::string pathForDiagnostic(const std::filesystem::path& path) noexcept {

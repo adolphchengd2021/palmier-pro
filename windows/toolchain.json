@@ -32,6 +32,25 @@
       "name": "Qt",
       "version": "6.11.1",
       "variant": "MSVC 2022 x86_64",
+      "runtimeModules": [
+        "Core",
+        "Gui",
+        "Qml",
+        "Quick",
+        "QuickControls2",
+        "QuickDialogs2",
+        "Concurrent"
+      ],
+      "testModules": [
+        "Test"
+      ],
+      "ciAcquisition": {
+        "installer": "aqtinstall",
+        "installerVersion": "3.3.0",
+        "archiveHelper": "py7zr",
+        "archiveHelperVersion": "1.0.0",
+        "archive": "win64_msvc2022_64"
+      },
       "status": "prototype-locked",
       "releaseGate": "Re-evaluate the first qualified Qt 6.12.x release on Windows 10 19045"
     },

@@ -7,8 +7,9 @@ current macOS product. It is not a conditional Swift build.
 
 M0 establishes product decisions, compatibility contracts, fixtures, drift
 checks, the compiled MSVC contract probe, and a read-only C++ project document.
-It does not yet provide a Windows application, project writer, media pipeline,
-or installer.
+It now includes an optional read-only Qt shell and isolated media/audio
+prototypes. It does not yet provide an editor, project writer, integrated media
+pipeline, or installer.
 
 - Requirements: `docs/WINDOWS_10_PORT_REQUIREMENTS.zh-CN.md`
 - Decisions: `docs/windows/adr/`
@@ -107,3 +108,22 @@ render event, then stops and resets. An unavailable CI endpoint remains a
 classified diagnostic, not output evidence. It does not yet provide media PCM,
 format conversion, automatic device recovery, audible playback, or A/V sync.
 See ADR 0013 and `contracts/audio/v1/wasapi-output.json`.
+
+The first Qt target is an optional read-only project shell:
+
+```powershell
+$env:QT_ROOT_DIR = "C:\Qt\6.11.1\msvc2022_64"
+cmake --preset windows-msvc-x64-qt-shell
+cmake --build --preset windows-msvc-x64-qt-shell-release --parallel
+ctest --preset windows-msvc-x64-qt-shell-release
+```
+
+It selects a directory-form `.palmier` package, reads `project.json` through a
+size-, value-, and string-budgeted cancellable Qt-free loader, and publishes
+an immutable active-timeline track/clip projection to QML. Load generations
+reject stale results; failure and cancellation retain the last successful
+model. The target does not write projects or provide editing, media resolution,
+playback, undo, or deployment. Unsafe clips are reported and omitted from the
+visual projection; over-dense active timelines are explicitly refused instead
+of being truncated. Its offscreen CI is not Windows 10, native-dialog, focus,
+DPI, accessibility, or visual evidence. See ADR 0014.

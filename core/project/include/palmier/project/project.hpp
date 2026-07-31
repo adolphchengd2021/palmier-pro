@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -98,6 +99,11 @@ private:
     friend ProjectDocument readProject(
         palmier::json::Value source,
         const std::function<std::string()>& idGenerator
+    );
+    friend ProjectDocument readProject(
+        palmier::json::Value source,
+        const std::function<std::string()>& idGenerator,
+        std::stop_token cancellation
     );
 
     palmier::json::Value source_;

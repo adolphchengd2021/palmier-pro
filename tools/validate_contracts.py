@@ -1290,6 +1290,34 @@ def windows_bootstrap_contract() -> None:
             "Inno Setup": ["7.0.2", "prototype-locked"],
         },
     )
+    qt = next(
+        entry for entry in toolchain["prototypeDependencies"] if entry["name"] == "Qt"
+    )
+    require_equal(
+        "Qt shell runtime module lock",
+        qt["runtimeModules"],
+        [
+            "Core",
+            "Gui",
+            "Qml",
+            "Quick",
+            "QuickControls2",
+            "QuickDialogs2",
+            "Concurrent",
+        ],
+    )
+    require_equal("Qt shell test module lock", qt["testModules"], ["Test"])
+    require_equal(
+        "Qt CI acquisition lock",
+        qt["ciAcquisition"],
+        {
+            "installer": "aqtinstall",
+            "installerVersion": "3.3.0",
+            "archiveHelper": "py7zr",
+            "archiveHelperVersion": "1.0.0",
+            "archive": "win64_msvc2022_64",
+        },
+    )
 
     cmake = read_text("CMakeLists.txt")
     for token in [
@@ -2096,6 +2124,202 @@ def windows_wasapi_output_contract() -> None:
             raise ContractError(f"WASAPI output ADR missing token {token!r}")
 
 
+def windows_qt_read_only_shell_contract() -> None:
+    package_header = read_text(
+        "core/project/include/palmier/project/project_package_reader.hpp"
+    )
+    package_source = read_text(
+        "core/project/serialization/project_package_reader.cpp"
+    )
+    package_tests = read_text(
+        "core/project/tests/project_package_reader_tests.cpp"
+    )
+    for token in [
+        "defaultMaximumProjectJsonBytes",
+        "maximumProjectJsonBytes",
+        "maximumProjectJsonValues",
+        "maximumProjectJsonStringBytes",
+        "std::stop_token cancellation",
+        "readProjectPackage(",
+        "Caller must run this synchronous file operation off the UI thread",
+    ]:
+        if token not in package_header:
+            raise ContractError(f"project package reader header missing token {token!r}")
+    for token in [
+        "projectJsonTooLarge",
+        "projectJsonReadFailed",
+        "projectJsonTooComplex",
+        "hasPalmierExtension",
+        "checkCancellation(options.cancellation)",
+        "palmier::json::testing::parse",
+        "ProjectPackageReadCheckpoint::duringParse",
+    ]:
+        if token not in package_source:
+            raise ContractError(f"project package reader invariant missing token {token!r}")
+    for token in [
+        "readsRepositoryPackages",
+        "validatesPackageAndLimit",
+        "validatesJsonComplexityBudgets",
+        "defaultBudgetAcceptsMaximumTimelineProjection",
+        "validatesProjectJsonFile",
+        "cancellationBoundaries",
+        "cancellationDuringModelNormalization",
+        "cancellationDuringJsonParse",
+        "growingFileCannotCrossLimit",
+    ]:
+        if token not in package_tests:
+            raise ContractError(f"project package reader test missing token {token!r}")
+
+    root_cmake = read_text("CMakeLists.txt")
+    presets = load_json("CMakePresets.json")
+    app_cmake = read_text("windows/app/CMakeLists.txt")
+    coordinator = read_text("windows/app/src/project_load_coordinator.cpp")
+    projection = read_text("windows/app/src/project_projection_loader.cpp")
+    timeline_model = read_text("windows/app/src/read_only_timeline_model.cpp")
+    qml = read_text("windows/app/qml/Main.qml")
+    theme = read_text("windows/app/qml/AppTheme.qml")
+    swift_theme = read_text("Sources/PalmierPro/UI/AppTheme.swift")
+    qt_tests = read_text("windows/app/tests/qt_shell_tests.cpp")
+    workflow = read_text(".github/workflows/windows-qt-shell.yml")
+
+    for token in [
+        'option(PALMIER_ENABLE_QT_SHELL "Build the optional Qt/QML read-only shell" OFF)',
+        "add_subdirectory(windows/app)",
+    ]:
+        if token not in root_cmake:
+            raise ContractError(f"Qt shell root CMake missing token {token!r}")
+    qt_preset = next(
+        preset
+        for preset in presets["configurePresets"]
+        if preset["name"] == "windows-msvc-x64-qt-shell"
+    )
+    require_equal(
+        "Qt shell preset variables",
+        qt_preset["cacheVariables"],
+        {
+            "CMAKE_PREFIX_PATH": "$env{QT_ROOT_DIR}",
+            "PALMIER_ENABLE_QT_SHELL": "ON",
+        },
+    )
+    for token in [
+        "Qt6 6.11.1 EXACT REQUIRED",
+        "Qt6::Concurrent",
+        "Qt6::QuickDialogs2",
+        "qt_add_executable(palmier_qt_shell",
+        "qt_add_qml_module(palmier_qt_shell",
+        "include/palmier/windows/project_load_coordinator.hpp",
+        "include/palmier/windows/read_only_timeline_model.hpp",
+        "qt_shell.reader_model_qml",
+        "qt_shell.module_smoke",
+    ]:
+        if token not in app_cmake:
+            raise ContractError(f"Qt shell CMake missing token {token!r}")
+    for token in [
+        "std::stop_source",
+        "request_stop()",
+        "requestGeneration == generation_",
+        "result.cancelled || cancellation.stop_requested()",
+        "pendingLoad_",
+        "setMaxThreadCount(1)",
+        "requestShutdown()",
+        "emit shutdownReady()",
+        "resultDeliveryCheckpoint",
+        "errorPointer",
+    ]:
+        if token not in coordinator:
+            raise ContractError(f"Qt load coordinator missing token {token!r}")
+    for token in [
+        "checkCancellation(cancellation)",
+        "checkedClipEnd",
+        "offsetRatio",
+        "extentRatio",
+        "track.clipItems",
+        "maximumProjectedClipsPerTrack",
+        "maximumProjectedTracksPerTimeline",
+        "timelineTooDense",
+        "result.timelines.reserve(1)",
+        "firstDiagnostic",
+        "skippedUnsafeClipCount",
+    ]:
+        if token not in projection:
+            raise ContractError(f"Qt project projection missing token {token!r}")
+    for token in [
+        "ReadOnlyTimelineModel::replace(ProjectProjection&& project)",
+        "ClipItemsRole",
+        "std::move(project)",
+    ]:
+        if token not in timeline_model:
+            raise ContractError(f"Qt timeline model missing token {token!r}")
+    for token in [
+        "FolderDialog",
+        "selectedFolder",
+        "projectCoordinator.openFolder",
+        "ListView",
+        "offsetRatio",
+        "extentRatio",
+        "AppTheme.",
+        "requestShutdown()",
+        "clip: true",
+    ]:
+        if token not in qml:
+            raise ContractError(f"Qt shell QML missing token {token!r}")
+    for token in ["pragma Singleton", "QtObject", "windowBackground", "trackHeight"]:
+        if token not in theme:
+            raise ContractError(f"Qt shell theme missing token {token!r}")
+    for swift_token, qml_token in [
+        ("static let windowWidth: CGFloat = 1100", "property int windowWidth: 1100"),
+        ("static let windowHeight: CGFloat = 720", "property int windowHeight: 720"),
+        ("static let trackHeight: CGFloat = 76", "property int trackHeight: 76"),
+        ("static let trackHeaderWidth: CGFloat = 150", "property int trackHeaderWidth: 150"),
+        ("static let clipMinimumWidth: CGFloat = 18", "property int clipMinimumWidth: 18"),
+    ]:
+        if swift_token not in swift_theme or qml_token not in theme:
+            raise ContractError(f"Qt AppTheme mirror missing {swift_token!r}")
+    for token in [
+        "readerMapsCurrentProject",
+        "failurePreservesPreviousModel",
+        "cancellationReachesReader",
+        "cancellationAfterWorkBeforeCommitRejectsResult",
+        "consecutiveOpensKeepOnlyLatestPendingRequest",
+        "shutdownWaitsForAdmittedWorker",
+        "unsafeClipIsSkippedWithoutRejectingProject",
+        "denseTimelineIsExplicitlyRejected",
+        "structuredErrorsPreserveStableDetails",
+        "diagnosticsProduceLoadedWithWarnings",
+        "staleGenerationCannotReplaceNewerProject",
+        "qmlLoadsOffscreen",
+        "qmlCloseWaitsForActiveWorker",
+    ]:
+        if token not in qt_tests:
+            raise ContractError(f"Qt shell test missing token {token!r}")
+    for token in [
+        "aqtinstall==3.3.0",
+        "py7zr==1.0.0",
+        "6.11.1",
+        "win64_msvc2022_64",
+        "cmake version 3.31.6",
+        "^17\\.14\\.",
+        "^14\\.44\\.",
+        "Windows Kits\\10\\Include\\10.0.26100.0",
+        "cmake --preset windows-msvc-x64-qt-shell",
+        "ctest --preset windows-msvc-x64-qt-shell-release",
+    ]:
+        if token not in workflow:
+            raise ContractError(f"Qt shell workflow missing token {token!r}")
+    if "install-qt-action" in workflow:
+        raise ContractError("Qt shell workflow must not use the floating install action")
+
+    adr = read_text("docs/windows/adr/0014-qt-read-only-project-shell.md")
+    for token in [
+        "64 MiB",
+        "monotonically increasing load generation",
+        "does not approve product distribution",
+        "physical Windows 10 build 19045 compatibility",
+    ]:
+        if token not in adr:
+            raise ContractError(f"Qt shell ADR missing token {token!r}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Palmier contract snapshots")
     parser.add_argument(
@@ -2119,6 +2343,7 @@ def main() -> int:
         ("Windows decoded-frame render adapter", windows_media_render_adapter_contract),
         ("Windows WASAPI clock and environment probe", windows_audio_wasapi_contract),
         ("Windows bounded WASAPI output", windows_wasapi_output_contract),
+        ("Windows Qt read-only project shell", windows_qt_read_only_shell_contract),
     ]
     for label, check in checks:
         check()

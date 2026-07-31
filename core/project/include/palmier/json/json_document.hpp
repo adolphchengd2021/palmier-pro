@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <stop_token>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -61,6 +62,7 @@ public:
 };
 
 Value parse(std::string_view source);
+Value parse(std::string_view source, std::stop_token cancellation);
 Value read(const std::filesystem::path& path);
 std::string canonical(const Value& value);
 std::string pathForDiagnostic(const std::filesystem::path& path) noexcept;

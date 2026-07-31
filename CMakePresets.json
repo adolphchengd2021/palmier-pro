@@ -21,6 +21,16 @@
       }
     },
     {
+      "name": "windows-msvc-x64-qt-shell",
+      "displayName": "Windows MSVC x64 with Qt read-only shell",
+      "inherits": "windows-msvc-x64",
+      "binaryDir": "${sourceDir}/out/build/windows-msvc-x64-qt-shell",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{QT_ROOT_DIR}",
+        "PALMIER_ENABLE_QT_SHELL": "ON"
+      }
+    },
+    {
       "name": "windows-msvc-x64-ffmpeg",
       "displayName": "Windows MSVC x64 with FFmpeg",
       "inherits": "windows-msvc-x64",
@@ -41,6 +51,11 @@
       "configuration": "Release"
     },
     {
+      "name": "windows-msvc-x64-qt-shell-release",
+      "configurePreset": "windows-msvc-x64-qt-shell",
+      "configuration": "Release"
+    },
+    {
       "name": "windows-msvc-x64-ffmpeg-release",
       "configurePreset": "windows-msvc-x64-ffmpeg",
       "configuration": "Release"
@@ -51,6 +66,17 @@
       "name": "windows-msvc-x64-release",
       "configurePreset": "windows-msvc-x64",
       "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-msvc-x64-qt-shell-release",
+      "configurePreset": "windows-msvc-x64-qt-shell",
+      "configuration": "Release",
+      "environment": {
+        "QT_QPA_PLATFORM": "offscreen"
+      },
       "output": {
         "outputOnFailure": true
       }

@@ -15,10 +15,14 @@ using JsonKind = palmier::json::Value::Kind;
 
 class Decoder final {
 public:
-    Decoder(const IdGenerator& idGenerator, std::vector<Diagnostic>& diagnostics)
-        : idGenerator_(idGenerator), diagnostics_(diagnostics) {}
+    Decoder(
+        const IdGenerator& idGenerator,
+        std::vector<Diagnostic>& diagnostics,
+        std::stop_token cancellation
+    ) : idGenerator_(idGenerator), diagnostics_(diagnostics), cancellation_(cancellation) {}
 
     Project decode(const palmier::json::Value& source, RootKind& rootKind) {
+        checkCancellation();
         const auto& root = requireObject(source, "");
         const auto timelines = root.find("timelines");
         if (timelines != root.end()) {
@@ -45,6 +49,7 @@ private:
         std::vector<Timeline> timelines;
         timelines.reserve(values.size());
         for (std::size_t index = 0; index < values.size(); ++index) {
+            checkCancellation();
             timelines.push_back(decodeTimeline(
                 values[index],
                 "/timelines/" + std::to_string(index)
@@ -54,6 +59,7 @@ private:
 
         std::set<std::string> ids;
         for (const auto& timeline : timelines) {
+            checkCancellation();
             ids.insert(timeline.id.value);
         }
 
@@ -70,6 +76,7 @@ private:
         if (openField != root.end() && openField->second.kind() != JsonKind::nullValue) {
             const auto& openValues = requireArray(openField->second, "/openTimelineIds");
             for (std::size_t index = 0; index < openValues.size(); ++index) {
+                checkCancellation();
                 if (openValues[index].kind() != JsonKind::string) {
                     fail(
                         "wrongRequiredType",
@@ -95,6 +102,7 @@ private:
     }
 
     Timeline decodeTimeline(const palmier::json::Value& value, const std::string& pointer) {
+        checkCancellation();
         const auto& object = requireObject(value, pointer);
         auto timeline = Timeline{
             decodeId(object, pointer),
@@ -112,6 +120,7 @@ private:
         );
         timeline.tracks.reserve(tracks.size());
         for (std::size_t index = 0; index < tracks.size(); ++index) {
+            checkCancellation();
             timeline.tracks.push_back(decodeTrack(
                 tracks[index],
                 pointer + "/tracks/" + std::to_string(index)
@@ -122,6 +131,7 @@ private:
     }
 
     Track decodeTrack(const palmier::json::Value& value, const std::string& pointer) {
+        checkCancellation();
         const auto& object = requireObject(value, pointer);
         auto id = decodeId(object, pointer);
         const auto type = requireString(object, "type", pointer);
@@ -140,6 +150,7 @@ private:
                 const auto& values = requireArray(clips->second, pointer + "/clips");
                 decodedClips.reserve(values.size());
                 for (std::size_t index = 0; index < values.size(); ++index) {
+                    checkCancellation();
                     decodedClips.push_back(decodeClip(
                         values[index],
                         pointer + "/clips/" + std::to_string(index)
@@ -147,7 +158,7 @@ private:
                 }
                 diagnoseDuplicateIds(decodedClips, pointer + "/clips");
             } catch (const ReadError& error) {
-                if (error.code == "invalidGeneratedId") {
+                if (error.code == "invalidGeneratedId" || error.code == "cancelled") {
                     throw;
                 }
                 decodedClips.clear();
@@ -172,6 +183,7 @@ private:
     }
 
     Clip decodeClip(const palmier::json::Value& value, const std::string& pointer) {
+        checkCancellation();
         const auto& object = requireObject(value, pointer);
         auto id = decodeId(object, pointer);
         auto mediaRef = requireString(object, "mediaRef", pointer);
@@ -216,6 +228,7 @@ private:
     }
 
     EntityId decodeId(const palmier::json::Object& object, const std::string& pointer) {
+        checkCancellation();
         const auto field = object.find("id");
         if (field != object.end() && field->second.kind() == JsonKind::string) {
             return {field->second.string(), EntityIdOrigin::persisted};
@@ -235,6 +248,7 @@ private:
     ) {
         std::set<std::string> ids;
         for (std::size_t index = 0; index < entities.size(); ++index) {
+            checkCancellation();
             if (!ids.insert(entities[index].id.value).second) {
                 diagnose("duplicateStableId", pointer + "/" + std::to_string(index) + "/id");
             }
@@ -482,7 +496,14 @@ private:
     }
 
     void diagnose(std::string code, std::string pointer) {
+        checkCancellation();
         diagnostics_.push_back({std::move(code), std::move(pointer)});
+    }
+
+    void checkCancellation() const {
+        if (cancellation_.stop_requested()) {
+            fail("cancelled", "", "project read was cancelled");
+        }
     }
 
     [[noreturn]] static void fail(
@@ -495,6 +516,7 @@ private:
 
     const IdGenerator& idGenerator_;
     std::vector<Diagnostic>& diagnostics_;
+    std::stop_token cancellation_;
 };
 
 palmier::json::Number integerNumber(std::int64_t value) {
@@ -614,14 +636,33 @@ ProjectDocumentDisposition ProjectDocument::disposition() const noexcept {
 }
 
 ProjectDocument readProject(std::string_view source, const IdGenerator& idGenerator) {
-    return readProject(palmier::json::parse(source), idGenerator);
+    return readProject(source, idGenerator, {});
 }
 
 ProjectDocument readProject(palmier::json::Value source, const IdGenerator& idGenerator) {
+    return readProject(std::move(source), idGenerator, {});
+}
+
+ProjectDocument readProject(
+    std::string_view source,
+    const IdGenerator& idGenerator,
+    std::stop_token cancellation
+) {
+    return readProject(palmier::json::parse(source, cancellation), idGenerator, cancellation);
+}
+
+ProjectDocument readProject(
+    palmier::json::Value source,
+    const IdGenerator& idGenerator,
+    std::stop_token cancellation
+) {
     std::vector<Diagnostic> diagnostics;
     RootKind rootKind = RootKind::current;
-    Decoder decoder(idGenerator, diagnostics);
+    Decoder decoder(idGenerator, diagnostics, cancellation);
     auto project = decoder.decode(source, rootKind);
+    if (cancellation.stop_requested()) {
+        throw ReadError("cancelled", "", "project read was cancelled");
+    }
     return ProjectDocument(
         std::move(source),
         rootKind,

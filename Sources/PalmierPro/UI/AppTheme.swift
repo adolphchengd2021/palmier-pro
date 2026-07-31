@@ -374,6 +374,14 @@ enum AppTheme {
         static let controlWidth: CGFloat = 116
     }
 
+    enum WindowsShell {
+        static let windowWidth: CGFloat = 1100
+        static let windowHeight: CGFloat = 720
+        static let trackHeight: CGFloat = 76
+        static let trackHeaderWidth: CGFloat = 150
+        static let clipMinimumWidth: CGFloat = 18
+    }
+
     // MARK: - Shadows
 
     struct ShadowStyle {
