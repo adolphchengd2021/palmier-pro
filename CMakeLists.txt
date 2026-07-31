@@ -15,4 +15,5 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
 endif()
 
 include(CTest)
+add_subdirectory(core/project)
 add_subdirectory(windows/contract-probe)

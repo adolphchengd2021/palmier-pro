@@ -1,9 +1,11 @@
 #include "palmier/contracts/repository_contract_probe.hpp"
 
 #include "palmier/contracts/top_level_json.hpp"
+#include "palmier/project/project_reader.hpp"
 
 #include <array>
 #include <ios>
+#include <type_traits>
 #include <utility>
 
 namespace palmier::contracts {
@@ -76,10 +78,24 @@ void requireKind(
 
 ProbeResult run(const auto& operation) {
     try {
-        operation();
-        return {ProbeExitCode::success, "PALMIER_CONTRACT_OK", "Windows contract probe passed"};
+        if constexpr (std::is_same_v<std::invoke_result_t<decltype(operation)>, std::string>) {
+            return {ProbeExitCode::success, "PALMIER_CONTRACT_OK", operation()};
+        } else {
+            operation();
+            return {ProbeExitCode::success, "PALMIER_CONTRACT_OK", "Windows contract probe passed"};
+        }
     } catch (const ProbeFailure& error) {
         return {error.code, error.marker, error.what()};
+    } catch (const palmier::project::ReadError& error) {
+        return {
+            ProbeExitCode::invariant,
+            "PALMIER_CONTRACT_E_INVARIANT",
+            error.code + " " + error.jsonPointer + ": " + error.what(),
+        };
+    } catch (const JsonError& error) {
+        return {ProbeExitCode::json, "PALMIER_CONTRACT_E_JSON", error.what()};
+    } catch (const std::ios_base::failure& error) {
+        return {ProbeExitCode::io, "PALMIER_CONTRACT_E_IO", error.what()};
     } catch (const std::exception& error) {
         return {ProbeExitCode::invariant, "PALMIER_CONTRACT_E_INVARIANT", error.what()};
     }
@@ -99,6 +115,7 @@ ProbeResult probeRepository(const std::filesystem::path& root) {
             "contracts/mcp/v1/tools.json",
             "contracts/project/v1/canaries.json",
             "contracts/project/v1/media-model.json",
+            "contracts/project/v1/reader-projection.json",
             "fixtures/contracts/media/v1/manifest.json",
         };
         for (const auto* relativePath : versionedFiles) {
@@ -141,6 +158,28 @@ ProbeResult probeRepository(const std::filesystem::path& root) {
         if (legacy.contains("timelines")) {
             fail(ProbeExitCode::invariant, "PALMIER_CONTRACT_E_INVARIANT", legacyPath, "legacy project must remain a bare timeline");
         }
+    });
+}
+
+ProbeResult normalizeProjectFile(const std::filesystem::path& path) {
+    return run([&] {
+        std::size_t nextId = 0;
+        auto document = palmier::project::readProject(
+            palmier::json::read(path),
+            [&] { return "synthesized-" + std::to_string(++nextId); }
+        );
+        return palmier::project::normalizedModelJson(document);
+    });
+}
+
+ProbeResult canonicalizeProjectSource(const std::filesystem::path& path) {
+    return run([&] {
+        std::size_t nextId = 0;
+        const auto document = palmier::project::readProject(
+            palmier::json::read(path),
+            [&] { return "synthesized-" + std::to_string(++nextId); }
+        );
+        return palmier::json::canonical(document.source());
     });
 }
 

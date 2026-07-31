@@ -14,11 +14,19 @@ int printResult(const palmier::contracts::ProbeResult& result) {
     return static_cast<int>(result.code);
 }
 
+int printJsonResult(const palmier::contracts::ProbeResult& result) {
+    if (result.code == palmier::contracts::ProbeExitCode::success) {
+        std::cout << result.detail << '\n';
+        return 0;
+    }
+    return printResult(result);
+}
+
 }
 
 int wmain(int argumentCount, wchar_t* arguments[]) {
     if (argumentCount != 3) {
-        std::cerr << "PALMIER_CONTRACT_E_USAGE expected --repo-root <path> or --contract-version-file <path>\n";
+        std::cerr << "PALMIER_CONTRACT_E_USAGE expected a supported command and path\n";
         return static_cast<int>(palmier::contracts::ProbeExitCode::usage);
     }
 
@@ -29,6 +37,12 @@ int wmain(int argumentCount, wchar_t* arguments[]) {
     }
     if (command == L"--contract-version-file") {
         return printResult(palmier::contracts::probeContractVersionFile(path));
+    }
+    if (command == L"--normalize-project-file") {
+        return printJsonResult(palmier::contracts::normalizeProjectFile(path));
+    }
+    if (command == L"--canonical-project-source") {
+        return printJsonResult(palmier::contracts::canonicalizeProjectSource(path));
     }
 
     std::cerr << "PALMIER_CONTRACT_E_USAGE unknown command\n";

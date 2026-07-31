@@ -1353,6 +1353,128 @@ def windows_bootstrap_contract() -> None:
             raise ContractError(f"Windows toolchain ADR missing {version!r}")
 
 
+def windows_project_reader_contract() -> None:
+    projection = load_json("contracts/project/v1/reader-projection.json")
+    require_equal(
+        "project reader contract version",
+        projection["contractVersion"],
+        CONTRACT_VERSION,
+    )
+    require_equal(
+        "project reader source commit",
+        projection["sourceCommit"],
+        "5a3695cda5a37db6af6fc495187fd05f5fec4dd3",
+    )
+    require_equal("project reader status", projection["status"], "read-only-prototype")
+    require_equal("project reader source", projection["sourceRepresentation"], "full-json-dom")
+    require_equal("project writer availability", projection["writerAvailable"], False)
+    require_equal("project projection completion", projection["projectionComplete"], False)
+    require_equal("project root kinds", projection["rootKinds"], ["current", "legacy"])
+    require_equal(
+        "project ID origins",
+        projection["idOrigins"],
+        ["persisted", "synthesized"],
+    )
+    require_equal(
+        "project reader diagnostic codes",
+        projection["diagnosticCodes"],
+        [
+            "synthesizedId",
+            "invalidOptionalDefaulted",
+            "invalidActiveTimelineId",
+            "invalidOpenTimelineId",
+            "duplicateStableId",
+            "unsafeFrameRange",
+        ],
+    )
+    require_equal(
+        "project reader fatal codes",
+        projection["fatalErrorCodes"],
+        [
+            "emptyTimelines",
+            "invalidGeneratedId",
+            "invalidRequiredValue",
+            "integerOutOfRange",
+            "missingRequiredField",
+            "unsupportedRequiredEnum",
+            "wrongRequiredType",
+        ],
+    )
+
+    model_header = read_text("core/project/include/palmier/project/project.hpp")
+    reader_source = read_text("core/project/serialization/project_reader.cpp")
+    json_source = read_text("core/project/serialization/json_document.cpp")
+    oracle = read_text("tools/project_reader_oracle.py")
+    core_cmake = read_text("core/project/CMakeLists.txt")
+    probe_cmake = read_text("windows/contract-probe/CMakeLists.txt")
+    for token in [
+        "palmier::json::Value source_",
+        "EntityIdOrigin origin",
+        "ProjectDocumentDisposition disposition() const noexcept",
+    ]:
+        if token not in model_header:
+            raise ContractError(f"project reader model missing token {token!r}")
+    for token in [
+        "diagnosticsCheckpoint",
+        "diagnostics_.resize(diagnosticsCheckpoint)",
+        "normalizedModelJson",
+        'document.rootKind() == RootKind::current ? "current" : "legacy"',
+    ]:
+        if token not in reader_source:
+            raise ContractError(f"project reader source missing token {token!r}")
+    for token in [
+        "maximumDepth = 256",
+        "duplicate object key",
+        "invalid UTF-8 leading byte",
+        "number().lexeme",
+    ]:
+        if token not in json_source:
+            raise ContractError(f"JSON DOM missing token {token!r}")
+    for token in [
+        "object_pairs_hook=reject_duplicate_pairs",
+        "parse_float=Decimal",
+        "compare_types(expected, actual)",
+        "synthesized-",
+        "--expected-error",
+    ]:
+        if token not in oracle:
+            raise ContractError(f"project reader oracle missing token {token!r}")
+    if "project_reader.direct_api" not in core_cmake:
+        raise ContractError("project reader core CMake is missing the direct API test")
+    for token in [
+        "function(add_project_differential name input)",
+        "current-multitimeline.palmier/project.json",
+        "legacy-bare-timeline.palmier/project.json",
+        "unknown-fields.palmier/project.json",
+        "project-missing-ids.json",
+        "project-diagnostics.json",
+        "project-fps-string.json",
+        "project-fps-fraction.json",
+        "project-fps-overflow.json",
+        "project-fps-zero.json",
+        "project-fps-boolean.json",
+        "project-missing-tracks.json",
+        "project-tracks-wrong-type.json",
+        "project-number-boundaries.json",
+        "function(add_project_error_differential name input expected_error)",
+        "add_project_differential(unicode_path",
+        "project_reader.rejects_malformed_json",
+        "project_reader.rejects_missing_file",
+    ]:
+        if token not in probe_cmake:
+            raise ContractError(f"project reader CMake missing token {token!r}")
+
+    adr = read_text("docs/windows/adr/0008-read-only-project-document.md")
+    for token in [
+        "strict, full JSON",
+        "never falls back to legacy decoding",
+        "injected generator",
+        "No Windows writer",
+    ]:
+        if token not in adr:
+            raise ContractError(f"project reader ADR missing token {token!r}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Palmier contract snapshots")
     parser.add_argument(
@@ -1371,6 +1493,7 @@ def main() -> int:
         ("media schema and Swift source", media_source_contract),
         ("project fixtures and canaries", project_fixtures),
         ("Windows toolchain and compiled probe", windows_bootstrap_contract),
+        ("Windows read-only project reader", windows_project_reader_contract),
     ]
     for label, check in checks:
         check()

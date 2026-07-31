@@ -1,10 +1,11 @@
 #pragma once
 
+#include "palmier/json/json_document.hpp"
+
 #include <cstdint>
 #include <filesystem>
 #include <map>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -27,11 +28,7 @@ struct JsonValueSummary {
 };
 
 using TopLevelJsonObject = std::map<std::string, JsonValueSummary>;
-
-class JsonError final : public std::runtime_error {
-public:
-    using std::runtime_error::runtime_error;
-};
+using JsonError = palmier::json::Error;
 
 TopLevelJsonObject parseTopLevelJsonObject(std::string_view source);
 TopLevelJsonObject readTopLevelJsonObject(const std::filesystem::path& path);

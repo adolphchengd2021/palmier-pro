@@ -6,8 +6,9 @@ current macOS product. It is not a conditional Swift build.
 ## Current stage
 
 M0 establishes product decisions, compatibility contracts, fixtures, drift
-checks, and the first compiled MSVC contract probe. It does not yet provide a
-Windows application, media pipeline, or installer.
+checks, the compiled MSVC contract probe, and a read-only C++ project document.
+It does not yet provide a Windows application, project writer, media pipeline,
+or installer.
 
 - Requirements: `docs/WINDOWS_10_PORT_REQUIREMENTS.zh-CN.md`
 - Decisions: `docs/windows/adr/`
@@ -45,8 +46,14 @@ cmake --build --preset windows-msvc-x64-release --parallel
 ctest --preset windows-msvc-x64-release
 ```
 
-The C++ probe structurally parses the contract JSON, rejects duplicate keys and
-invalid UTF-8, checks the v1 version boundary, and verifies current and legacy
-project fixture shapes. It does not replace the Python schema and Swift-source
-audit. The GitHub Windows Server build also does not prove Windows 10 19045
-runtime compatibility; that remains a clean-VM gate.
+The C++ path uses one strict full-DOM parser, rejects duplicate keys and invalid
+UTF-8, checks the v1 boundary, and derives a read-only project projection for
+current and legacy fixtures. CTest compares the projection with an independent
+Python oracle, verifies canonical source retention including unknown fields,
+and covers Unicode paths and negative boundaries. The projection is explicitly
+incomplete and no writer exists; see ADR 0008 and
+`contracts/project/v1/reader-projection.json`.
+
+This does not replace the Python schema and Swift-source audit. The GitHub
+Windows Server build also does not prove Windows 10 19045 runtime compatibility;
+that remains a clean-VM gate.

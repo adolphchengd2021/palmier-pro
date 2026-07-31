@@ -1,0 +1,74 @@
+{
+  "contractVersion": 1,
+  "sourceCommit": "5a3695cda5a37db6af6fc495187fd05f5fec4dd3",
+  "status": "read-only-prototype",
+  "sourceRepresentation": "full-json-dom",
+  "writerAvailable": false,
+  "projectionComplete": false,
+  "rootKinds": [
+    "current",
+    "legacy"
+  ],
+  "idOrigins": [
+    "persisted",
+    "synthesized"
+  ],
+  "diagnosticCodes": [
+    "synthesizedId",
+    "invalidOptionalDefaulted",
+    "invalidActiveTimelineId",
+    "invalidOpenTimelineId",
+    "duplicateStableId",
+    "unsafeFrameRange"
+  ],
+  "fatalErrorCodes": [
+    "emptyTimelines",
+    "invalidGeneratedId",
+    "invalidRequiredValue",
+    "integerOutOfRange",
+    "missingRequiredField",
+    "unsupportedRequiredEnum",
+    "wrongRequiredType"
+  ],
+  "projectFields": [
+    "timelines",
+    "activeTimelineId",
+    "openTimelineIds"
+  ],
+  "timelineFields": [
+    "id",
+    "name",
+    "fps",
+    "width",
+    "height",
+    "settingsConfigured",
+    "folderId",
+    "tracks"
+  ],
+  "trackFields": [
+    "id",
+    "type",
+    "muted",
+    "hidden",
+    "syncLocked",
+    "displayHeight",
+    "clips"
+  ],
+  "clipFields": [
+    "id",
+    "mediaRef",
+    "mediaType",
+    "sourceClipType",
+    "startFrame",
+    "durationFrames",
+    "trimStartFrame",
+    "trimEndFrame",
+    "speed",
+    "volume",
+    "opacity",
+    "blendMode",
+    "linkGroupId",
+    "captionGroupId",
+    "multicamGroupId"
+  ]
+}

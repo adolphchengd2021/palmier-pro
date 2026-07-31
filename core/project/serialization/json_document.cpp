@@ -1,14 +1,13 @@
-#include "palmier/contracts/top_level_json.hpp"
+#include "palmier/json/json_document.hpp"
 
 #include <charconv>
 #include <fstream>
 #include <iterator>
-#include <limits>
 #include <set>
-#include <sstream>
 #include <system_error>
+#include <utility>
 
-namespace palmier::contracts {
+namespace palmier::json {
 namespace {
 
 class Parser final {
@@ -19,39 +18,20 @@ public:
         }
     }
 
-    TopLevelJsonObject parseTopLevelObject() {
+    Value parseDocument() {
         skipWhitespace();
-        expect('{');
-        TopLevelJsonObject result;
+        auto result = parseValue(0);
         skipWhitespace();
-        if (consume('}')) {
-            finish();
-            return result;
+        if (position_ != source_.size()) {
+            fail("trailing content after JSON document");
         }
-
-        while (true) {
-            skipWhitespace();
-            const auto key = parseString();
-            if (result.contains(key)) {
-                fail("duplicate top-level key '" + key + "'");
-            }
-            skipWhitespace();
-            expect(':');
-            skipWhitespace();
-            result.emplace(key, parseValue(1));
-            skipWhitespace();
-            if (consume('}')) {
-                finish();
-                return result;
-            }
-            expect(',');
-        }
+        return result;
     }
 
 private:
     static constexpr std::size_t maximumDepth = 256;
 
-    JsonValueSummary parseValue(std::size_t depth) {
+    Value parseValue(std::size_t depth) {
         if (depth > maximumDepth) {
             fail("maximum nesting depth exceeded");
         }
@@ -61,69 +41,68 @@ private:
         switch (source_[position_]) {
         case 'n':
             expectLiteral("null");
-            return {JsonValueKind::nullValue, std::nullopt, std::nullopt, std::nullopt};
+            return Value();
         case 't':
             expectLiteral("true");
-            return {JsonValueKind::boolean, std::nullopt, true, std::nullopt};
+            return Value(true);
         case 'f':
             expectLiteral("false");
-            return {JsonValueKind::boolean, std::nullopt, false, std::nullopt};
+            return Value(false);
         case '"':
-            return {JsonValueKind::string, std::nullopt, std::nullopt, parseString()};
+            return Value(parseString());
         case '[':
-            parseArray(depth + 1);
-            return {JsonValueKind::array, std::nullopt, std::nullopt, std::nullopt};
+            return Value(parseArray(depth + 1));
         case '{':
-            parseObject(depth + 1);
-            return {JsonValueKind::object, std::nullopt, std::nullopt, std::nullopt};
+            return Value(parseObject(depth + 1));
         default:
-            return parseNumber();
+            return Value(parseNumber());
         }
     }
 
-    void parseArray(std::size_t depth) {
+    Array parseArray(std::size_t depth) {
         expect('[');
+        Array result;
         skipWhitespace();
         if (consume(']')) {
-            return;
+            return result;
         }
         while (true) {
             skipWhitespace();
-            parseValue(depth);
+            result.push_back(parseValue(depth));
             skipWhitespace();
             if (consume(']')) {
-                return;
+                return result;
             }
             expect(',');
         }
     }
 
-    void parseObject(std::size_t depth) {
+    Object parseObject(std::size_t depth) {
         expect('{');
-        std::set<std::string> keys;
+        Object result;
         skipWhitespace();
         if (consume('}')) {
-            return;
+            return result;
         }
         while (true) {
             skipWhitespace();
             const auto key = parseString();
-            if (!keys.insert(key).second) {
+            if (result.contains(key)) {
                 fail("duplicate object key '" + key + "'");
             }
             skipWhitespace();
             expect(':');
             skipWhitespace();
-            parseValue(depth);
+            result.emplace(key, parseValue(depth));
             skipWhitespace();
             if (consume('}')) {
-                return;
+                return result;
             }
             expect(',');
         }
     }
 
-    JsonValueSummary parseNumber() {
+    Number parseNumber() {
         const auto start = position_;
         consume('-');
         if (consume('0')) {
@@ -147,21 +126,20 @@ private:
             requireDigits();
         }
 
+        const auto lexeme = std::string(source_.substr(start, position_ - start));
         std::optional<std::int64_t> value;
         if (integer) {
             std::int64_t parsed = 0;
             const auto* begin = source_.data() + start;
             const auto* end = source_.data() + position_;
             const auto conversion = std::from_chars(begin, end, parsed);
-            if (conversion.ec == std::errc::result_out_of_range) {
-                fail("integer is outside the int64 range");
-            }
-            if (conversion.ec != std::errc{} || conversion.ptr != end) {
+            if (conversion.ec == std::errc{} && conversion.ptr == end) {
+                value = parsed;
+            } else if (conversion.ec != std::errc::result_out_of_range) {
                 fail("invalid integer");
             }
-            value = parsed;
         }
-        return {JsonValueKind::number, value, std::nullopt, std::nullopt};
+        return {lexeme, value};
     }
 
     std::string parseString() {
@@ -316,7 +294,7 @@ private:
         if (character >= 'A' && character <= 'F') {
             return static_cast<std::uint32_t>(character - 'A' + 10);
         }
-        throw JsonError("invalid hexadecimal digit in unicode escape");
+        throw Error("invalid hexadecimal digit in unicode escape");
     }
 
     void requireDigits() {
@@ -338,13 +316,6 @@ private:
             fail("invalid JSON literal");
         }
         position_ += literal.size();
-    }
-
-    void finish() {
-        skipWhitespace();
-        if (position_ != source_.size()) {
-            fail("trailing content after JSON document");
-        }
     }
 
     void skipWhitespace() {
@@ -372,17 +343,116 @@ private:
     }
 
     [[noreturn]] void fail(const std::string& detail) const {
-        throw JsonError(detail + " at byte " + std::to_string(position_));
+        throw Error(detail + " at byte " + std::to_string(position_));
     }
 
     std::string_view source_;
     std::size_t position_ = 0;
 };
 
+void appendCanonicalString(std::string& output, std::string_view value) {
+    constexpr char hex[] = "0123456789abcdef";
+    output.push_back('"');
+    for (const auto raw : value) {
+        const auto byte = static_cast<unsigned char>(raw);
+        switch (byte) {
+        case '"': output += "\\\""; break;
+        case '\\': output += "\\\\"; break;
+        case '\b': output += "\\b"; break;
+        case '\f': output += "\\f"; break;
+        case '\n': output += "\\n"; break;
+        case '\r': output += "\\r"; break;
+        case '\t': output += "\\t"; break;
+        default:
+            if (byte < 0x20) {
+                output += "\\u00";
+                output.push_back(hex[byte >> 4]);
+                output.push_back(hex[byte & 0x0F]);
+            } else {
+                output.push_back(static_cast<char>(byte));
+            }
+        }
+    }
+    output.push_back('"');
 }
 
-TopLevelJsonObject parseTopLevelJsonObject(std::string_view source) {
-    return Parser(source).parseTopLevelObject();
+void appendCanonical(std::string& output, const Value& value) {
+    switch (value.kind()) {
+    case Value::Kind::nullValue:
+        output += "null";
+        return;
+    case Value::Kind::boolean:
+        output += value.boolean() ? "true" : "false";
+        return;
+    case Value::Kind::number:
+        output += value.number().lexeme;
+        return;
+    case Value::Kind::string:
+        appendCanonicalString(output, value.string());
+        return;
+    case Value::Kind::array: {
+        output.push_back('[');
+        bool first = true;
+        for (const auto& child : value.array()) {
+            if (!first) {
+                output.push_back(',');
+            }
+            first = false;
+            appendCanonical(output, child);
+        }
+        output.push_back(']');
+        return;
+    }
+    case Value::Kind::object: {
+        output.push_back('{');
+        bool first = true;
+        for (const auto& [key, child] : value.object()) {
+            if (!first) {
+                output.push_back(',');
+            }
+            first = false;
+            appendCanonicalString(output, key);
+            output.push_back(':');
+            appendCanonical(output, child);
+        }
+        output.push_back('}');
+        return;
+    }
+    }
+}
+
+}
+
+Value::Value() : storage(nullptr) {}
+Value::Value(bool value) : storage(value) {}
+Value::Value(Number value) : storage(std::move(value)) {}
+Value::Value(const char* value) : storage(std::string(value)) {}
+Value::Value(std::string value) : storage(std::move(value)) {}
+Value::Value(Array value) : storage(std::move(value)) {}
+Value::Value(Object value) : storage(std::move(value)) {}
+
+Value::Kind Value::kind() const noexcept {
+    return static_cast<Kind>(storage.index());
+}
+
+bool Value::boolean() const { return std::get<bool>(storage); }
+const Number& Value::number() const { return std::get<Number>(storage); }
+const std::string& Value::string() const { return std::get<std::string>(storage); }
+const Array& Value::array() const { return std::get<Array>(storage); }
+const Object& Value::object() const { return std::get<Object>(storage); }
+Array& Value::array() { return std::get<Array>(storage); }
+Object& Value::object() { return std::get<Object>(storage); }
+
+const Value* Value::find(std::string_view key) const {
+    if (kind() != Kind::object) {
+        return nullptr;
+    }
+    const auto iterator = object().find(std::string(key));
+    return iterator == object().end() ? nullptr : &iterator->second;
+}
+
+Value parse(std::string_view source) {
+    return Parser(source).parseDocument();
 }
 
 std::string pathForDiagnostic(const std::filesystem::path& path) noexcept {
@@ -397,7 +467,7 @@ std::string pathForDiagnostic(const std::filesystem::path& path) noexcept {
     }
 }
 
-TopLevelJsonObject readTopLevelJsonObject(const std::filesystem::path& path) {
+Value read(const std::filesystem::path& path) {
     std::ifstream stream(path, std::ios::binary);
     if (!stream) {
         throw std::ios_base::failure("cannot open " + pathForDiagnostic(path));
@@ -409,7 +479,13 @@ TopLevelJsonObject readTopLevelJsonObject(const std::filesystem::path& path) {
     if (!stream.eof() && stream.fail()) {
         throw std::ios_base::failure("cannot read " + pathForDiagnostic(path));
     }
-    return parseTopLevelJsonObject(source);
+    return parse(source);
+}
+
+std::string canonical(const Value& value) {
+    std::string output;
+    appendCanonical(output, value);
+    return output;
 }
 
 }

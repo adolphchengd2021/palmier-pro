@@ -1,5 +1,9 @@
+if(NOT DEFINED MODE)
+    set(MODE --contract-version-file)
+endif()
+
 execute_process(
-    COMMAND "${PROBE}" --contract-version-file "${INPUT}"
+    COMMAND "${PROBE}" "${MODE}" "${INPUT}"
     RESULT_VARIABLE actual_code
     OUTPUT_VARIABLE standard_output
     ERROR_VARIABLE standard_error

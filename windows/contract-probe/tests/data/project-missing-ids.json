@@ -1,0 +1,21 @@
+{
+  "timelines": [
+    {
+      "fps": 30,
+      "width": 1920,
+      "height": 1080,
+      "tracks": [
+        {
+          "type": "video",
+          "clips": [
+            {
+              "mediaRef": "media-1",
+              "startFrame": 0,
+              "durationFrames": 30
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

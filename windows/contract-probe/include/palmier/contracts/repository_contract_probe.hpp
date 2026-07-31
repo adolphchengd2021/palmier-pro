@@ -22,5 +22,7 @@ struct ProbeResult {
 
 ProbeResult probeRepository(const std::filesystem::path& root);
 ProbeResult probeContractVersionFile(const std::filesystem::path& path);
+ProbeResult normalizeProjectFile(const std::filesystem::path& path);
+ProbeResult canonicalizeProjectSource(const std::filesystem::path& path);
 
 }
