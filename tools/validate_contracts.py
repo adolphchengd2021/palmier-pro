@@ -1475,6 +1475,191 @@ def windows_project_reader_contract() -> None:
             raise ContractError(f"project reader ADR missing token {token!r}")
 
 
+def windows_render_plan_contract() -> None:
+    contract = load_json("contracts/render/v1/render-plan.json")
+    require_equal(
+        "render plan contract version",
+        contract["contractVersion"],
+        CONTRACT_VERSION,
+    )
+    require_equal(
+        "render plan source commit",
+        contract["sourceCommit"],
+        "b88d553231327df734758ac1f6aaf6f4a2b79b7e",
+    )
+    require_equal("render plan status", contract["status"], "synthetic-reference-spike")
+    require_equal("render plan immutability", contract["immutable"], True)
+    require_equal("render plan layer order", contract["layerOrder"], "bottom-to-top")
+    require_equal(
+        "render plan semantic evidence",
+        contract["semanticEvidence"],
+        "self-consistent-cpu-warp-only",
+    )
+    require_equal("Swift pixel golden availability", contract["swiftPixelGoldenAvailable"], False)
+    require_equal("render plan maximum pixels", contract["canvas"]["maximumPixelCount"], 8_294_400)
+    require_equal(
+        "render plan entry points",
+        contract["previewExportEntryPoints"],
+        ["renderPreviewFrame", "renderExportFrame"],
+    )
+    require_equal(
+        "render plan supported blend modes",
+        contract["supported"]["blendModes"],
+        ["normal"],
+    )
+    require_equal("render plan maximum layers", contract["supported"]["maximumLayerCount"], 256)
+    require_equal(
+        "render plan maximum composite samples",
+        contract["supported"]["maximumCompositeSamples"],
+        67_108_864,
+    )
+    require_equal(
+        "render plan maximum resolved source pixels",
+        contract["supported"]["maximumResolvedSourcePixelsPerRender"],
+        67_108_864,
+    )
+    require_equal("render plan numeric precision", contract["supported"]["numericPrecision"], "float32")
+    require_equal(
+        "render plan rotation normalization",
+        contract["supported"]["rotationNormalization"],
+        "ieee-remainder-360-range-minus180-to180",
+    )
+    require_equal(
+        "render plan exposure range",
+        contract["supported"]["effects"]["color.exposure"],
+        {"parameter": "ev", "minimum": -3, "maximum": 3},
+    )
+    require_equal(
+        "render plan project compiler availability",
+        contract["projectCompilerAvailable"],
+        False,
+    )
+    require_equal(
+        "render plan backend concurrency",
+        contract["rendererConcurrency"],
+        "serialized-immediate-context-per-backend-instance",
+    )
+    require_equal(
+        "render plan resolver lifetime",
+        contract["resolverLifetime"],
+        "immutable-source-through-render-call",
+    )
+    required_refusals = {
+        "same-track-overlap",
+        "speed-not-one",
+        "variable-frame-rate",
+        "source-fps-mismatch",
+        "crop",
+        "flip",
+        "dynamic-keyframes",
+        "fades",
+        "non-normal-blend",
+        "text",
+        "nested-timeline",
+        "lottie",
+        "unsupported-effect",
+        "hdr",
+        "mixed-or-unknown-color-metadata",
+        "unknown-alpha-mode",
+    }
+    require_equal(
+        "render plan hard refusals",
+        set(contract["hardRefusalsBeforeProjectIntegration"]),
+        required_refusals,
+    )
+    require_equal(
+        "render plan runtime gates",
+        contract["runtimeGates"],
+        {
+            "windowsServer2022Warp": "required-ci",
+            "windows10Build19045": "pending-clean-vm",
+            "physicalGpuVendors": "pending-hardware-matrix",
+            "ffmpegDecodeEncode": "pending",
+            "wasapiAudio": "pending",
+        },
+    )
+
+    header = read_text("core/render/include/palmier/render/render_plan.hpp")
+    plan_source = read_text("core/render/render_plan.cpp")
+    cpu_source = read_text("core/render/cpu_renderer.cpp")
+    warp_source = read_text("windows/render-d3d11/d3d11_warp_renderer.cpp")
+    warp_cmake = read_text("windows/render-d3d11/CMakeLists.txt")
+    root_cmake = read_text("CMakeLists.txt")
+    for token in [
+        "private:",
+        "const std::vector<RenderLayer>& layers() const noexcept",
+        "RenderedFrame renderPreviewFrame(",
+        "RenderedFrame renderExportFrame(",
+    ]:
+        if token not in header:
+            raise ContractError(f"render plan header missing token {token!r}")
+    for token in [
+        '"overlappingTrackLayers"',
+        '"invalidOpacity"',
+        '"invalidExposure"',
+        '"canvasBudgetExceeded"',
+        '"layerBudgetExceeded"',
+        '"compositeBudgetExceeded"',
+        '"sourceWorkBudgetExceeded"',
+        "std::remainder(",
+        "resolveAndValidateSourceFrames(",
+        "return backend.render(plan, resolveFrame);",
+        "validateSourceFrame",
+    ]:
+        if token not in plan_source:
+            raise ContractError(f"render plan source missing token {token!r}")
+    for token in [
+        "srgbToLinear",
+        "linearToSrgb",
+        "std::exp2",
+        "sourceOver",
+        "pixels.assign(pixelCount, {0, 0, 0, 1})",
+        "!std::isfinite(sourceU)",
+    ]:
+        if token not in cpu_source:
+            raise ContractError(f"CPU reference renderer missing token {token!r}")
+    for token in [
+        "D3D_DRIVER_TYPE_WARP",
+        "D3D_FEATURE_LEVEL_11_0",
+        "D3DCompile(",
+        "D3DCOMPILE_WARNINGS_ARE_ERRORS",
+        "DXGI_FORMAT_R32G32B32A32_FLOAT",
+        "D3D11_FORMAT_SUPPORT_SHADER_LOAD",
+        "D3D11_FORMAT_SUPPORT_BLENDABLE",
+        "D3D11_USAGE_STAGING",
+        "mapped.value().RowPitch",
+        "ScopedTextureMap",
+        "std::scoped_lock lock(renderMutex_)",
+    ]:
+        if token not in warp_source:
+            raise ContractError(f"D3D11 WARP renderer missing token {token!r}")
+    for token in [
+        "render_d3d11.warp_parity",
+        "RUN_SERIAL TRUE TIMEOUT 60",
+        "d3d11 d3dcompiler",
+    ]:
+        if token not in warp_cmake:
+            raise ContractError(f"D3D11 WARP CMake missing token {token!r}")
+    for token in [
+        "add_subdirectory(core/render)",
+        "add_subdirectory(windows/render-d3d11)",
+    ]:
+        if token not in root_cmake:
+            raise ContractError(f"root CMake missing token {token!r}")
+
+    adr = read_text("docs/windows/adr/0009-render-plan-and-d3d11-warp-reference.md")
+    for token in [
+        "does not compile a Palmier project into a render plan",
+        "no application path may silently construct",
+        "hard refusals, not fallback behavior",
+        "does not prove Windows 10 build 19045",
+        "not yet an oracle for the shipping Swift",
+        "Swift-generated BGRA8 goldens are still required",
+    ]:
+        if token not in adr:
+            raise ContractError(f"render plan ADR missing token {token!r}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Palmier contract snapshots")
     parser.add_argument(
@@ -1494,6 +1679,7 @@ def main() -> int:
         ("project fixtures and canaries", project_fixtures),
         ("Windows toolchain and compiled probe", windows_bootstrap_contract),
         ("Windows read-only project reader", windows_project_reader_contract),
+        ("Windows render plan and D3D11 WARP", windows_render_plan_contract),
     ]
     for label, check in checks:
         check()

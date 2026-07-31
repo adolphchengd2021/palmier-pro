@@ -16,4 +16,6 @@ endif()
 
 include(CTest)
 add_subdirectory(core/project)
+add_subdirectory(core/render)
+add_subdirectory(windows/render-d3d11)
 add_subdirectory(windows/contract-probe)

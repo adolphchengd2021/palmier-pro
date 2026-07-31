@@ -1,0 +1,103 @@
+{
+  "contractVersion": 1,
+  "sourceCommit": "b88d553231327df734758ac1f6aaf6f4a2b79b7e",
+  "status": "synthetic-reference-spike",
+  "immutable": true,
+  "layerOrder": "bottom-to-top",
+  "semanticEvidence": "self-consistent-cpu-warp-only",
+  "swiftPixelGoldenAvailable": false,
+  "previewExportEntryPoints": [
+    "renderPreviewFrame",
+    "renderExportFrame"
+  ],
+  "canvas": {
+    "coordinateSystem": "top-left-normalized",
+    "maximumDimension": 16384,
+    "maximumPixelCount": 8294400,
+    "backgroundStraightRgba": [
+      0,
+      0,
+      0,
+      1
+    ],
+    "timelineTime": "non-negative-integer-frame"
+  },
+  "source": {
+    "pixelFormat": "rgba32-float",
+    "channelEncoding": "srgb",
+    "alphaMode": "straight",
+    "sampling": "nearest-point",
+    "orientation": "top-left"
+  },
+  "pipeline": [
+    "sample-straight-source",
+    "srgb-to-linear",
+    "exposure-2-power-ev",
+    "linear-to-srgb",
+    "normalized-placement-clockwise-rotation",
+    "premultiply-opacity",
+    "normal-source-over"
+  ],
+  "output": {
+    "pixelFormat": "rgba32-float",
+    "channelEncoding": "srgb",
+    "alphaMode": "premultiplied",
+    "background": "opaque-black"
+  },
+  "supported": {
+    "maximumLayerCount": 256,
+    "maximumCompositeSamples": 67108864,
+    "maximumResolvedSourcePixelsPerRender": 67108864,
+    "numericPrecision": "float32",
+    "blendModes": [
+      "normal"
+    ],
+    "effects": {
+      "color.exposure": {
+        "parameter": "ev",
+        "minimum": -3,
+        "maximum": 3
+      }
+    },
+    "transform": [
+      "centerX",
+      "centerY",
+      "width",
+      "height",
+      "rotationDegreesClockwise"
+    ],
+    "rotationNormalization": "ieee-remainder-360-range-minus180-to180",
+    "resolvedOpacity": [
+      0,
+      1
+    ]
+  },
+  "hardRefusalsBeforeProjectIntegration": [
+    "same-track-overlap",
+    "speed-not-one",
+    "variable-frame-rate",
+    "source-fps-mismatch",
+    "crop",
+    "flip",
+    "dynamic-keyframes",
+    "fades",
+    "non-normal-blend",
+    "text",
+    "nested-timeline",
+    "lottie",
+    "unsupported-effect",
+    "hdr",
+    "mixed-or-unknown-color-metadata",
+    "unknown-alpha-mode"
+  ],
+  "projectCompilerAvailable": false,
+  "rendererConcurrency": "serialized-immediate-context-per-backend-instance",
+  "resolverLifetime": "immutable-source-through-render-call",
+  "runtimeGates": {
+    "windowsServer2022Warp": "required-ci",
+    "windows10Build19045": "pending-clean-vm",
+    "physicalGpuVendors": "pending-hardware-matrix",
+    "ffmpegDecodeEncode": "pending",
+    "wasapiAudio": "pending"
+  }
+}

@@ -57,3 +57,12 @@ incomplete and no writer exists; see ADR 0008 and
 This does not replace the Python schema and Swift-source audit. The GitHub
 Windows Server build also does not prove Windows 10 19045 runtime compatibility;
 that remains a clean-VM gate.
+
+The next synthetic rendering boundary is also compiled in Windows CI.
+`core/render` defines the immutable v1 RenderPlan and CPU oracle;
+`windows/render-d3d11` consumes it through a headless feature-level 11_0 WARP
+backend. Its CTest checks CPU/WARP float-frame parity and identical full-quality
+preview/export entry points. This does not yet establish parity with the Swift
+BGRA8 compositor. It has no project compiler, Swift pixel goldens, FFmpeg, WASAPI,
+swapchain, Qt, physical-GPU, or Windows 10 runtime evidence yet. ADR 0009 lists
+the required hard refusals before project integration.

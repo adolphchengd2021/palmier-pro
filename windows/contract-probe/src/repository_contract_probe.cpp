@@ -116,6 +116,7 @@ ProbeResult probeRepository(const std::filesystem::path& root) {
             "contracts/project/v1/canaries.json",
             "contracts/project/v1/media-model.json",
             "contracts/project/v1/reader-projection.json",
+            "contracts/render/v1/render-plan.json",
             "fixtures/contracts/media/v1/manifest.json",
         };
         for (const auto* relativePath : versionedFiles) {

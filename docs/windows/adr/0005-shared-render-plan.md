@@ -1,6 +1,6 @@
 # ADR 0005: Share preview and export rendering semantics
 
-- Status: Accepted invariant; implementation proposed
+- Status: Accepted invariant; synthetic M1 reference spike implemented
 - Date: 2026-07-31
 - Owner: Media and rendering
 - Applies to: Technical MVP and later
@@ -21,10 +21,17 @@ The Technical MVP compares selected frames from preview and export using fixed
 media and an approved exact or perceptual threshold. It also compares alpha,
 color metadata, duration, and audio timing where applicable.
 
+## Current implementation
+
+ADR 0009 defines the immutable v1 Technical MVP plan and its CPU/D3D11 WARP
+reference renderers. It is not connected to a project compiler, decoded media,
+preview presentation, or export encoding yet. It is internally self-consistent
+but is not yet a pixel oracle for the shipping Swift BGRA8 compositor.
+
 ## Open work
 
-- Define the render plan structure.
-- Define HLSL and CPU fallback ownership.
+- Compile supported project segments into the plan with hard refusal of every
+  visible unsupported feature.
+- Generate Swift BGRA8 goldens and freeze sampling, quantization, and clipping.
 - Choose golden media and comparison thresholds.
 - Verify NVIDIA, AMD, Intel, and software fallback behavior.
-
