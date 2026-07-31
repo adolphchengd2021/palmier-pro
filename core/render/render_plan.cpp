@@ -84,7 +84,7 @@ RenderPlan RenderPlan::create(
     std::set<std::string> trackIds;
     for (std::size_t index = 0; index < layers.size(); ++index) {
         const auto pointer = "/layers/" + std::to_string(index);
-        const auto& layer = layers[index];
+        auto& layer = layers[index];
         if (layer.id.empty()) {
             fail("missingStableId", pointer + "/id", "layer ID must not be empty");
         }
