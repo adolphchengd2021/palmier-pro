@@ -1,6 +1,7 @@
 #include "palmier/windows/preview_presentation_controller.hpp"
 #include "palmier/windows/project_load_coordinator.hpp"
 
+#include <QDebug>
 #include <QEventLoop>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
@@ -118,6 +119,15 @@ std::unique_ptr<QObject> createPreviewWindow(
         controller.window()
     );
     QQmlComponent component(&engine);
+    QEventLoop componentLoad;
+    QObject::connect(
+        &component,
+        &QQmlComponent::statusChanged,
+        &componentLoad,
+        [&componentLoad](QQmlComponent::Status status) {
+            if (status != QQmlComponent::Loading) componentLoad.quit();
+        }
+    );
     const auto source = QStringLiteral(R"(
         import QtQuick
         Window {
@@ -131,6 +141,8 @@ std::unique_ptr<QObject> createPreviewWindow(
         }
     )").arg(width).arg(height).toUtf8();
     component.setData(source, QUrl(QStringLiteral("inline:preview-window.qml")));
+    if (component.isLoading()) componentLoad.exec();
+    if (component.isError()) qWarning().noquote() << component.errorString();
     return std::unique_ptr<QObject>(component.create());
 }
 

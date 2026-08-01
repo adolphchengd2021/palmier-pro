@@ -4045,6 +4045,7 @@ def windows_qt_preview_host_contract() -> None:
         "unexpectedTeardownRetiresWindowUntilSessionDestruction",
         "shutdownDuringReadySignalDoesNotRestoreReadyState",
         "shutdownFailureSignalReentryStillNotifiesDrain",
+        "QQmlComponent::statusChanged",
         "GetParent(child)",
         "WS_CHILD",
         "state_->firstResizeEntered",
