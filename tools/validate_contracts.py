@@ -2871,6 +2871,9 @@ def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
         if token not in session_source:
             raise ContractError(f"audio playback session invariant missing token {token!r}")
     for token in [
+        "automaticRenderClockCannotLoseProgressToCancellation",
+        "automatic fake cancellation blocked later progress",
+        'std::cout << "RUN " << name << std::endl',
         "playsRealPcmToOneTerminalAndAnchorsTheClock",
         "failedReplacementPreservesTheRunningGeneration",
         "successfulReplacementFlushesOldPcmAndUsesAnExactGeneration",

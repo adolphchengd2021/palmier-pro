@@ -22,6 +22,7 @@
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -70,7 +71,6 @@ struct PlaybackStreamState final {
     std::vector<std::byte> captured;
     std::vector<DWORD> nativeThreads;
     std::atomic_bool automaticRender{true};
-    std::atomic_uint32_t renderCredits{};
     DWORD constructedThread{};
     DWORD destroyedThread{};
     std::uint64_t clockPosition{};
@@ -124,25 +124,17 @@ public:
         std::uint32_t timeoutMilliseconds
     ) noexcept override {
         record();
-        auto credits = state_->renderCredits.load();
-        while (credits > 0) {
-            if (state_->renderCredits.compare_exchange_weak(
-                    credits,
-                    credits - 1
-                )) {
-                return S_OK;
-            }
+        if (state_->automaticRender.load()) {
+            std::this_thread::yield();
+            return stopToken.stop_requested()
+                ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
+                : S_OK;
         }
-        const HRESULT result = waitForWasapiRenderEvent(
+        return waitForWasapiRenderEvent(
             state_->renderEvent.get(),
             stopToken,
             timeoutMilliseconds
         );
-        if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)
-            && state_->automaticRender.load()) {
-            state_->renderCredits.fetch_add(1);
-        }
-        return result;
     }
     HRESULT loadCurrentPadding(std::uint32_t& paddingFrames) noexcept override {
         paddingFrames = 0;
@@ -203,11 +195,18 @@ public:
     }
     HRESULT stop() noexcept override { return record(); }
     HRESULT reset() noexcept override {
-        record();
-        std::lock_guard lock(state_->mutex);
-        state_->captured.clear();
-        state_->clockPosition = 0;
-        state_->renderCredits.store(0);
+        const auto result = record();
+        if (FAILED(result)) {
+            return result;
+        }
+        {
+            std::lock_guard lock(state_->mutex);
+            state_->captured.clear();
+            state_->clockPosition = 0;
+        }
+        if (ResetEvent(state_->renderEvent.get()) == 0) {
+            return HRESULT_FROM_WIN32(GetLastError());
+        }
         return S_OK;
     }
     HRESULT close() noexcept override {
@@ -250,6 +249,32 @@ std::vector<std::byte> expectedPcm(const std::filesystem::path& input) {
             block->interleavedBytes.end()
         );
     }
+}
+
+void automaticRenderClockCannotLoseProgressToCancellation() {
+    auto state = std::make_shared<PlaybackStreamState>();
+    PlaybackStream stream(state);
+    std::stop_source cancelled;
+    cancelled.request_stop();
+    require(
+        stream.waitForRenderEvent(cancelled.get_token(), 0)
+            == HRESULT_FROM_WIN32(ERROR_CANCELLED),
+        "automatic fake ignored cancellation"
+    );
+    require(
+        stream.waitForRenderEvent({}, 0) == S_OK,
+        "automatic fake cancellation blocked later progress"
+    );
+    state->automaticRender.store(false);
+    require(SetEvent(state->renderEvent.get()) != 0, "manual fake render signal failed");
+    require(stream.waitForRenderEvent({}, 0) == S_OK, "manual fake render wait failed");
+    require(SetEvent(state->renderEvent.get()) != 0, "stale fake render signal failed");
+    require(SUCCEEDED(stream.reset()), "automatic fake reset failed");
+    require(
+        stream.waitForRenderEvent({}, 0)
+            == HRESULT_FROM_WIN32(ERROR_TIMEOUT),
+        "automatic fake reset retained a stale render event"
+    );
 }
 
 void playsRealPcmToOneTerminalAndAnchorsTheClock() {
@@ -533,17 +558,49 @@ void concurrentCloseJoinsTheSessionAndDeviceExactlyOnce() {
     require(state->destroyedThread == state->constructedThread, "stream teardown crossed threads");
 }
 
+template<typename Test>
+void runCase(const char* name, Test&& test) {
+    std::cout << "RUN " << name << std::endl;
+    std::forward<Test>(test)();
+    std::cout << "PASS " << name << std::endl;
+}
+
 }
 
 int main() {
     try {
-        playsRealPcmToOneTerminalAndAnchorsTheClock();
-        failedReplacementPreservesTheRunningGeneration();
-        successfulReplacementFlushesOldPcmAndUsesAnExactGeneration();
-        exactGenerationRestartsAnOtherwiseIdenticalRequest();
-        cancelledExactReplacementResumesTheActiveGeneration();
-        rejectsInvalidRequestsAndPreservesNoOpState();
-        concurrentCloseJoinsTheSessionAndDeviceExactlyOnce();
+        runCase(
+            "automaticRenderClockCannotLoseProgressToCancellation",
+            automaticRenderClockCannotLoseProgressToCancellation
+        );
+        runCase(
+            "playsRealPcmToOneTerminalAndAnchorsTheClock",
+            playsRealPcmToOneTerminalAndAnchorsTheClock
+        );
+        runCase(
+            "failedReplacementPreservesTheRunningGeneration",
+            failedReplacementPreservesTheRunningGeneration
+        );
+        runCase(
+            "successfulReplacementFlushesOldPcmAndUsesAnExactGeneration",
+            successfulReplacementFlushesOldPcmAndUsesAnExactGeneration
+        );
+        runCase(
+            "exactGenerationRestartsAnOtherwiseIdenticalRequest",
+            exactGenerationRestartsAnOtherwiseIdenticalRequest
+        );
+        runCase(
+            "cancelledExactReplacementResumesTheActiveGeneration",
+            cancelledExactReplacementResumesTheActiveGeneration
+        );
+        runCase(
+            "rejectsInvalidRequestsAndPreservesNoOpState",
+            rejectsInvalidRequestsAndPreservesNoOpState
+        );
+        runCase(
+            "concurrentCloseJoinsTheSessionAndDeviceExactlyOnce",
+            concurrentCloseJoinsTheSessionAndDeviceExactlyOnce
+        );
         std::cout << "Audio playback session tests passed\n";
         return 0;
     } catch (const std::exception& error) {
