@@ -2,6 +2,7 @@ set(media_session_include_dir "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 add_library(
     palmier_media_session STATIC
+    audio_playback_session.cpp
     presentation_video_buffer.cpp
     presentation_video_decode_pump.cpp
     presentation_audio_decode_pump.cpp
@@ -17,7 +18,7 @@ target_compile_options(
 )
 target_link_libraries(
     palmier_media_session
-    PUBLIC palmier_media_render palmier_media_ffmpeg
+    PUBLIC palmier_audio_wasapi palmier_media_render palmier_media_ffmpeg
 )
 
 if(BUILD_TESTING)
@@ -100,5 +101,32 @@ if(BUILD_TESTING)
     set_tests_properties(
         media_session.ffmpeg_wasapi_audio_pipeline
         PROPERTIES TIMEOUT 60
+    )
+
+    add_executable(
+        palmier_audio_playback_session_tests
+        tests/audio_playback_session_tests.cpp
+    )
+    target_link_libraries(
+        palmier_audio_playback_session_tests
+        PRIVATE palmier_media_session
+    )
+    target_include_directories(
+        palmier_audio_playback_session_tests
+        PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/../audio-wasapi"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../media-ffmpeg/tests"
+    )
+    target_compile_options(
+        palmier_audio_playback_session_tests
+        PRIVATE /W4 /WX /permissive- /Zc:__cplusplus /utf-8
+    )
+    add_test(
+        NAME media_session.audio_playback_session
+        COMMAND palmier_audio_playback_session_tests
+    )
+    set_tests_properties(
+        media_session.audio_playback_session
+        PROPERTIES TIMEOUT 30
     )
 endif()

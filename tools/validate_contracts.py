@@ -2459,7 +2459,7 @@ def windows_ffmpeg_presentation_pipeline_contract() -> None:
     for token in [
         "presentation_video_decode_pump.cpp",
         "palmier_media_ffmpeg",
-        "PUBLIC palmier_media_render palmier_media_ffmpeg",
+        "PUBLIC palmier_audio_wasapi palmier_media_render palmier_media_ffmpeg",
         "palmier_ffmpeg_presentation_pipeline_tests",
         "palmier_render_d3d11",
         "media_session.ffmpeg_presentation_pipeline",
@@ -2533,6 +2533,7 @@ def windows_ffmpeg_presentation_pipeline_contract() -> None:
 
 def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
     contract = load_json("contracts/audio/v1/ffmpeg-wasapi-pipeline.json")
+    session_contract = load_json("contracts/audio/v1/playback-session.json")
     pcm_header = read_text("core/audio/include/palmier/audio/pcm_format.hpp")
     ffmpeg_header = read_text(
         "windows/media-ffmpeg/include/palmier/media/ffmpeg_media_reader.hpp"
@@ -2550,6 +2551,15 @@ def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
     )
     pipeline_tests = read_text(
         "windows/media-session/tests/ffmpeg_wasapi_audio_pipeline_tests.cpp"
+    )
+    session_header = read_text(
+        "windows/media-session/include/palmier/media/audio_playback_session.hpp"
+    )
+    session_source = read_text(
+        "windows/media-session/audio_playback_session.cpp"
+    )
+    session_tests = read_text(
+        "windows/media-session/tests/audio_playback_session_tests.cpp"
     )
     cmake = read_text("windows/media-session/CMakeLists.txt")
 
@@ -2728,6 +2738,102 @@ def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
         if token not in adr:
             raise ContractError(f"audio pipeline ADR missing token {token!r}")
 
+    require_equal(
+        "audio playback session version",
+        session_contract.get("version"),
+        CONTRACT_VERSION,
+    )
+    require_equal(
+        "audio playback session states",
+        cpp_enum_cases(session_header, "AudioPlaybackState"),
+        session_contract["states"],
+    )
+    require_equal(
+        "audio playback session outcomes",
+        cpp_enum_cases(session_header, "AudioPlaybackOutcome"),
+        session_contract["outcomes"],
+    )
+    require_equal(
+        "audio playback session limits",
+        session_contract.get("limits"),
+        {
+            "maximumPendingCommands": 8,
+            "maximumTerminalReceipts": 16,
+            "maximumPumpCapacityFrames": 4194304,
+            "maximumFramesPerFill": 65536,
+            "pcmHandoffSlots": 1,
+        },
+    )
+    for token in [
+        "class AudioPlaybackSession final",
+        "AudioPlaybackReceipt play(",
+        "AudioPlaybackReceipt cancel(",
+        "AudioPlaybackReceipt waitForTerminal(",
+        "AudioPlaybackReceipt snapshot() const",
+        "AudioPlaybackClockAnchor",
+    ]:
+        if token not in session_header:
+            raise ContractError(f"audio playback session API missing token {token!r}")
+    for token in [
+        "std::jthread worker_",
+        "output_->configuration(commandToken)",
+        "commandValue.input,\n                commandToken",
+        "prebuffer(",
+        "output_->installGeneration(",
+        "pendingBlock_",
+        "handoffCancellation_.request_stop()",
+        "block.startOutputSample != *sourceCursor_",
+        "output_->markEndOfStream(",
+        "output_->waitForTerminal(",
+        "started.clockSample.devicePosition",
+        "started.clockSample.qpc100Nanoseconds",
+        "started.clockSample.generation != generation_",
+        "terminateActiveFailure",
+        "commandToken.stop_requested()",
+        "closeStarted_ && kind != CommandKind::close",
+        "terminalHistoryCapacity = 16",
+        "maximumPendingCommands = 8",
+    ]:
+        if token not in session_source:
+            raise ContractError(f"audio playback session invariant missing token {token!r}")
+    for token in [
+        "playsRealPcmToOneTerminalAndAnchorsTheClock",
+        "failedReplacementPreservesTheRunningGeneration",
+        "successfulReplacementFlushesOldPcmAndUsesAnExactGeneration",
+        "rejectsInvalidRequestsAndPreservesNoOpState",
+        "concurrentCloseJoinsTheSessionAndDeviceExactlyOnce",
+        "state->captured == expected",
+        "terminal.acceptedFrames == 1'536",
+        "replaced.generation == 2",
+        "session.waitForTerminal(0).outcome == AudioPlaybackOutcome::refused",
+        "terminal.state == AudioPlaybackState::cancelled",
+        "state->closeCalls == 1",
+    ]:
+        if token not in session_tests:
+            raise ContractError(f"audio playback session test missing token {token!r}")
+    for token in [
+        "audio_playback_session.cpp",
+        "palmier_audio_playback_session_tests",
+        "media_session.audio_playback_session",
+        "PROPERTIES TIMEOUT 30",
+    ]:
+        if token not in cmake:
+            raise ContractError(f"audio playback session CMake missing token {token!r}")
+    session_adr = read_text(
+        "docs/windows/adr/0018-audio-playback-session-ownership.md"
+    )
+    for token in [
+        "sole playback-generation owner",
+        "opens and prebuffers a candidate reader",
+        "unadmitted block is retracted",
+        "first source sample is rebased to output sample zero",
+        "generation-matched clock sample",
+        "1,536 accepted output frames",
+        "do not prove audible output",
+    ]:
+        if token not in session_adr:
+            raise ContractError(f"audio playback session ADR missing token {token!r}")
+
 
 def windows_audio_wasapi_contract() -> None:
     root_cmake = read_text("CMakeLists.txt")
@@ -2876,7 +2982,9 @@ def windows_wasapi_output_contract() -> None:
     output_source = read_text("windows/audio-wasapi/wasapi_output.cpp")
     native_source = read_text("windows/audio-wasapi/wasapi_native_stream.cpp")
     smoke_source = read_text("windows/audio-wasapi/wasapi_silent_output_probe.cpp")
-    worker_header = read_text("windows/audio-wasapi/wasapi_output_worker.hpp")
+    worker_header = read_text(
+        "windows/audio-wasapi/include/palmier/audio/wasapi_output_worker.hpp"
+    )
     worker_source = read_text("windows/audio-wasapi/wasapi_output_worker.cpp")
     tests = read_text("windows/audio-wasapi/tests/wasapi_output_tests.cpp")
     worker_tests = read_text(
@@ -2965,6 +3073,8 @@ def windows_wasapi_output_contract() -> None:
     for token in [
         "class WasapiOutputWorker",
         "WasapiWorkerPcmBlock",
+        "WasapiWorkerConfiguration",
+        "configuration(std::stop_token",
         "startOutputSample",
         "markEndOfStream",
         "waitForTerminal",
@@ -3010,6 +3120,7 @@ def windows_wasapi_output_contract() -> None:
         "generationBarrierRejectsPendingHandoffBeforeAcknowledgement",
         "cancellationRemovesAnUnadmittedHandoff",
         "setupFailureReturnsReceiptsWithoutStartingNativeOutput",
+        "terminalInvalidationMakesConfigurationUnavailable",
         "concurrentCloseJoinsTheDeviceThreadExactlyOnce",
         "thread == state->constructedThread",
     ]:

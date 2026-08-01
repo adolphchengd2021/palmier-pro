@@ -1,6 +1,7 @@
-#include "wasapi_output_worker.hpp"
+#include "palmier/audio/wasapi_output_worker.hpp"
 
 #include "wasapi_native_stream.hpp"
+#include "wasapi_output_worker_testing.hpp"
 
 #include <Windows.h>
 
@@ -35,6 +36,7 @@ using palmier::audio::WasapiSharedModePeriods;
 using palmier::audio::WasapiWorkerPcmBlock;
 using palmier::audio::WasapiWorkerPcmOutcome;
 using palmier::audio::WasapiWorkerPcmStage;
+using palmier::audio::WasapiWorkerConfigurationOutcome;
 using palmier::audio::waitForWasapiRenderEvent;
 
 class HandleOwner final {
@@ -81,6 +83,7 @@ struct StreamState final {
     DWORD constructedThread{};
     DWORD destroyedThread{};
     HRESULT createEnumeratorResult{S_OK};
+    std::atomic<HRESULT> paddingResult{S_OK};
 };
 
 class ScriptedWorkerStream final : public WasapiOutputWorkerStream {
@@ -145,7 +148,8 @@ public:
     }
     HRESULT loadCurrentPadding(std::uint32_t& paddingFrames) noexcept override {
         paddingFrames = 0;
-        return call("padding");
+        call("padding");
+        return state_->paddingResult.load();
     }
     HRESULT acquireBuffer(
         std::uint32_t frameCount,
@@ -206,6 +210,14 @@ void controlPreemptsRenderWaitAndKeepsNativeOwnership() {
         WasapiOutputWorker worker([state] {
             return std::make_unique<ScriptedWorkerStream>(state);
         });
+        const auto configuration = worker.configuration();
+        require(
+            configuration.outcome == WasapiWorkerConfigurationOutcome::available,
+            "worker configuration was unavailable"
+        );
+        require(configuration.pcmFormat == pcmFormat(), "worker format changed");
+        require(configuration.bufferFrames == 4, "worker buffer size changed");
+        require(configuration.clockFrequency == 48'000, "worker clock changed");
         const auto started = worker.start(1);
         require(started.outcome == WasapiOutputOutcome::changed, "worker start failed");
         require(started.currentState == WasapiOutputState::running, "worker not running");
@@ -468,6 +480,12 @@ void setupFailureReturnsReceiptsWithoutStartingNativeOutput() {
     const auto started = worker.start(1);
     require(started.outcome == WasapiOutputOutcome::failed, "setup failure was hidden");
     require(started.hresult == E_ACCESSDENIED, "setup HRESULT changed");
+    const auto configuration = worker.configuration();
+    require(
+        configuration.outcome == WasapiWorkerConfigurationOutcome::failed,
+        "setup configuration failure was hidden"
+    );
+    require(configuration.hresult == E_ACCESSDENIED, "setup configuration HRESULT changed");
     const auto terminal = worker.waitForTerminal(1);
     require(terminal.outcome == WasapiOutputOutcome::failed, "terminal setup state hung");
     require(terminal.hresult == E_ACCESSDENIED, "terminal setup HRESULT changed");
@@ -479,6 +497,26 @@ void setupFailureReturnsReceiptsWithoutStartingNativeOutput() {
         std::count(state->calls.begin(), state->calls.end(), "close") == 1,
         "setup failure did not explicitly close its partial stream"
     );
+}
+
+void terminalInvalidationMakesConfigurationUnavailable() {
+    auto state = std::make_shared<StreamState>();
+    state->paddingResult.store(AUDCLNT_E_DEVICE_INVALIDATED);
+    WasapiOutputWorker worker([state] {
+        return std::make_unique<ScriptedWorkerStream>(state);
+    });
+    const auto started = worker.start(1);
+    require(started.outcome == WasapiOutputOutcome::invalidated, "invalidation was hidden");
+    const auto configuration = worker.configuration();
+    require(
+        configuration.outcome == WasapiWorkerConfigurationOutcome::unavailable,
+        "invalidated configuration remained available"
+    );
+    require(
+        configuration.hresult == AUDCLNT_E_DEVICE_INVALIDATED,
+        "configuration lost invalidation HRESULT"
+    );
+    require(worker.close().outcome == WasapiOutputOutcome::changed, "close failed");
 }
 
 void concurrentCloseJoinsTheDeviceThreadExactlyOnce() {
@@ -529,6 +567,7 @@ int main() {
         generationBarrierRejectsPendingHandoffBeforeAcknowledgement();
         cancellationRemovesAnUnadmittedHandoff();
         setupFailureReturnsReceiptsWithoutStartingNativeOutput();
+        terminalInvalidationMakesConfigurationUnavailable();
         concurrentCloseJoinsTheDeviceThreadExactlyOnce();
         std::cout << "WASAPI output worker tests passed\n";
         return 0;

@@ -1,6 +1,7 @@
-#include "wasapi_output_worker.hpp"
+#include "palmier/audio/wasapi_output_worker.hpp"
 
 #include "wasapi_native_stream.hpp"
+#include "wasapi_output_worker_testing.hpp"
 
 #include <Windows.h>
 
@@ -194,7 +195,7 @@ public:
             close();
         } catch (...) {
             worker_.request_stop();
-            renderCancellation_.request_stop();
+            requestRenderCancellation();
             condition_.notify_all();
             if (worker_.joinable()) {
                 try {
@@ -236,6 +237,39 @@ public:
             [&completion] { return completion->value.has_value(); }
         );
         return *completion->value;
+    }
+
+    WasapiWorkerConfiguration configuration(std::stop_token stopToken) {
+        std::unique_lock lock(mutex_);
+        const bool ready = condition_.wait(
+            lock,
+            stopToken,
+            [this] {
+                return configuration_.has_value()
+                    || startupUnavailable_
+                    || closeStarted_
+                    || joined_;
+            }
+        );
+        if (!ready || stopToken.stop_requested()) {
+            return {
+                WasapiWorkerConfigurationOutcome::cancelled,
+                cancelledResult,
+            };
+        }
+        if (configuration_.has_value() && !closeStarted_ && !joined_) {
+            return *configuration_;
+        }
+        if (startupUnavailable_) {
+            return {
+                startupOutcome_,
+                startupFailure_,
+            };
+        }
+        return {
+            WasapiWorkerConfigurationOutcome::closed,
+            E_ILLEGAL_METHOD_CALL,
+        };
     }
 
     WasapiWorkerPcmReceipt submit(
@@ -367,12 +401,12 @@ public:
             } catch (const std::bad_alloc&) {
                 value = unavailableReceipt(ControlKind::close, E_OUTOFMEMORY);
                 worker_.request_stop();
-                renderCancellation_.request_stop();
+                requestRenderCancellation();
                 condition_.notify_all();
             } catch (...) {
                 value = unavailableReceipt(ControlKind::close, E_UNEXPECTED);
                 worker_.request_stop();
-                renderCancellation_.request_stop();
+                requestRenderCancellation();
                 condition_.notify_all();
             }
         }
@@ -387,9 +421,7 @@ public:
             std::lock_guard lock(mutex_);
             joined_ = true;
             closeFinished_ = true;
-            if (!closeReceipt_.has_value()) {
-                closeReceipt_ = value;
-            }
+            closeReceipt_ = value;
         }
         condition_.notify_all();
         return value;
@@ -427,9 +459,18 @@ private:
         }
     }
 
-    void setStartupFailure(HRESULT result) {
+    void requestRenderCancellation() {
+        std::lock_guard lock(mutex_);
+        renderCancellation_.request_stop();
+    }
+
+    void setStartupFailure(
+        WasapiWorkerConfigurationOutcome outcome,
+        HRESULT result
+    ) {
         {
             std::lock_guard lock(mutex_);
+            startupOutcome_ = outcome;
             startupFailure_ = result;
             startupUnavailable_ = true;
         }
@@ -445,6 +486,17 @@ private:
             if (value.currentState == WasapiOutputState::closed) {
                 closeReceipt_ = value;
             } else {
+                if (configuration_.has_value()
+                    && value.currentState == WasapiOutputState::failed) {
+                    configuration_->outcome =
+                        WasapiWorkerConfigurationOutcome::failed;
+                    configuration_->hresult = value.hresult;
+                } else if (configuration_.has_value()
+                    && value.currentState == WasapiOutputState::invalidated) {
+                    configuration_->outcome =
+                        WasapiWorkerConfigurationOutcome::unavailable;
+                    configuration_->hresult = value.hresult;
+                }
                 const auto existing = std::find_if(
                     terminalHistory_.begin(),
                     terminalHistory_.end(),
@@ -663,7 +715,12 @@ private:
             }
             const auto environment = runWasapiEnvironmentProbe(*stream);
             if (environment.status != WasapiProbeStatus::available) {
-                setStartupFailure(environment.hresult);
+                setStartupFailure(
+                    environment.status == WasapiProbeStatus::unavailable
+                        ? WasapiWorkerConfigurationOutcome::unavailable
+                        : WasapiWorkerConfigurationOutcome::failed,
+                    environment.hresult
+                );
                 stream->close();
                 runUnavailable(stopToken);
             } else {
@@ -681,15 +738,29 @@ private:
                 {
                     std::lock_guard lock(mutex_);
                     currentGeneration_ = machine.generation();
+                    configuration_ = WasapiWorkerConfiguration{
+                        WasapiWorkerConfigurationOutcome::available,
+                        S_OK,
+                        machine.generation(),
+                        environment.bufferFrames,
+                        environment.clockFrequency,
+                        environment.pcmFormat,
+                    };
                 }
                 condition_.notify_all();
                 runReady(stopToken, environment, machine, queue);
             }
         } catch (const std::bad_alloc&) {
-            setStartupFailure(E_OUTOFMEMORY);
+            setStartupFailure(
+                WasapiWorkerConfigurationOutcome::failed,
+                E_OUTOFMEMORY
+            );
             runUnavailable(stopToken);
         } catch (...) {
-            setStartupFailure(E_UNEXPECTED);
+            setStartupFailure(
+                WasapiWorkerConfigurationOutcome::failed,
+                E_UNEXPECTED
+            );
             runUnavailable(stopToken);
         }
         rejectPending(E_ILLEGAL_METHOD_CALL);
@@ -807,6 +878,9 @@ private:
                 {
                     std::lock_guard lock(mutex_);
                     currentGeneration_ = value.generation;
+                    if (configuration_.has_value()) {
+                        configuration_->generation = value.generation;
+                    }
                 }
                 if ((controlCommand->kind == ControlKind::discardGeneration
                         || controlCommand->kind == ControlKind::installGeneration)
@@ -843,8 +917,8 @@ private:
                         }
                     );
                 }
-                complete(controlCommand->completion, value);
                 recordTerminal(value);
+                complete(controlCommand->completion, value);
                 closing = controlCommand->kind == ControlKind::close;
                 continue;
             }
@@ -882,10 +956,14 @@ private:
     std::optional<PcmCommand> pcm_;
     std::deque<WasapiOutputReceipt> terminalHistory_;
     std::optional<WasapiOutputReceipt> closeReceipt_;
+    std::optional<WasapiWorkerConfiguration> configuration_;
     std::optional<std::uint64_t> nextOutputSample_;
     std::uint64_t currentGeneration_{};
     std::stop_source renderCancellation_;
     HRESULT startupFailure_{E_UNEXPECTED};
+    WasapiWorkerConfigurationOutcome startupOutcome_{
+        WasapiWorkerConfigurationOutcome::failed
+    };
     bool renderWaitActive_{};
     bool startupUnavailable_{};
     bool closeStarted_{};
@@ -903,6 +981,12 @@ WasapiOutputWorker::WasapiOutputWorker(WasapiOutputWorkerStreamFactory factory)
     : impl_(std::make_unique<Impl>(std::move(factory))) {}
 
 WasapiOutputWorker::~WasapiOutputWorker() = default;
+
+WasapiWorkerConfiguration WasapiOutputWorker::configuration(
+    std::stop_token stopToken
+) {
+    return impl_->configuration(stopToken);
+}
 
 WasapiOutputReceipt WasapiOutputWorker::start(std::uint64_t expectedGeneration) {
     return impl_->control(ControlKind::start, expectedGeneration);

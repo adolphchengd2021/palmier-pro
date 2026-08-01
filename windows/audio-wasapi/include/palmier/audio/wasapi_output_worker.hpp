@@ -1,9 +1,7 @@
 #pragma once
 
-#include "wasapi_environment_session.hpp"
-#include "wasapi_output_backend.hpp"
+#include "palmier/audio/wasapi_output.hpp"
 
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -13,13 +11,29 @@
 
 namespace palmier::audio {
 
-class WasapiOutputWorkerStream :
-    public WasapiEnvironmentSession,
-    public WasapiOutputBackend {
-};
+class WasapiOutputWorkerStream;
 
 using WasapiOutputWorkerStreamFactory =
     std::function<std::unique_ptr<WasapiOutputWorkerStream>()>;
+
+enum class WasapiWorkerConfigurationOutcome {
+    available,
+    cancelled,
+    unavailable,
+    failed,
+    closed,
+};
+
+struct WasapiWorkerConfiguration final {
+    WasapiWorkerConfigurationOutcome outcome{
+        WasapiWorkerConfigurationOutcome::failed
+    };
+    HRESULT hresult{S_OK};
+    std::uint64_t generation{};
+    std::uint32_t bufferFrames{};
+    std::uint64_t clockFrequency{};
+    PcmFormat pcmFormat;
+};
 
 struct WasapiWorkerPcmBlock final {
     std::uint64_t generation{};
@@ -65,6 +79,7 @@ public:
     WasapiOutputWorker(const WasapiOutputWorker&) = delete;
     WasapiOutputWorker& operator=(const WasapiOutputWorker&) = delete;
 
+    WasapiWorkerConfiguration configuration(std::stop_token stopToken = {});
     WasapiOutputReceipt start(std::uint64_t expectedGeneration);
     WasapiOutputReceipt pause(std::uint64_t expectedGeneration);
     WasapiOutputReceipt discardGeneration(std::uint64_t expectedGeneration);

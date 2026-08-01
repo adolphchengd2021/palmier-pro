@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "owner": "windows/media-session",
+  "stateOwner": "one serial decode executor coordinates one persistent WASAPI device worker",
+  "states": [
+    "idle",
+    "preparing",
+    "playing",
+    "completed",
+    "cancelled",
+    "invalidated",
+    "failed",
+    "closed"
+  ],
+  "outcomes": [
+    "changed",
+    "noOp",
+    "cancelled",
+    "refused",
+    "failed",
+    "invalidated"
+  ],
+  "limits": {
+    "maximumPendingCommands": 8,
+    "maximumTerminalReceipts": 16,
+    "maximumPumpCapacityFrames": 4194304,
+    "maximumFramesPerFill": 65536,
+    "pcmHandoffSlots": 1
+  },
+  "invariants": {
+    "replacement": "open and prebuffer a candidate reader before installing an exact newer device generation",
+    "failedReplacement": "candidate open or decode failure preserves the active reader, generation, pending block, and device stream",
+    "candidateCancellation": "a lifecycle command cancels bounded candidate prebuffer work before the generation commit point",
+    "failureTeardown": "decode, handoff, and EOS failures discard the active generation before publishing its terminal receipt",
+    "handoff": "retain one decoded block until the device worker accepts it; cancellation retracts an unadmitted handoff",
+    "generationBarrier": "Stop, Reset, device queue clear, and stale handoff refusal complete before replacement acknowledgement",
+    "sampleDomain": "source samples remain contiguous and are rebased to a checked nonnegative stream-relative output cursor",
+    "endOfStream": "ordered EOS carries the exact final output sample and terminal completion waits for endpoint padding drain",
+    "clock": "successful Start returns a generation-matched device clock anchor for the requested timeline frame",
+    "close": "an active generation receives a separate cancellation terminal before device close; concurrent close joins once"
+  },
+  "excluded": [
+    "physical-device audible playback",
+    "gapless replacement while candidate open or decode is slow",
+    "default-device notifications and automatic reopen",
+    "seek, scrub, speed change, and time stretch",
+    "multitrack mixing, metering, and effects",
+    "A/V frame selection and drift correction",
+    "Windows 10 runtime certification"
+  ]
+}
