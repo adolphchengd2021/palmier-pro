@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "owner": "windows/render-d3d11",
+  "stateOwner": "one serialized surface owns the HWND swap chain, D3D11 immediate context, back buffer, presentation serial, terminal invalidation, and close state",
+  "threadContract": "call synchronous resize, upload, draw, present, and close operations from one background presentation executor, never the Qt UI thread",
+  "states": [
+    "idle",
+    "ready",
+    "occluded",
+    "invalidated",
+    "failed",
+    "closed"
+  ],
+  "outcomes": [
+    "presented",
+    "cleared",
+    "noOp",
+    "cancelled",
+    "refused",
+    "occluded",
+    "unavailable",
+    "invalidated",
+    "failed"
+  ],
+  "stages": [
+    "none",
+    "initialize",
+    "resize",
+    "upload",
+    "draw",
+    "present",
+    "clear",
+    "close"
+  ],
+  "receiptFields": [
+    "state",
+    "outcome",
+    "stage",
+    "hresult",
+    "width",
+    "height",
+    "presentSerial"
+  ],
+  "limits": {
+    "defaultMaximumSurfacePixels": 8294400
+  },
+  "invariants": {
+    "initialization": "device, immediate context, factory, shaders, constant buffer, and sampler are lazily created before the first swap chain",
+    "swapChain": "the HWND owns one two-buffer B8G8R8A8 flip-discard swap chain with Alt+Enter disabled",
+    "resize": "all direct and indirect back-buffer bindings are cleared and flushed before ResizeBuffers; invalid and unchanged dimensions do not mutate the surface",
+    "upload": "one validated RGBA32-float frame is uploaded to one immutable texture per admitted present with no unbounded queue",
+    "draw": "one full-screen triangle letterboxes the source into the current surface and clears uncovered pixels to opaque black",
+    "present": "one non-blocking Present call classifies success, occlusion, busy, unavailability, device loss, and failure without retry loops",
+    "cancellation": "pre-requested cancellation refuses each expensive phase before it begins and never reports an unpresented frame as presented",
+    "terminal": "device removal or reset permanently invalidates the instance; other unexpected HRESULT failures permanently fail it",
+    "close": "close releases back-buffer references before swap-chain, context, device, and factory ownership and returns one stable closed receipt"
+  },
+  "excluded": [
+    "Qt preview item integration",
+    "presentation timer ownership",
+    "zero-copy decoder texture interop",
+    "physical GPU performance",
+    "device recreation",
+    "HDR and wide-gamut output",
+    "Windows 10 runtime certification"
+  ]
+}

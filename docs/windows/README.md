@@ -121,6 +121,16 @@ executor. Its deterministic tests do not prove a physical endpoint, perceptible
 A/V synchronization, device recovery, or Windows 10 runtime behavior. See ADR
 0020 and `contracts/media/v1/headless-av-playback-session.json`.
 
+The first native preview surface owns one HWND flip-discard swap chain and a
+serialized D3D11 immediate context. It accepts complete frames from the shared
+renderer, performs one bounded upload/draw/non-blocking Present, letterboxes to
+opaque black, and explicitly classifies occlusion, busy, unavailable, device
+loss, cancellation, failure, and close. Its hidden-HWND WARP smoke proves only
+runner environment classification; Qt integration, visible pixels, cadence,
+physical-GPU performance, device recovery, A/V synchronization, and Windows 10
+runtime behavior remain open. See ADR 0021 and
+`contracts/render/v1/d3d11-preview-surface.json`.
+
 The first Qt target is an optional read-only project shell:
 
 ```powershell

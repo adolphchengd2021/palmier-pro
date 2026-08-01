@@ -3089,6 +3089,135 @@ def windows_headless_av_playback_contract() -> None:
             raise ContractError(f"headless A/V ADR missing token {token!r}")
 
 
+def windows_d3d11_preview_surface_contract() -> None:
+    contract = load_json("contracts/render/v1/d3d11-preview-surface.json")
+    header = read_text(
+        "windows/render-d3d11/include/palmier/render/"
+        "d3d11_preview_surface.hpp"
+    )
+    source = read_text("windows/render-d3d11/d3d11_preview_surface.cpp")
+    tests = read_text("windows/render-d3d11/tests/preview_surface_smoke.cpp")
+    cmake = read_text("windows/render-d3d11/CMakeLists.txt")
+    windows_readme = read_text("docs/windows/README.md")
+
+    require_equal("D3D11 preview version", contract.get("version"), CONTRACT_VERSION)
+    require_equal(
+        "D3D11 preview states",
+        cpp_enum_cases(header, "D3d11PreviewSurfaceState"),
+        contract.get("states"),
+    )
+    require_equal(
+        "D3D11 preview outcomes",
+        cpp_enum_cases(header, "D3d11PreviewSurfaceOutcome"),
+        contract.get("outcomes"),
+    )
+    require_equal(
+        "D3D11 preview stages",
+        cpp_enum_cases(header, "D3d11PreviewSurfaceStage"),
+        contract.get("stages"),
+    )
+    require_equal(
+        "D3D11 preview receipt fields",
+        cpp_stored_fields(header, "D3d11PreviewSurfaceReceipt"),
+        contract.get("receiptFields"),
+    )
+    require_equal(
+        "D3D11 preview limits",
+        contract.get("limits"),
+        {"defaultMaximumSurfacePixels": 3_840 * 2_160},
+    )
+    require_equal(
+        "D3D11 preview exclusions",
+        contract.get("excluded"),
+        [
+            "Qt preview item integration",
+            "presentation timer ownership",
+            "zero-copy decoder texture interop",
+            "physical GPU performance",
+            "device recreation",
+            "HDR and wide-gamut output",
+            "Windows 10 runtime certification",
+        ],
+    )
+    for token in [
+        "class D3d11PreviewSurface final",
+        "maximumSurfacePixels{3'840ULL * 2'160ULL}",
+        "D3d11PreviewSurfaceReceipt resize(",
+        "D3d11PreviewSurfaceReceipt present(",
+        "D3d11PreviewSurfaceReceipt clear(",
+        "D3d11PreviewSurfaceReceipt snapshot() const",
+        "D3d11PreviewSurfaceReceipt close()",
+    ]:
+        if token not in header:
+            raise ContractError(f"D3D11 preview API missing token {token!r}")
+    for token in [
+        "D3D11_CREATE_DEVICE_BGRA_SUPPORT",
+        "CreateSwapChainForHwnd(",
+        "DXGI_SWAP_EFFECT_FLIP_DISCARD",
+        "DXGI_MWA_NO_ALT_ENTER",
+        "releaseBackBuffer();",
+        "ResizeBuffers(",
+        "D3D11_USAGE_IMMUTABLE",
+        "DXGI_PRESENT_DO_NOT_WAIT",
+        "DXGI_PRESENT_TEST",
+        "DXGI_STATUS_OCCLUDED",
+        "DXGI_ERROR_WAS_STILL_DRAWING",
+        "DXGI_ERROR_DEVICE_REMOVED",
+        "cancellation.stop_requested()",
+        "++presentSerial_",
+        "context_->ClearState()",
+        "context_->Flush()",
+    ]:
+        if token not in source:
+            raise ContractError(f"D3D11 preview invariant missing token {token!r}")
+    if "while (" in source or "Sleep(" in source:
+        raise ContractError("D3D11 preview surface must not poll or retry")
+    for token in [
+        "presentsToAHiddenWarpSwapChain",
+        "validatesCancellationAndConfiguration",
+        "classifiesInjectedPresentResults",
+        "DXGI_STATUS_OCCLUDED",
+        "DXGI_ERROR_WAS_STILL_DRAWING",
+        "DXGI_ERROR_DEVICE_REMOVED",
+        "DXGI_ERROR_UNSUPPORTED",
+        "surface.resize(64, 48)",
+        "surface.resize(32, 32)",
+        "surface.close().state",
+    ]:
+        if token not in tests:
+            raise ContractError(f"D3D11 preview test missing token {token!r}")
+    for token in [
+        "d3d11_preview_surface.cpp",
+        "PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN",
+        "palmier_d3d11_preview_surface_smoke",
+        "render_d3d11.hidden_hwnd_warp_present_smoke",
+        "PROPERTIES RUN_SERIAL TRUE TIMEOUT 30",
+    ]:
+        if token not in cmake:
+            raise ContractError(f"D3D11 preview CMake missing token {token!r}")
+    for token in [
+        "one HWND flip-discard swap chain",
+        "one bounded upload/draw/non-blocking Present",
+        "Qt integration, visible pixels, cadence",
+        "contracts/render/v1/d3d11-preview-surface.json",
+    ]:
+        if token not in windows_readme:
+            raise ContractError(f"D3D11 preview README missing token {token!r}")
+    adr = read_text("docs/windows/adr/0021-d3d11-hwnd-preview-surface.md")
+    for token in [
+        "single serialized owner",
+        "never from the UI thread",
+        "only then\ncalls `ResizeBuffers`",
+        "There is no frame queue and no retry loop",
+        "DXGI_ERROR_WAS_STILL_DRAWING",
+        "does not advance `presentSerial`",
+        "do not prove Qt integration",
+        "Windows 10 build 19045 behavior",
+    ]:
+        if token not in adr:
+            raise ContractError(f"D3D11 preview ADR missing token {token!r}")
+
+
 def windows_audio_wasapi_contract() -> None:
     root_cmake = read_text("CMakeLists.txt")
     audio_cmake = read_text("windows/audio-wasapi/CMakeLists.txt")
@@ -3656,6 +3785,7 @@ def main() -> int:
         ("Windows FFmpeg presentation pipeline", windows_ffmpeg_presentation_pipeline_contract),
         ("Windows FFmpeg to WASAPI audio pipeline", windows_ffmpeg_wasapi_audio_pipeline_contract),
         ("Windows headless A/V playback", windows_headless_av_playback_contract),
+        ("Windows D3D11 preview surface", windows_d3d11_preview_surface_contract),
         ("Windows WASAPI clock and environment probe", windows_audio_wasapi_contract),
         ("Windows bounded WASAPI output", windows_wasapi_output_contract),
         ("Windows Qt read-only project shell", windows_qt_read_only_shell_contract),
