@@ -2876,7 +2876,12 @@ def windows_wasapi_output_contract() -> None:
     output_source = read_text("windows/audio-wasapi/wasapi_output.cpp")
     native_source = read_text("windows/audio-wasapi/wasapi_native_stream.cpp")
     smoke_source = read_text("windows/audio-wasapi/wasapi_silent_output_probe.cpp")
+    worker_header = read_text("windows/audio-wasapi/wasapi_output_worker.hpp")
+    worker_source = read_text("windows/audio-wasapi/wasapi_output_worker.cpp")
     tests = read_text("windows/audio-wasapi/tests/wasapi_output_tests.cpp")
+    worker_tests = read_text(
+        "windows/audio-wasapi/tests/wasapi_output_worker_tests.cpp"
+    )
     audio_cmake = read_text("windows/audio-wasapi/CMakeLists.txt")
 
     if contract.get("version") != CONTRACT_VERSION:
@@ -2958,6 +2963,27 @@ def windows_wasapi_output_contract() -> None:
         if token not in smoke_source:
             raise ContractError(f"WASAPI silent smoke missing token {token!r}")
     for token in [
+        "class WasapiOutputWorker",
+        "WasapiWorkerPcmBlock",
+        "startOutputSample",
+        "markEndOfStream",
+        "waitForTerminal",
+    ]:
+        if token not in worker_header:
+            raise ContractError(f"WASAPI worker API missing token {token!r}")
+    for token in [
+        "std::jthread worker_",
+        "runWasapiEnvironmentProbe(*stream)",
+        "interruptRenderLocked",
+        "renderCancellation_.request_stop()",
+        "expectedGeneration != machine.generation()",
+        "block->pcmFormat != format",
+        "block->startOutputSample != *nextOutputSample_",
+        "queue.markEndOfStream()",
+    ]:
+        if token not in worker_source:
+            raise ContractError(f"WASAPI worker invariant missing token {token!r}")
+    for token in [
         "primesBeforeStartAndCommitsOnlyReleasedPcm",
         "rendersOnlyAfterAnEventAndCountsUnderrun",
         "endOfStreamWithoutMediaCompletesBeforeStart",
@@ -2977,8 +3003,23 @@ def windows_wasapi_output_contract() -> None:
         if token not in tests:
             raise ContractError(f"WASAPI output tests missing token {token!r}")
     for token in [
+        "controlPreemptsRenderWaitAndKeepsNativeOwnership",
+        "orderedPcmAndEndOfStreamReachOneTerminalReceipt",
+        "fullReadyQueueReturnsRetryWithoutSpinning",
+        "completedDiscardDoesNotReuseTheOldTerminal",
+        "generationBarrierRejectsPendingHandoffBeforeAcknowledgement",
+        "cancellationRemovesAnUnadmittedHandoff",
+        "setupFailureReturnsReceiptsWithoutStartingNativeOutput",
+        "concurrentCloseJoinsTheDeviceThreadExactlyOnce",
+        "thread == state->constructedThread",
+    ]:
+        if token not in worker_tests:
+            raise ContractError(f"WASAPI worker tests missing token {token!r}")
+    for token in [
         "audio_wasapi.output_state",
+        "audio_wasapi.output_worker",
         "audio_wasapi.output_silence_smoke",
+        "PROPERTIES TIMEOUT 10",
         "RUN_SERIAL TRUE TIMEOUT 30",
     ]:
         if token not in audio_cmake:

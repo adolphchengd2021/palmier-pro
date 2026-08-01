@@ -10,11 +10,12 @@
 Keep the existing environment probe as a no-start diagnostic. Add a separate
 output seam whose mutable state is owned by one serial audio worker. The state
 machine exposes ready, primed, running, stopped, invalidated, failed, completed,
-and closed
-states. It owns generation changes, bounded PCM consumption, underrun counts,
-buffer leases, control ordering, and structured receipts. Callers may enqueue
-precomputed mix-format PCM only through the future serial worker façade. The
-shared `PcmFormat` validates encoding, container and valid bits, channel mask,
+and closed states. The persistent device worker constructs, calls, closes, and
+destroys the native stream on its one STA thread. It owns bounded PCM
+consumption, underrun counts, buffer leases, control ordering, and structured
+receipts. The higher-level control owner supplies exact generation identities.
+Callers enqueue precomputed mix-format PCM only through a bounded one-slot
+handoff. The shared `PcmFormat` validates encoding, container and valid bits, channel mask,
 block align, sample rate, channel count, and interleaving before construction;
 the prototype queue remains private and may not be called across threads.
 
@@ -51,14 +52,29 @@ rules. Its lifetime remains on one dedicated STA thread. An interruptible OS
 wait observes the render event and a cancellation event without polling or
 sleeping.
 
+The worker uses a bounded priority control lane and a separate PCM lane. A new
+control command or PCM handoff cancels the active render wait so the device
+thread can process it without polling. Every PCM block carries its generation, first
+output sample, frame count, exact `PcmFormat`, and bytes. The worker rejects
+stale generations, format drift, non-contiguous samples, invalid sizes, and
+overflow before queue admission. End of stream shares the ordered PCM lane and
+must name the exact final output sample.
+
 ## Tests
 
 Injected tests prove prime-before-start order, checked padding subtraction,
 same-thread acquire/release, full and partial silence behavior, transactional
 PCM commit, cancellation inside and after a lease, event-before-render order,
-underrun versus exact-tail end-of-stream completion, invalidation generation changes,
+underrun versus exact-tail end-of-stream completion, invalidation generation preservation,
 pause/resume/reset/no-op transitions, degraded clock receipts, stage/HRESULT
 preservation, and stop-before-close teardown.
+
+Worker tests prove that control interrupts a registered render wait, stale
+commands cannot mutate a generation, PCM sample discontinuities are refused,
+ordered PCM and end of stream produce one terminal completion, setup failures
+remain observable, cancellation retracts an unadmitted handoff, concurrent
+close joins exactly once, and all stream calls plus construction and
+destruction stay on the device thread.
 
 A separate serial CTest performs one bounded native silent cycle: setup, prime,
 start, wait up to two seconds for a render event, sample the clock, stop, reset,
@@ -74,10 +90,11 @@ PCM, physical channel mapping, media playback, device-change recovery,
 default-device migration, long-run underrun behavior, A/V synchronization,
 physical hardware compatibility, or Windows 10 build 19045 behavior.
 
-Before production playback, add the bounded decode-executor to STA-worker
-handoff, automatic generation-checked reopen, default-device notifications,
-and a queryable asynchronous terminal status. Measure drift and underruns on a
-physical Windows 10 fixture rather than inferring them from this silent smoke.
+Before production playback, connect the bounded decode executor to the STA
+worker, add automatic generation-checked reopen and default-device
+notifications, and expose terminal receipts through the session owner. Measure
+drift and underruns on a physical Windows 10 fixture rather than inferring them
+from this silent smoke.
 
 ## Primary references
 

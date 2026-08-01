@@ -54,6 +54,12 @@
     "discard": "when audio is pending, Stop and Reset flush released engine audio while preserving the current generation identity; an already empty ready generation is a no-op",
     "invalidation": "report the current generation without inventing a replacement identity"
   },
+  "worker": {
+    "nativeOwnership": "construct, call, close, and destroy the stream on one persistent device thread",
+    "controlLane": "a bounded set of generation and lifecycle commands has priority and interrupts the active render wait",
+    "pcmLane": "one bounded generation-tagged handoff; exact PCM identity and contiguous output samples",
+    "terminal": "end of stream becomes terminal only after queued PCM and endpoint padding drain"
+  },
   "nativeSmoke": {
     "payload": "silence only",
     "timeoutMilliseconds": 2000,
