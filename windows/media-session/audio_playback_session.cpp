@@ -13,6 +13,7 @@
 #include <mutex>
 #include <new>
 #include <optional>
+#include <stop_token>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -42,6 +43,7 @@ struct Command final {
     std::filesystem::path input;
     std::int64_t timelineFrame{};
     std::uint64_t expectedGeneration{};
+    std::stop_token cancellation;
     std::shared_ptr<CommandCompletion> completion;
 };
 
@@ -124,6 +126,28 @@ public:
         std::int64_t timelineFrame
     ) {
         return command(CommandKind::play, input, timelineFrame, 0);
+    }
+
+    AudioPlaybackReceipt playExactGeneration(
+        const std::filesystem::path& input,
+        std::int64_t timelineFrame,
+        std::uint64_t generation,
+        std::stop_token cancellation
+    ) {
+        if (generation == 0) {
+            auto value = snapshot();
+            value.outcome = AudioPlaybackOutcome::refused;
+            value.failure = AudioPlaybackFailureCode::invalidRequest;
+            value.hresult = E_INVALIDARG;
+            return value;
+        }
+        return command(
+            CommandKind::play,
+            input,
+            timelineFrame,
+            generation,
+            cancellation
+        );
     }
 
     AudioPlaybackReceipt cancel(std::uint64_t expectedGeneration) {
@@ -353,7 +377,8 @@ private:
         CommandKind kind,
         const std::filesystem::path& input,
         std::int64_t timelineFrame,
-        std::uint64_t expectedGeneration
+        std::uint64_t expectedGeneration,
+        std::stop_token cancellation = {}
     ) {
         auto completion = std::make_shared<CommandCompletion>();
         {
@@ -381,6 +406,7 @@ private:
                 input,
                 timelineFrame,
                 expectedGeneration,
+                cancellation,
                 completion,
             });
             handoffCancellation_.request_stop();
@@ -754,6 +780,13 @@ private:
     }
 
     AudioPlaybackReceipt executePlay(const Command& commandValue) {
+        std::stop_callback commandCancellation(
+            commandValue.cancellation,
+            [this] {
+                requestHandoffCancellation();
+                condition_.notify_all();
+            }
+        );
         const auto previous = snapshot();
         if (commandValue.input.empty() || commandValue.timelineFrame < 0) {
             auto value = previous;
@@ -764,7 +797,9 @@ private:
         }
         if (previous.state == AudioPlaybackState::playing
             && commandValue.input == input_
-            && commandValue.timelineFrame == timelineFrame_) {
+            && commandValue.timelineFrame == timelineFrame_
+            && (commandValue.expectedGeneration == 0
+                || commandValue.expectedGeneration == generation_)) {
             auto value = previous;
             value.outcome = AudioPlaybackOutcome::noOp;
             return value;
@@ -817,6 +852,15 @@ private:
                 : AudioPlaybackFailureCode::invariantFailure;
             value.hresult = E_UNEXPECTED;
             publish(value);
+            return value;
+        }
+        if (commandValue.expectedGeneration != 0
+            && commandValue.expectedGeneration != nextGeneration) {
+            auto value = previous;
+            value.outcome = AudioPlaybackOutcome::refused;
+            value.stage = AudioPlaybackStage::installGeneration;
+            value.failure = AudioPlaybackFailureCode::invalidRequest;
+            value.hresult = E_INVALIDARG;
             return value;
         }
 
@@ -1352,6 +1396,7 @@ private:
             if (commandValue.has_value()) {
                 beginCommandHandoffCancellation(commandValue->kind);
                 AudioPlaybackReceipt value;
+                const auto generationBeforeCommand = generation_;
                 try {
                     switch (commandValue->kind) {
                     case CommandKind::play:
@@ -1376,6 +1421,11 @@ private:
                     if (commandValue->kind == CommandKind::close) {
                         closing = true;
                     }
+                }
+                if (commandValue->kind == CommandKind::play
+                    && generation_ == generationBeforeCommand
+                    && value.state == AudioPlaybackState::playing) {
+                    beginCommandHandoffCancellation(CommandKind::play);
                 }
                 complete(commandValue->completion, value);
                 continue;
@@ -1439,6 +1489,20 @@ AudioPlaybackReceipt AudioPlaybackSession::play(
     std::int64_t timelineFrame
 ) {
     return impl_->play(input, timelineFrame);
+}
+
+AudioPlaybackReceipt AudioPlaybackSession::playExactGeneration(
+    const std::filesystem::path& input,
+    std::int64_t timelineFrame,
+    std::uint64_t generation,
+    std::stop_token cancellation
+) {
+    return impl_->playExactGeneration(
+        input,
+        timelineFrame,
+        generation,
+        cancellation
+    );
 }
 
 AudioPlaybackReceipt AudioPlaybackSession::cancel(

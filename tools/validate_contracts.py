@@ -2832,6 +2832,7 @@ def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
     for token in [
         "class AudioPlaybackSession final",
         "AudioPlaybackReceipt play(",
+        "AudioPlaybackReceipt playExactGeneration(",
         "AudioPlaybackReceipt cancel(",
         "AudioPlaybackReceipt waitForTerminal(",
         "AudioPlaybackPositionReceipt position(",
@@ -2848,6 +2849,7 @@ def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
         "commandValue.input,\n                commandToken",
         "prebuffer(",
         "output_->installGeneration(",
+        "commandValue.expectedGeneration != nextGeneration",
         "pendingBlock_",
         "handoffCancellation_.request_stop()",
         "block.startOutputSample != expectedSourceSample",
@@ -2872,6 +2874,13 @@ def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
         "playsRealPcmToOneTerminalAndAnchorsTheClock",
         "failedReplacementPreservesTheRunningGeneration",
         "successfulReplacementFlushesOldPcmAndUsesAnExactGeneration",
+        "exactGenerationRestartsAnOtherwiseIdenticalRequest",
+        "cancelledExactReplacementResumesTheActiveGeneration",
+        "pre-cancelled exact generation was accepted",
+        "cancelled exact generation poisoned the next request",
+        "cancelled replacement poisoned active handoff",
+        "incorrect first exact generation was accepted",
+        "skipped exact generation was accepted",
         "rejectsInvalidRequestsAndPreservesNoOpState",
         "concurrentCloseJoinsTheSessionAndDeviceExactlyOnce",
         "state->captured == expected",
@@ -2899,7 +2908,7 @@ def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
         "docs/windows/adr/0018-audio-playback-session-ownership.md"
     )
     for token in [
-        "sole playback-generation owner",
+        "sole audio playback-generation owner",
         "opens and prebuffers a candidate reader",
         "unadmitted block is retracted",
         "first admitted source sample is rebased to output sample zero",
@@ -2911,6 +2920,173 @@ def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
     ]:
         if token not in session_adr:
             raise ContractError(f"audio playback session ADR missing token {token!r}")
+
+
+def windows_headless_av_playback_contract() -> None:
+    contract = load_json(
+        "contracts/media/v1/headless-av-playback-session.json"
+    )
+    header = read_text(
+        "windows/media-session/include/palmier/media/"
+        "headless_av_playback_session.hpp"
+    )
+    source = read_text(
+        "windows/media-session/headless_av_playback_session.cpp"
+    )
+    audio_header = read_text(
+        "windows/media-session/include/palmier/media/audio_playback_session.hpp"
+    )
+    audio_source = read_text(
+        "windows/media-session/audio_playback_session.cpp"
+    )
+    tests = read_text(
+        "windows/media-session/tests/headless_av_playback_session_tests.cpp"
+    )
+    cmake = read_text("windows/media-session/CMakeLists.txt")
+
+    require_equal("headless A/V version", contract.get("version"), CONTRACT_VERSION)
+    require_equal(
+        "headless A/V states",
+        cpp_enum_cases(header, "HeadlessAvPlaybackState"),
+        contract.get("states"),
+    )
+    require_equal(
+        "headless A/V outcomes",
+        cpp_enum_cases(header, "HeadlessAvPlaybackOutcome"),
+        contract.get("outcomes"),
+    )
+    require_equal(
+        "headless A/V stages",
+        cpp_enum_cases(header, "HeadlessAvPlaybackStage"),
+        contract.get("stages"),
+    )
+    require_equal(
+        "headless A/V failures",
+        cpp_enum_cases(header, "HeadlessAvPlaybackFailureCode"),
+        contract.get("failures"),
+    )
+    require_equal(
+        "headless A/V receipt fields",
+        cpp_stored_fields(header, "HeadlessAvPlaybackReceipt"),
+        contract.get("receiptFields"),
+    )
+    require_equal(
+        "headless A/V limits",
+        contract.get("limits"),
+        {
+            "defaultVideoFillCallsPerTick": 2,
+            "maximumVideoFillCallsPerTick": 4,
+        },
+    )
+    require_equal(
+        "headless A/V exclusions",
+        contract.get("excluded"),
+        [
+            "timer or presenter ownership",
+            "interactive swap-chain presentation",
+            "physical-device audible A/V synchronization",
+            "final hardware endpoint position at audio completion",
+            "seek, scrub, speed change, and drift correction",
+            "device recovery",
+            "Windows 10 runtime certification",
+        ],
+    )
+    for token in [
+        "class HeadlessAvPlaybackAudioPort",
+        "class HeadlessAvPlaybackSession final",
+        "maximumVideoFillCallsPerTick{2}",
+        "HeadlessAvPlaybackReceipt play(",
+        "HeadlessAvPlaybackReceipt tick(",
+        "HeadlessAvPlaybackReceipt cancel(",
+        "HeadlessAvPlaybackReceipt snapshot() const",
+        "HeadlessAvPlaybackReceipt close()",
+    ]:
+        if token not in header:
+            raise ContractError(f"headless A/V API missing token {token!r}")
+    for token in [
+        "maximumConfigurableFillCallsPerTick = 4",
+        "std::make_unique<PresentationVideoDecodePump>(limits_.video)",
+        "candidate->start(nextGeneration, input, operationToken)",
+        "candidate->fill(nextGeneration, operationToken)",
+        "audio_->playExactGeneration(",
+        "video_ = std::move(candidate)",
+        "position = audio_->position(expectedGeneration)",
+        "position.clockAnchor.sourcePresentationTimestamp",
+        "video_->select(",
+        "video_->revision()",
+        "value.fillCalls >= limits_.maximumVideoFillCallsPerTick",
+        "++value.droppedFrames",
+        "fillBudgetExhausted = true",
+        "closeReceipt_.has_value()",
+        "std::lock_guard operationLock(operationMutex_)",
+        "pendingCancellation_ = expectedGeneration",
+        "closeRequested_ = true",
+    ]:
+        if token not in source:
+            raise ContractError(f"headless A/V invariant missing token {token!r}")
+    if "audio::timelineFrame(" in source or "targetPresentationTimestamp(" in source:
+        raise ContractError("headless A/V coordinator duplicates clock math")
+    prepare_index = source.index("candidate->start(nextGeneration, input, operationToken)")
+    audio_index = source.index("audio_->playExactGeneration(")
+    commit_index = source.index("video_ = std::move(candidate)")
+    if not prepare_index < audio_index < commit_index:
+        raise ContractError("headless A/V replacement order changed")
+    for token in [
+        "AudioPlaybackReceipt playExactGeneration(",
+        "std::stop_token cancellation = {}",
+    ]:
+        if token not in audio_header:
+            raise ContractError(f"audio exact-generation API missing token {token!r}")
+    for token in [
+        "commandValue.expectedGeneration != nextGeneration",
+        "std::stop_callback commandCancellation(",
+        "commandValue.cancellation",
+    ]:
+        if token not in audio_source:
+            raise ContractError(f"audio exact-generation invariant missing token {token!r}")
+    for token in [
+        "playsAndTicksOneRealVideoGeneration",
+        "failedReplacementPreservesTheActiveGeneration",
+        "boundsCatchUpAndDeliversOnlyTheLatestFrame",
+        "noSampleAndAudioTerminalsDoNotGuessVideoTime",
+        "validatesRequestsCancellationAndConcurrentClose",
+        "state->positionCalls == 1",
+        "post-commit failure kept old generation",
+        "close did not cancel active play",
+        "cancelled video preparation stopped old audio",
+        "play was admitted after close requested",
+        "same play reached audio",
+        "frame-rate replacement did not advance",
+        "tick.frame->presentationTimestamp == 2'048",
+        "tick.fillCalls == 2",
+        "tick.droppedFrames == 2",
+        "state->closeCalls == 1",
+    ]:
+        if token not in tests:
+            raise ContractError(f"headless A/V test missing token {token!r}")
+    for token in [
+        "headless_av_playback_session.cpp",
+        "palmier_headless_av_playback_session_tests",
+        "media_session.headless_av_playback_session",
+        "PROPERTIES TIMEOUT 30",
+    ]:
+        if token not in cmake:
+            raise ContractError(f"headless A/V CMake missing token {token!r}")
+    adr = read_text("docs/windows/adr/0020-headless-av-playback-coordinator.md")
+    for token in [
+        "single A/V generation and lifecycle owner",
+        "must be called from a background coordinator executor",
+        "no-fail `unique_ptr` swap",
+        "failure after\nits exact generation has committed",
+        "reads `AudioPlaybackSession::position` exactly once",
+        "only the newest is",
+        "Audio is the master terminal",
+        "request it before waiting for the state mutex",
+        "publishes a permanent admission gate",
+        "not prove a timer cadence",
+    ]:
+        if token not in adr:
+            raise ContractError(f"headless A/V ADR missing token {token!r}")
 
 
 def windows_audio_wasapi_contract() -> None:
@@ -3479,6 +3655,7 @@ def main() -> int:
         ("Windows presentation video buffer", windows_presentation_video_buffer_contract),
         ("Windows FFmpeg presentation pipeline", windows_ffmpeg_presentation_pipeline_contract),
         ("Windows FFmpeg to WASAPI audio pipeline", windows_ffmpeg_wasapi_audio_pipeline_contract),
+        ("Windows headless A/V playback", windows_headless_av_playback_contract),
         ("Windows WASAPI clock and environment probe", windows_audio_wasapi_contract),
         ("Windows bounded WASAPI output", windows_wasapi_output_contract),
         ("Windows Qt read-only project shell", windows_qt_read_only_shell_contract),

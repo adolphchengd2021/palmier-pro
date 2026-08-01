@@ -3,6 +3,7 @@ set(media_session_include_dir "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_library(
     palmier_media_session STATIC
     audio_playback_session.cpp
+    headless_av_playback_session.cpp
     presentation_video_buffer.cpp
     presentation_video_decode_pump.cpp
     presentation_audio_decode_pump.cpp
@@ -127,6 +128,32 @@ if(BUILD_TESTING)
     )
     set_tests_properties(
         media_session.audio_playback_session
+        PROPERTIES TIMEOUT 30
+    )
+
+    add_executable(
+        palmier_headless_av_playback_session_tests
+        tests/headless_av_playback_session_tests.cpp
+    )
+    target_link_libraries(
+        palmier_headless_av_playback_session_tests
+        PRIVATE palmier_media_session
+    )
+    target_include_directories(
+        palmier_headless_av_playback_session_tests
+        PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/../media-ffmpeg/tests"
+    )
+    target_compile_options(
+        palmier_headless_av_playback_session_tests
+        PRIVATE /W4 /WX /permissive- /Zc:__cplusplus /utf-8
+    )
+    add_test(
+        NAME media_session.headless_av_playback_session
+        COMMAND palmier_headless_av_playback_session_tests
+    )
+    set_tests_properties(
+        media_session.headless_av_playback_session
         PROPERTIES TIMEOUT 30
     )
 endif()

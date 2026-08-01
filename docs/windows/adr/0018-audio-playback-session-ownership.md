@@ -7,11 +7,20 @@
 
 ## Decision
 
-`AudioPlaybackSession` is the sole playback-generation owner. One serial decode
+`AudioPlaybackSession` is the sole audio playback-generation owner. One serial decode
 executor owns `PresentationAudioDecodePump`, its pending immutable block, the
 source-sample cursor, the stream-relative output cursor, and lifecycle command
 ordering. A separate persistent STA device worker owns all native WASAPI
 interfaces, its bounded PCM queue, render waits, and device terminal receipts.
+
+ADR 0020 may require the session's exact next generation before preparation.
+A mismatched requested generation is refused before opening the audio input or
+installing device state; the standalone `play` entry point retains automatic
+generation allocation. An exact-generation request may carry a stop token. The
+worker binds it after installing that command's fresh handoff stop source, so
+queued cancellation cannot be lost and cannot stop an older active generation.
+If a cancelled replacement preserves that older generation, the worker renews
+its handoff source before resuming the active pump.
 
 A play or replacement request first obtains the exact device mix format and
 buffer size. It opens and prebuffers a candidate reader before changing the

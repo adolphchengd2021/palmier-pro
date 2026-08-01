@@ -28,9 +28,9 @@
     "pcmHandoffSlots": 1
   },
   "invariants": {
-    "replacement": "open and prebuffer a candidate reader before installing an exact newer device generation",
+    "replacement": "open and prebuffer a candidate reader before installing an exact newer device generation; a caller may require that exact generation before preparation",
     "failedReplacement": "candidate open or decode failure preserves the active reader, generation, pending block, and device stream",
-    "candidateCancellation": "a lifecycle command cancels bounded candidate prebuffer work before the generation commit point",
+    "candidateCancellation": "a lifecycle command or a stop token bound to an exact-generation command cancels bounded candidate prebuffer work before the generation commit point",
     "failureTeardown": "decode, handoff, and EOS failures discard the active generation before publishing its terminal receipt",
     "handoff": "retain one decoded block until the device worker accepts it; cancellation retracts an unadmitted handoff",
     "generationBarrier": "Stop, Reset, device queue clear, and stale handoff refusal complete before replacement acknowledgement",

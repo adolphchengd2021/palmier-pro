@@ -357,10 +357,26 @@ void successfulReplacementFlushesOldPcmAndUsesAnExactGeneration() {
     auto state = std::make_shared<PlaybackStreamState>();
     state->automaticRender.store(false);
     AudioPlaybackSession session(outputWorker(state));
-    require(session.play(first).generation == 1, "first generation changed");
+    require(
+        session.playExactGeneration(first, 0, 2).outcome
+            == AudioPlaybackOutcome::refused,
+        "incorrect first exact generation was accepted"
+    );
+    require(session.snapshot().generation == 0, "refused exact generation committed");
+    require(
+        session.playExactGeneration(first, 0, 1).generation == 1,
+        "first exact generation changed"
+    );
+
+    require(
+        session.playExactGeneration(second, 60, 3).outcome
+            == AudioPlaybackOutcome::refused,
+        "skipped exact generation was accepted"
+    );
+    require(session.snapshot().generation == 1, "skipped generation changed state");
 
     state->automaticRender.store(true);
-    const auto replaced = session.play(second, 60);
+    const auto replaced = session.playExactGeneration(second, 60, 2);
     require(replaced.outcome == AudioPlaybackOutcome::changed, "replacement failed");
     require(replaced.state == AudioPlaybackState::playing, "replacement did not play");
     require(replaced.generation == 2, "replacement generation was not exact");
@@ -376,6 +392,69 @@ void successfulReplacementFlushesOldPcmAndUsesAnExactGeneration() {
         std::lock_guard lock(state->mutex);
         require(state->captured == expected, "replacement retained old PCM");
     }
+    require(session.close().state == AudioPlaybackState::closed, "close failed");
+}
+
+void exactGenerationRestartsAnOtherwiseIdenticalRequest() {
+    TemporaryDirectory media;
+    const auto input = media.write(
+        "active.wav",
+        palmier::media::test_fixtures::patternedPcmWav
+    );
+    auto state = std::make_shared<PlaybackStreamState>();
+    state->automaticRender.store(false);
+    AudioPlaybackSession session(outputWorker(state));
+    std::stop_source cancelled;
+    cancelled.request_stop();
+    require(
+        session.playExactGeneration(input, 0, 1, cancelled.get_token()).outcome
+            == AudioPlaybackOutcome::cancelled,
+        "pre-cancelled exact generation was accepted"
+    );
+    require(
+        session.snapshot().generation == 0,
+        "pre-cancelled exact generation committed"
+    );
+    require(
+        session.playExactGeneration(input, 0, 1).generation == 1,
+        "cancelled exact generation poisoned the next request"
+    );
+    const auto restarted = session.playExactGeneration(input, 0, 2);
+    require(restarted.outcome == AudioPlaybackOutcome::changed, "exact restart no-op'd");
+    require(restarted.generation == 2, "exact restart changed generation");
+    require(session.cancel(2).state == AudioPlaybackState::cancelled, "cancel failed");
+    require(session.close().state == AudioPlaybackState::closed, "close failed");
+}
+
+void cancelledExactReplacementResumesTheActiveGeneration() {
+    TemporaryDirectory media;
+    const auto input = media.write(
+        "active.wav",
+        palmier::media::test_fixtures::patternedPcmWav
+    );
+    auto state = std::make_shared<PlaybackStreamState>();
+    state->automaticRender.store(false);
+    AudioPlaybackSession session(outputWorker(state));
+    require(session.playExactGeneration(input, 0, 1).generation == 1, "play failed");
+
+    std::stop_source cancelled;
+    cancelled.request_stop();
+    const auto replacement = session.playExactGeneration(
+        input,
+        1,
+        2,
+        cancelled.get_token()
+    );
+    require(replacement.outcome == AudioPlaybackOutcome::cancelled, "replacement was not cancelled");
+    require(replacement.generation == 1, "cancelled replacement changed generation");
+    require(replacement.state == AudioPlaybackState::playing, "cancelled replacement stopped playback");
+
+    state->automaticRender.store(true);
+    SetEvent(state->renderEvent.get());
+    require(
+        session.waitForTerminal(1).state == AudioPlaybackState::completed,
+        "cancelled replacement poisoned active handoff"
+    );
     require(session.close().state == AudioPlaybackState::closed, "close failed");
 }
 
@@ -461,6 +540,8 @@ int main() {
         playsRealPcmToOneTerminalAndAnchorsTheClock();
         failedReplacementPreservesTheRunningGeneration();
         successfulReplacementFlushesOldPcmAndUsesAnExactGeneration();
+        exactGenerationRestartsAnOtherwiseIdenticalRequest();
+        cancelledExactReplacementResumesTheActiveGeneration();
         rejectsInvalidRequestsAndPreservesNoOpState();
         concurrentCloseJoinsTheSessionAndDeviceExactlyOnce();
         std::cout << "Audio playback session tests passed\n";

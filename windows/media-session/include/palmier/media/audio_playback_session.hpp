@@ -105,6 +105,12 @@ public:
         const std::filesystem::path& input,
         std::int64_t timelineFrame = 0
     );
+    AudioPlaybackReceipt playExactGeneration(
+        const std::filesystem::path& input,
+        std::int64_t timelineFrame,
+        std::uint64_t generation,
+        std::stop_token cancellation = {}
+    );
     AudioPlaybackReceipt cancel(std::uint64_t expectedGeneration);
     AudioPlaybackReceipt waitForTerminal(
         std::uint64_t generation,

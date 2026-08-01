@@ -113,6 +113,14 @@ admitted source PTS and time base alongside its device clock anchor and now uses
 that mapping for deterministic headless frame hold/drop/select behavior.
 See ADR 0013 and `contracts/audio/v1/wasapi-output.json`.
 
+The first headless A/V coordinator prepares a separate video candidate before
+an exact-generation audio commit, reads one cached audio position per tick, and
+uses the shared presentation selector for bounded fill/drop/select. It creates
+no timer, presenter, thread, or swap chain and must run on a background owner
+executor. Its deterministic tests do not prove a physical endpoint, perceptible
+A/V synchronization, device recovery, or Windows 10 runtime behavior. See ADR
+0020 and `contracts/media/v1/headless-av-playback-session.json`.
+
 The first Qt target is an optional read-only project shell:
 
 ```powershell
