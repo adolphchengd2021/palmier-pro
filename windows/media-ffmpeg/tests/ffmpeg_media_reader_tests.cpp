@@ -21,6 +21,7 @@ namespace {
 using palmier::media::AlphaMode;
 using palmier::media::DecodeLimits;
 using palmier::media::FfmpegMediaReader;
+using palmier::media::FfmpegVideoFrameReader;
 using palmier::media::MediaError;
 using palmier::media::MediaFailureCode;
 using palmier::media::RenderSourceError;
@@ -209,6 +210,70 @@ void decodesStraightAlphaAndRotation(const std::filesystem::path& input) {
     throw std::runtime_error("unknown alpha reached the render source");
 }
 
+void decodesPresentationOrderedFrames(const std::filesystem::path& input) {
+    constexpr std::array<std::int64_t, 3> timestamps{0, 1'024, 2'048};
+    constexpr std::array<std::uint8_t, 72> expected{
+        255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255,
+        255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 0, 255,
+        0, 255, 255, 255, 255, 0, 255, 255, 128, 128, 128, 255,
+        255, 128, 0, 255, 0, 128, 128, 255, 128, 0, 128, 255,
+        64, 0, 0, 255, 0, 64, 0, 255, 0, 0, 64, 255,
+        32, 64, 96, 255, 96, 64, 32, 255, 200, 100, 50, 255,
+    };
+
+    FfmpegVideoFrameReader reader(input);
+    for (std::size_t index = 0; index < timestamps.size(); ++index) {
+        const auto frame = reader.nextFrame();
+        require(frame.has_value(), "multi-frame fixture ended early");
+        require(frame->width == 3 && frame->height == 2, "wrong multi-frame size");
+        require(frame->rowBytes == 12, "wrong multi-frame stride");
+        require(
+            frame->presentationTimestamp == timestamps[index],
+            "wrong multi-frame presentation timestamp"
+        );
+        require(
+            frame->timeBase.numerator == 1
+                && frame->timeBase.denominator == 10'240,
+            "wrong multi-frame time base"
+        );
+        require(frame->alphaMode == AlphaMode::opaque, "multi-frame alpha is not opaque");
+        const auto expectedStart = expected.begin() + static_cast<std::ptrdiff_t>(index * 24);
+        require(
+            std::equal(
+                frame->rgba8.begin(),
+                frame->rgba8.end(),
+                expectedStart,
+                expectedStart + 24
+            ),
+            "multi-frame RGBA pixels differ"
+        );
+    }
+    require(!reader.nextFrame().has_value(), "multi-frame fixture has extra frames");
+    require(!reader.nextFrame().has_value(), "end of stream is not stable");
+
+    const auto first = FfmpegMediaReader::decodeFirstVideoFrame(input);
+    require(first.presentationTimestamp == 0, "first-frame compatibility changed");
+    require(
+        std::equal(first.rgba8.begin(), first.rgba8.end(), expected.begin(), expected.begin() + 24),
+        "first-frame compatibility pixels differ"
+    );
+}
+
+void cancellationTerminatesCursor(const std::filesystem::path& input) {
+    FfmpegVideoFrameReader reader(input);
+    require(reader.nextFrame().has_value(), "cursor did not decode its first frame");
+    std::stop_source source;
+    source.request_stop();
+    requireError(
+        [&] { static_cast<void>(reader.nextFrame(source.get_token())); },
+        MediaFailureCode::cancelled
+    );
+    requireError(
+        [&] { static_cast<void>(reader.nextFrame()); },
+        MediaFailureCode::cancelled
+    );
+}
+
 void validatesFailureBoundaries(
     const TemporaryDirectory& directory,
     const std::filesystem::path& qtrle,
@@ -311,9 +376,15 @@ int main() {
             "audio-only.wav",
             palmier::media::test_fixtures::audioOnlyWav
         );
+        const auto opaqueThreeFrames = directory.write(
+            "opaque-three-frames.mov",
+            palmier::media::test_fixtures::qtrleOpaqueThreeFrames
+        );
         dependencyContract();
         probesH264AndAac(h264Aac);
         decodesStraightAlphaAndRotation(qtrle);
+        decodesPresentationOrderedFrames(opaqueThreeFrames);
+        cancellationTerminatesCursor(opaqueThreeFrames);
         validatesFailureBoundaries(directory, qtrle, audioOnly);
         std::cout << "FFmpeg media reader tests passed\n";
         return 0;

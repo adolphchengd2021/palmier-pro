@@ -11,7 +11,6 @@ namespace palmier::render {
 namespace {
 
 constexpr std::uint32_t maximumTextureDimension = 16'384;
-constexpr std::uint64_t maximumFramePixels = 3'840ULL * 2'160ULL;
 constexpr std::uint64_t maximumCompositeSamples = 67'108'864;
 constexpr std::uint64_t maximumResolvedSourcePixels = 67'108'864;
 constexpr std::size_t maximumLayerCount = 256;
@@ -53,7 +52,7 @@ RenderPlan RenderPlan::create(
         );
     }
     const auto canvasPixels = static_cast<std::uint64_t>(canvasWidth) * canvasHeight;
-    if (canvasPixels > maximumFramePixels) {
+    if (canvasPixels > maximumRenderFramePixels) {
         fail(
             "canvasBudgetExceeded",
             "/canvas",
@@ -199,7 +198,7 @@ void validateSourceFrameDimensions(
         fail("invalidSourceSize", pointer, "source dimensions are invalid");
     }
     const auto expected = static_cast<std::uint64_t>(width) * height;
-    if (expected > maximumFramePixels) {
+    if (expected > maximumRenderFramePixels) {
         fail(
             "sourceBudgetExceeded",
             pointer,

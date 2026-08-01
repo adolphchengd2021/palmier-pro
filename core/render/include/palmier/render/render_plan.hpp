@@ -10,6 +10,8 @@
 
 namespace palmier::render {
 
+inline constexpr std::uint64_t maximumRenderFramePixels = 3'840ULL * 2'160ULL;
+
 struct Rgba32Float final {
     float red;
     float green;

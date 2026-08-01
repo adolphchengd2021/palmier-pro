@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <string_view>
@@ -98,13 +99,14 @@ private:
 
 class ScaleOwner final {
 public:
-    explicit ScaleOwner(SwsContext* value) : value_(value) {}
+    explicit ScaleOwner(SwsContext* value = nullptr) : value_(value) {}
     ~ScaleOwner() { sws_freeContext(value_); }
 
     ScaleOwner(const ScaleOwner&) = delete;
     ScaleOwner& operator=(const ScaleOwner&) = delete;
 
     SwsContext* get() const { return value_; }
+    void replaceCached(SwsContext* value) noexcept { value_ = value; }
 
 private:
     SwsContext* value_{};
@@ -444,6 +446,7 @@ DecodedVideoFrame convertFrame(
     AVFrame& frame,
     const AVStream& stream,
     const DecodeLimits& limits,
+    ScaleOwner& scale,
     std::stop_token cancellation
 ) {
     requireNotCancelled(cancellation, "before-convert");
@@ -460,7 +463,8 @@ DecodedVideoFrame convertFrame(
     const auto rowBytes = static_cast<std::size_t>(frame.width) * 4;
     std::vector<std::uint8_t> pixels(byteCount);
 
-    ScaleOwner scale(sws_getContext(
+    auto* cachedScale = sws_getCachedContext(
+        scale.get(),
         frame.width,
         frame.height,
         static_cast<AVPixelFormat>(frame.format),
@@ -471,7 +475,8 @@ DecodedVideoFrame convertFrame(
         nullptr,
         nullptr,
         nullptr
-    ));
+    );
+    scale.replaceCached(cachedScale);
     if (scale.get() == nullptr) {
         fail(MediaFailureCode::conversionFailed, "create-converter");
     }
@@ -514,6 +519,200 @@ DecodedVideoFrame convertFrame(
 
 }
 
+class FfmpegVideoFrameReader::Impl final {
+public:
+    Impl(
+        const std::filesystem::path& input,
+        DecodeLimits limits,
+        std::stop_token cancellation
+    ) : limits_(limits), interrupt_{cancellation}, format_(nullptr) {
+        format_ = openInput(input, limits_, interrupt_);
+        videoIndex_ = av_find_best_stream(
+            format_.get(),
+            AVMEDIA_TYPE_VIDEO,
+            -1,
+            -1,
+            nullptr,
+            0
+        );
+        if (videoIndex_ < 0) {
+            fail(MediaFailureCode::noVideoStream, "find-video", videoIndex_);
+        }
+
+        stream_ = format_.get()->streams[videoIndex_];
+        const AVCodec* decoder = avcodec_find_decoder(stream_->codecpar->codec_id);
+        if (decoder == nullptr) {
+            fail(MediaFailureCode::decoderUnavailable, "find-decoder");
+        }
+        codec_.reset(avcodec_alloc_context3(decoder));
+        if (codec_.get() == nullptr) {
+            fail(MediaFailureCode::resourceLimitExceeded, "allocate-decoder");
+        }
+        int result = avcodec_parameters_to_context(codec_.get(), stream_->codecpar);
+        if (result < 0) {
+            fail(MediaFailureCode::corruptInput, "copy-codec-parameters", result);
+        }
+        checkedFrameBytes(
+            stream_->codecpar->width,
+            stream_->codecpar->height,
+            limits_.maximumPixels
+        );
+        codec_.get()->max_pixels = static_cast<std::int64_t>(limits_.maximumPixels);
+        codec_.get()->get_format = chooseSoftwarePixelFormat;
+        codec_.get()->thread_count = 1;
+        result = avcodec_open2(codec_.get(), decoder, nullptr);
+        if (result < 0) {
+            fail(MediaFailureCode::decoderUnavailable, "open-decoder", result);
+        }
+
+        packet_.reset(av_packet_alloc());
+        frame_.reset(av_frame_alloc());
+        if (packet_.get() == nullptr || frame_.get() == nullptr) {
+            fail(MediaFailureCode::resourceLimitExceeded, "allocate-decode-buffer");
+        }
+        requireNotCancelled(cancellation, "after-decoder-setup");
+    }
+
+    std::optional<DecodedVideoFrame> nextFrame(std::stop_token cancellation) {
+        if (terminalError_ != nullptr) {
+            std::rethrow_exception(terminalError_);
+        }
+        if (exhausted_) {
+            return std::nullopt;
+        }
+        interrupt_.cancellation = cancellation;
+        try {
+            return decodeNext(cancellation);
+        } catch (...) {
+            terminalError_ = std::current_exception();
+            throw;
+        }
+    }
+
+private:
+    std::optional<DecodedVideoFrame> decodeNext(std::stop_token cancellation) {
+        for (;;) {
+            requireNotCancelled(cancellation, "receive-frame");
+            const int receiveResult = avcodec_receive_frame(codec_.get(), frame_.get());
+            if (receiveResult >= 0) {
+                receiveMustProgress_ = false;
+                if ((frame_.get()->flags & AV_FRAME_FLAG_CORRUPT) != 0
+                    || frame_.get()->decode_error_flags != 0) {
+                    fail(MediaFailureCode::corruptInput, "corrupt-frame");
+                }
+                auto decoded = convertFrame(
+                    *frame_.get(),
+                    *stream_,
+                    limits_,
+                    scale_,
+                    cancellation
+                );
+                av_frame_unref(frame_.get());
+                packetCount_ = 0;
+                return decoded;
+            }
+            if (receiveResult == AVERROR_EOF) {
+                exhausted_ = true;
+                return std::nullopt;
+            }
+            if (receiveResult != AVERROR(EAGAIN)) {
+                fail(MediaFailureCode::corruptInput, "receive-frame", receiveResult);
+            }
+            if (receiveMustProgress_) {
+                fail(MediaFailureCode::corruptInput, "decoder-no-progress");
+            }
+            if (drainSent_) {
+                fail(MediaFailureCode::corruptInput, "drain-stalled");
+            }
+
+            if (packetPending_) {
+                sendPendingPacket();
+                continue;
+            }
+            if (drainPending_) {
+                sendDrainPacket();
+                continue;
+            }
+
+            readNextVideoPacket(cancellation);
+        }
+    }
+
+    void sendPendingPacket() {
+        const int result = avcodec_send_packet(codec_.get(), packet_.get());
+        if (result >= 0) {
+            av_packet_unref(packet_.get());
+            packetPending_ = false;
+            return;
+        }
+        if (result == AVERROR(EAGAIN)) {
+            receiveMustProgress_ = true;
+            return;
+        }
+        av_packet_unref(packet_.get());
+        packetPending_ = false;
+        fail(MediaFailureCode::corruptInput, "send-packet", result);
+    }
+
+    void sendDrainPacket() {
+        const int result = avcodec_send_packet(codec_.get(), nullptr);
+        if (result >= 0 || result == AVERROR_EOF) {
+            drainPending_ = false;
+            drainSent_ = true;
+            return;
+        }
+        if (result == AVERROR(EAGAIN)) {
+            receiveMustProgress_ = true;
+            return;
+        }
+        fail(MediaFailureCode::corruptInput, "drain-decoder", result);
+    }
+
+    void readNextVideoPacket(std::stop_token cancellation) {
+        for (;;) {
+            requireNotCancelled(cancellation, "read-packet");
+            const int result = av_read_frame(format_.get(), packet_.get());
+            if (result == AVERROR_EOF) {
+                drainPending_ = true;
+                return;
+            }
+            if (result < 0) {
+                if (cancellation.stop_requested() || result == AVERROR_EXIT) {
+                    fail(MediaFailureCode::cancelled, "read-packet", result);
+                }
+                fail(MediaFailureCode::corruptInput, "read-packet", result);
+            }
+            if (packetCount_ >= limits_.maximumPacketsBeforeFrame) {
+                av_packet_unref(packet_.get());
+                fail(MediaFailureCode::resourceLimitExceeded, "packet-budget");
+            }
+            ++packetCount_;
+            if (packet_.get()->stream_index == videoIndex_) {
+                packetPending_ = true;
+                return;
+            }
+            av_packet_unref(packet_.get());
+        }
+    }
+
+    DecodeLimits limits_;
+    InterruptState interrupt_;
+    FormatOwner format_;
+    AVStream* stream_{};
+    CodecOwner codec_;
+    PacketOwner packet_;
+    FrameOwner frame_;
+    ScaleOwner scale_;
+    std::exception_ptr terminalError_;
+    std::uint32_t packetCount_{};
+    int videoIndex_{-1};
+    bool packetPending_{};
+    bool drainPending_{};
+    bool drainSent_{};
+    bool receiveMustProgress_{};
+    bool exhausted_{};
+};
+
 bool isPrototypeSrgbColor(const ColorMetadata& color) noexcept {
     return color.primaries == AVCOL_PRI_BT709
         && color.transfer == AVCOL_TRC_IEC61966_2_1
@@ -548,6 +747,20 @@ FfmpegRuntimeInfo FfmpegMediaReader::runtimeInfo() {
     };
 }
 
+FfmpegVideoFrameReader::FfmpegVideoFrameReader(
+    const std::filesystem::path& input,
+    const DecodeLimits& limits,
+    std::stop_token cancellation
+) : impl_(std::make_unique<Impl>(input, limits, cancellation)) {}
+
+FfmpegVideoFrameReader::~FfmpegVideoFrameReader() = default;
+
+std::optional<DecodedVideoFrame> FfmpegVideoFrameReader::nextFrame(
+    std::stop_token cancellation
+) {
+    return impl_->nextFrame(cancellation);
+}
+
 MediaProbe FfmpegMediaReader::probe(
     const std::filesystem::path& input,
     const DecodeLimits& limits,
@@ -577,106 +790,8 @@ DecodedVideoFrame FfmpegMediaReader::decodeFirstVideoFrame(
     const DecodeLimits& limits,
     std::stop_token cancellation
 ) {
-    InterruptState interrupt{cancellation};
-    auto format = openInput(input, limits, interrupt);
-    const int videoIndex = av_find_best_stream(
-        format.get(),
-        AVMEDIA_TYPE_VIDEO,
-        -1,
-        -1,
-        nullptr,
-        0
-    );
-    if (videoIndex < 0) {
-        fail(MediaFailureCode::noVideoStream, "find-video", videoIndex);
-    }
-
-    AVStream& stream = *format.get()->streams[videoIndex];
-    const AVCodec* decoder = avcodec_find_decoder(stream.codecpar->codec_id);
-    if (decoder == nullptr) {
-        fail(MediaFailureCode::decoderUnavailable, "find-decoder");
-    }
-    CodecOwner codec(avcodec_alloc_context3(decoder));
-    if (codec.get() == nullptr) {
-        fail(MediaFailureCode::resourceLimitExceeded, "allocate-decoder");
-    }
-    int result = avcodec_parameters_to_context(codec.get(), stream.codecpar);
-    if (result < 0) {
-        fail(MediaFailureCode::corruptInput, "copy-codec-parameters", result);
-    }
-    checkedFrameBytes(
-        stream.codecpar->width,
-        stream.codecpar->height,
-        limits.maximumPixels
-    );
-    codec.get()->max_pixels = static_cast<std::int64_t>(limits.maximumPixels);
-    codec.get()->get_format = chooseSoftwarePixelFormat;
-    codec.get()->thread_count = 1;
-    result = avcodec_open2(codec.get(), decoder, nullptr);
-    if (result < 0) {
-        fail(MediaFailureCode::decoderUnavailable, "open-decoder", result);
-    }
-
-    PacketOwner packet(av_packet_alloc());
-    FrameOwner frame(av_frame_alloc());
-    if (packet.get() == nullptr || frame.get() == nullptr) {
-        fail(MediaFailureCode::resourceLimitExceeded, "allocate-decode-buffer");
-    }
-
-    const auto receive = [&]() -> std::optional<DecodedVideoFrame> {
-        for (;;) {
-            requireNotCancelled(cancellation, "receive-frame");
-            const int receiveResult = avcodec_receive_frame(codec.get(), frame.get());
-            if (receiveResult == AVERROR(EAGAIN) || receiveResult == AVERROR_EOF) {
-                return std::nullopt;
-            }
-            if (receiveResult < 0) {
-                fail(MediaFailureCode::corruptInput, "receive-frame", receiveResult);
-            }
-            if ((frame.get()->flags & AV_FRAME_FLAG_CORRUPT) != 0
-                || frame.get()->decode_error_flags != 0) {
-                fail(MediaFailureCode::corruptInput, "corrupt-frame");
-            }
-            return convertFrame(*frame.get(), stream, limits, cancellation);
-        }
-    };
-
-    std::uint32_t packetCount = 0;
-    for (;;) {
-        requireNotCancelled(cancellation, "read-packet");
-        const int readResult = av_read_frame(format.get(), packet.get());
-        if (readResult == AVERROR_EOF) {
-            break;
-        }
-        if (readResult < 0) {
-            if (cancellation.stop_requested() || readResult == AVERROR_EXIT) {
-                fail(MediaFailureCode::cancelled, "read-packet", readResult);
-            }
-            fail(MediaFailureCode::corruptInput, "read-packet", readResult);
-        }
-        ++packetCount;
-        if (packetCount > limits.maximumPacketsBeforeFrame) {
-            fail(MediaFailureCode::resourceLimitExceeded, "packet-budget");
-        }
-        if (packet.get()->stream_index == videoIndex) {
-            const int sendResult = avcodec_send_packet(codec.get(), packet.get());
-            av_packet_unref(packet.get());
-            if (sendResult < 0) {
-                fail(MediaFailureCode::corruptInput, "send-packet", sendResult);
-            }
-            if (auto decoded = receive()) {
-                return std::move(*decoded);
-            }
-        } else {
-            av_packet_unref(packet.get());
-        }
-    }
-
-    result = avcodec_send_packet(codec.get(), nullptr);
-    if (result < 0 && result != AVERROR_EOF) {
-        fail(MediaFailureCode::corruptInput, "drain-decoder", result);
-    }
-    if (auto decoded = receive()) {
+    FfmpegVideoFrameReader reader(input, limits, cancellation);
+    if (auto decoded = reader.nextFrame(cancellation)) {
         return std::move(*decoded);
     }
     fail(MediaFailureCode::corruptInput, "missing-decoded-frame");

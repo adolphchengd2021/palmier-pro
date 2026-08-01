@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "owner": "windows/media-session",
+  "stateOwner": "one serial media executor",
+  "states": [
+    "idle",
+    "ready",
+    "blocked",
+    "endOfStream",
+    "cancelled",
+    "failed"
+  ],
+  "fillReceiptFields": [
+    "generation",
+    "state",
+    "outcome",
+    "admittedFrames",
+    "hasPendingFrame",
+    "queuedFrames",
+    "queuedBytes"
+  ],
+  "limits": {
+    "maximumFrames": 8,
+    "maximumBytes": 268435456,
+    "maximumPixels": 8294400,
+    "maximumFramesPerFill": 4,
+    "maximumConfigurableFramesPerFill": 32
+  },
+  "errors": [
+    "decodeLimitExceedsRenderBudget",
+    "notStarted",
+    "terminalState",
+    "invariantViolation",
+    "changedInputWithinGeneration",
+    "invalidFillBudget"
+  ],
+  "fixture": {
+    "name": "qtrleOpaqueThreeFrames",
+    "sha256": "14290e9b2efb26f4ca1e2680b9a7589e141577cea53ceab4b5adf583a98a79e8",
+    "codec": "qtrle",
+    "pixelFormat": "rgb24",
+    "width": 3,
+    "height": 2,
+    "frameCount": 3,
+    "timeBase": [1, 10240],
+    "presentationTimestamps": [0, 1024, 2048],
+    "alphaMode": "opaque"
+  },
+  "invariants": {
+    "reader": "one stateful reader owns one demuxer, software decoder, packet, frame, and reusable conversion context",
+    "decoderProtocol": "receive before supply; retain a packet when send reports EAGAIN; send drain exactly once; EOF is stable",
+    "presentationOrder": "publish best-effort timestamps in decoder output order without guessing or reordering",
+    "backpressure": "retain at most one decoded pending frame until bounded admission succeeds",
+    "fillBudget": "one fill admits at most the configured 1 to 32 frames independent of queue capacity",
+    "generation": "opening a replacement succeeds before the new generation clears queued or pending state",
+    "inputIdentity": "the exact input path cannot change within one generation",
+    "cancellation": "fill throws a cancelled media error after cancellation terminates and clears only the current generation",
+    "handoff": "dequeue one immutable normalized frame before synchronous preview or export rendering"
+  },
+  "excluded": [
+    "seek and frame-rate conversion",
+    "clock-driven frame selection",
+    "thread creation or executor scheduling",
+    "audio synchronization",
+    "interactive swap-chain presentation",
+    "hardware decode",
+    "1080p performance qualification",
+    "Windows 10 runtime certification"
+  ]
+}

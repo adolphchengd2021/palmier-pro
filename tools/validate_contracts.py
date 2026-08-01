@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import re
@@ -1914,7 +1915,7 @@ def windows_media_render_adapter_contract() -> None:
         "resolver never performs file I/O",
         "Unspecified and premultiplied alpha are hard refusals",
         "does not define a mapping for arbitrary RenderPlan",
-        "does not yet prove a successfully adapted real media fixture",
+        "proves successfully adapted real decoded frames",
     ]:
         if token not in adr:
             raise ContractError(f"media-render ADR missing token {token!r}")
@@ -2202,10 +2203,325 @@ def windows_presentation_video_buffer_contract() -> None:
         "single-owner and unsynchronized",
         "Every mutation advances a checked revision",
         "revalidates generation, admission state, and revision",
-        "does not yet decode multiple real frames",
+        "ADR 0016 composes this buffer with a stateful FFmpeg cursor",
     ]:
         if token not in adr:
             raise ContractError(f"presentation-video ADR missing token {token!r}")
+
+
+def validate_ffmpeg_presentation_pipeline_contract(
+    contract: dict[str, Any],
+) -> None:
+    require_equal("FFmpeg pipeline version", contract.get("version"), 1)
+    require_equal(
+        "FFmpeg pipeline owner",
+        contract.get("owner"),
+        "windows/media-session",
+    )
+    require_equal(
+        "FFmpeg pipeline state owner",
+        contract.get("stateOwner"),
+        "one serial media executor",
+    )
+    require_equal(
+        "FFmpeg pipeline states",
+        contract.get("states"),
+        ["idle", "ready", "blocked", "endOfStream", "cancelled", "failed"],
+    )
+    require_equal(
+        "FFmpeg pipeline receipt fields",
+        contract.get("fillReceiptFields"),
+        [
+            "generation",
+            "state",
+            "outcome",
+            "admittedFrames",
+            "hasPendingFrame",
+            "queuedFrames",
+            "queuedBytes",
+        ],
+    )
+    require_equal(
+        "FFmpeg pipeline limits",
+        contract.get("limits"),
+        {
+            "maximumFrames": 8,
+            "maximumBytes": 268435456,
+            "maximumPixels": 8294400,
+            "maximumFramesPerFill": 4,
+            "maximumConfigurableFramesPerFill": 32,
+        },
+    )
+    require_equal(
+        "FFmpeg pipeline errors",
+        contract.get("errors"),
+        [
+            "decodeLimitExceedsRenderBudget",
+            "notStarted",
+            "terminalState",
+            "invariantViolation",
+            "changedInputWithinGeneration",
+            "invalidFillBudget",
+        ],
+    )
+    require_equal(
+        "FFmpeg pipeline fixture",
+        contract.get("fixture"),
+        {
+            "name": "qtrleOpaqueThreeFrames",
+            "sha256": "14290e9b2efb26f4ca1e2680b9a7589e141577cea53ceab4b5adf583a98a79e8",
+            "codec": "qtrle",
+            "pixelFormat": "rgb24",
+            "width": 3,
+            "height": 2,
+            "frameCount": 3,
+            "timeBase": [1, 10240],
+            "presentationTimestamps": [0, 1024, 2048],
+            "alphaMode": "opaque",
+        },
+    )
+    require_equal(
+        "FFmpeg pipeline invariants",
+        contract.get("invariants"),
+        {
+            "reader": "one stateful reader owns one demuxer, software decoder, packet, frame, and reusable conversion context",
+            "decoderProtocol": "receive before supply; retain a packet when send reports EAGAIN; send drain exactly once; EOF is stable",
+            "presentationOrder": "publish best-effort timestamps in decoder output order without guessing or reordering",
+            "backpressure": "retain at most one decoded pending frame until bounded admission succeeds",
+            "fillBudget": "one fill admits at most the configured 1 to 32 frames independent of queue capacity",
+            "generation": "opening a replacement succeeds before the new generation clears queued or pending state",
+            "inputIdentity": "the exact input path cannot change within one generation",
+            "cancellation": "fill throws a cancelled media error after cancellation terminates and clears only the current generation",
+            "handoff": "dequeue one immutable normalized frame before synchronous preview or export rendering",
+        },
+    )
+    require_equal(
+        "FFmpeg pipeline exclusions",
+        contract.get("excluded"),
+        [
+            "seek and frame-rate conversion",
+            "clock-driven frame selection",
+            "thread creation or executor scheduling",
+            "audio synchronization",
+            "interactive swap-chain presentation",
+            "hardware decode",
+            "1080p performance qualification",
+            "Windows 10 runtime certification",
+        ],
+    )
+
+
+def windows_ffmpeg_presentation_pipeline_contract() -> None:
+    ffmpeg_header = read_text(
+        "windows/media-ffmpeg/include/palmier/media/ffmpeg_media_reader.hpp"
+    )
+    ffmpeg_source = read_text("windows/media-ffmpeg/ffmpeg_media_reader.cpp")
+    ffmpeg_tests = read_text(
+        "windows/media-ffmpeg/tests/ffmpeg_media_reader_tests.cpp"
+    )
+    fixtures = read_text("windows/media-ffmpeg/tests/media_test_fixtures.hpp")
+    pump_header = read_text(
+        "windows/media-session/include/palmier/media/presentation_video_decode_pump.hpp"
+    )
+    pump_source = read_text(
+        "windows/media-session/presentation_video_decode_pump.cpp"
+    )
+    pump_test_access = read_text(
+        "windows/media-session/internal/presentation_video_decode_pump_testing.hpp"
+    )
+    pipeline_tests = read_text(
+        "windows/media-session/tests/ffmpeg_presentation_pipeline_tests.cpp"
+    )
+    cmake = read_text("windows/media-session/CMakeLists.txt")
+    contract = load_json("contracts/media/v1/ffmpeg-presentation-pipeline.json")
+
+    for token in [
+        "class FfmpegVideoFrameReader final",
+        "std::optional<DecodedVideoFrame> nextFrame(",
+        "FfmpegVideoFrameReader(const FfmpegVideoFrameReader&) = delete;",
+        "FfmpegVideoFrameReader(FfmpegVideoFrameReader&&) = delete;",
+    ]:
+        if token not in ffmpeg_header:
+            raise ContractError(f"FFmpeg cursor API missing token {token!r}")
+    for token in [
+        "class FfmpegVideoFrameReader::Impl final",
+        "sws_getCachedContext(",
+        "packetPending_",
+        "drainPending_",
+        "drainSent_",
+        "receiveMustProgress_",
+        "terminalError_",
+        "std::rethrow_exception(terminalError_)",
+        'requireNotCancelled(cancellation, "after-decoder-setup")',
+        "FfmpegVideoFrameReader reader(input, limits, cancellation)",
+    ]:
+        if token not in ffmpeg_source:
+            raise ContractError(f"FFmpeg cursor source missing token {token!r}")
+    for token in [
+        "decodesPresentationOrderedFrames",
+        "cancellationTerminatesCursor",
+        "end of stream is not stable",
+        "first-frame compatibility changed",
+        "1'024, 2'048",
+    ]:
+        if token not in ffmpeg_tests:
+            raise ContractError(f"FFmpeg cursor tests missing token {token!r}")
+
+    fixture_match = re.search(
+        r"qtrleOpaqueThreeFrames\s*=((?:\s*\"[^\"]*\")+)\s*;",
+        fixtures,
+    )
+    if fixture_match is None:
+        raise ContractError("three-frame FFmpeg fixture is missing")
+    fixture_base64 = "".join(re.findall(r'\"([^\"]*)\"', fixture_match.group(1)))
+    try:
+        fixture_bytes = base64.b64decode(fixture_base64, validate=True)
+    except ValueError as error:
+        raise ContractError(f"three-frame FFmpeg fixture is invalid: {error}") from error
+    require_equal(
+        "three-frame FFmpeg fixture SHA-256",
+        hashlib.sha256(fixture_bytes).hexdigest(),
+        contract["fixture"]["sha256"],
+    )
+
+    for token in [
+        "PresentationVideoDecodeLimits",
+        "PresentationVideoDecodeState",
+        "PresentationVideoFillReceipt",
+        "class PresentationVideoDecodePump final",
+        "std::unique_ptr<FfmpegVideoFrameReader> reader_",
+        "std::optional<DecodedVideoFrame> pendingFrame_",
+        "std::filesystem::path inputIdentity_",
+        "maximumFramesPerFill{4}",
+        "render::maximumRenderFramePixels",
+    ]:
+        if token not in pump_header:
+            raise ContractError(f"FFmpeg pipeline API missing token {token!r}")
+    for token in [
+        "generation == buffer_.generation()",
+        "input != inputIdentity_",
+        "auto nextReader = std::make_unique<FfmpegVideoFrameReader>(",
+        "startCommitCheckpoint_()",
+        "before-generation-commit",
+        "pendingFrame_ = reader_->nextFrame(cancellation)",
+        "after-decode-frame",
+        "enqueue.outcome == PresentationVideoOutcome::refused",
+        "admittedFrames >= limits_.maximumFramesPerFill",
+        "maximumConfigurableFramesPerFill = 32",
+        "PresentationVideoDecodeState::blocked",
+        "terminate(PresentationVideoDecodeState::failed)",
+    ]:
+        if token not in pump_source:
+            raise ContractError(f"FFmpeg pipeline source missing token {token!r}")
+    for token in [
+        "class PresentationVideoDecodePumpTestAccess final",
+        "PresentationVideoDecodePump::StartCommitCheckpoint checkpoint",
+        "return PresentationVideoDecodePump(",
+    ]:
+        if token not in pump_test_access:
+            raise ContractError(f"FFmpeg pipeline test access missing token {token!r}")
+    for token in [
+        "realFramesReachSharedRenderers",
+        "capacityRetainsOnePendingFrame",
+        "cancellationTerminatesOnlyItsGeneration",
+        "decodeFailureTerminatesGeneration",
+        "replacementClearsQueuedAndPendingFrames",
+        "sameGenerationRejectsChangedInput",
+        "cancellationBeforeReplacementCommitPreservesGeneration",
+        "fillBudgetIsIndependentOfQueueCapacity",
+        "pipeline end of stream is not stable",
+        "pipeline WARP first pixel differs",
+        "cancellation setup lacks queued and pending frames",
+        "failed replacement changed the generation",
+        "failed replacement cleared the queue",
+        "failed replacement cleared the pending frame",
+        "cancelled replacement committed a generation",
+        "cancelled replacement cleared pending data",
+        "fill exceeded its frame budget",
+        "changed input refusal replaced media",
+        "PresentationVideoDecodeErrorCode::terminalState",
+        "PresentationVideoDecodeState::failed",
+        "renderPreviewFrame",
+        "renderExportFrame",
+        "CpuRenderer",
+        "D3d11WarpRenderer",
+        "2e-5F",
+    ]:
+        if token not in pipeline_tests:
+            raise ContractError(f"FFmpeg pipeline tests missing token {token!r}")
+    for token in [
+        "presentation_video_decode_pump.cpp",
+        "palmier_media_ffmpeg",
+        "PUBLIC palmier_media_render palmier_media_ffmpeg",
+        "palmier_ffmpeg_presentation_pipeline_tests",
+        "palmier_render_d3d11",
+        "media_session.ffmpeg_presentation_pipeline",
+        "PROPERTIES RUN_SERIAL TRUE TIMEOUT 60",
+        '"${CMAKE_CURRENT_SOURCE_DIR}"',
+    ]:
+        if token not in cmake:
+            raise ContractError(f"FFmpeg pipeline CMake missing token {token!r}")
+
+    def validate_header_shape(candidate: str) -> None:
+        require_equal(
+            "FFmpeg pipeline C++ states",
+            cpp_enum_cases(candidate, "PresentationVideoDecodeState"),
+            contract.get("states", []),
+        )
+        require_equal(
+            "FFmpeg pipeline C++ receipt fields",
+            cpp_stored_fields(candidate, "PresentationVideoFillReceipt"),
+            contract.get("fillReceiptFields", []),
+        )
+        require_equal(
+            "FFmpeg pipeline C++ errors",
+            cpp_enum_cases(candidate, "PresentationVideoDecodeErrorCode"),
+            contract.get("errors", []),
+        )
+
+    validate_header_shape(pump_header)
+    invalid_state = pump_header.replace(
+        "enum class PresentationVideoDecodeState {",
+        "enum class PresentationVideoDecodeState {\n    inventedState,",
+        1,
+    )
+    expect_failure(
+        "FFmpeg pipeline C++ extra state",
+        lambda: validate_header_shape(invalid_state),
+    )
+    invalid_error = pump_header.replace(
+        "enum class PresentationVideoDecodeErrorCode {",
+        "enum class PresentationVideoDecodeErrorCode {\n    inventedError,",
+        1,
+    )
+    expect_failure(
+        "FFmpeg pipeline C++ extra error",
+        lambda: validate_header_shape(invalid_error),
+    )
+    validate_ffmpeg_presentation_pipeline_contract(contract)
+    invalid_fixture = dict(contract)
+    invalid_fixture["fixture"] = dict(contract["fixture"])
+    invalid_fixture["fixture"]["frameCount"] = 2
+    expect_failure(
+        "FFmpeg pipeline fixture frame count",
+        lambda: validate_ffmpeg_presentation_pipeline_contract(invalid_fixture),
+    )
+
+    adr = read_text("docs/windows/adr/0016-ffmpeg-presentation-pipeline.md")
+    for token in [
+        "retains an unsent packet",
+        "at most one decoded pending frame",
+        "opened before the new generation clears",
+        "exact input path is immutable within a generation",
+        "hard configurable ceiling of 32",
+        "renderer's shared 3,840 × 2,160 pixel budget",
+        "sws_getCachedContext",
+        contract["fixture"]["sha256"],
+        "decode → adapter → bounded buffer → dequeue",
+        "does not prove seek",
+    ]:
+        if token not in adr:
+            raise ContractError(f"FFmpeg pipeline ADR missing token {token!r}")
 
 
 def windows_audio_wasapi_contract() -> None:
@@ -2701,6 +3017,7 @@ def main() -> int:
         ("Windows render plan and D3D11 WARP", windows_render_plan_contract),
         ("Windows decoded-frame render adapter", windows_media_render_adapter_contract),
         ("Windows presentation video buffer", windows_presentation_video_buffer_contract),
+        ("Windows FFmpeg presentation pipeline", windows_ffmpeg_presentation_pipeline_contract),
         ("Windows WASAPI clock and environment probe", windows_audio_wasapi_contract),
         ("Windows bounded WASAPI output", windows_wasapi_output_contract),
         ("Windows Qt read-only project shell", windows_qt_read_only_shell_contract),

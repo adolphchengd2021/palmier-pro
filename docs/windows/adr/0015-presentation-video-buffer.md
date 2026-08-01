@@ -62,10 +62,11 @@ pre-cancellation, generation cancellation, repeated no-op cancellation, stale
 enqueue/dequeue, reentrant generation and revision changes, invalid adapter
 output, and queue preservation after refusal.
 
-This slice does not yet decode multiple real frames, prove a successfully
-adapted real-media fixture, seek, select a frame for a clock position, present
-to a swap chain, synchronize audio, measure 1080p performance, or run on
-Windows 10 build 19045. Those remain Gate G0 work.
+ADR 0016 composes this buffer with a stateful FFmpeg cursor and proves multiple
+real frames reach shared CPU and WARP render entry points. This buffer itself
+still performs no decode. Seeking, selecting a frame for a clock position,
+swap-chain presentation, audio synchronization, 1080p performance, and Windows
+10 build 19045 remain Gate G0 work.
 
 ## Primary references
 

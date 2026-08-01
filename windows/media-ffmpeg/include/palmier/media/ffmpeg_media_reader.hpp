@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <stop_token>
@@ -114,6 +115,29 @@ struct FfmpegRuntimeInfo final {
     std::string license;
     std::string configuration;
     bool headersMatchRuntime{};
+};
+
+class FfmpegVideoFrameReader final {
+public:
+    explicit FfmpegVideoFrameReader(
+        const std::filesystem::path& input,
+        const DecodeLimits& limits = {},
+        std::stop_token cancellation = {}
+    );
+    ~FfmpegVideoFrameReader();
+
+    FfmpegVideoFrameReader(const FfmpegVideoFrameReader&) = delete;
+    FfmpegVideoFrameReader& operator=(const FfmpegVideoFrameReader&) = delete;
+    FfmpegVideoFrameReader(FfmpegVideoFrameReader&&) = delete;
+    FfmpegVideoFrameReader& operator=(FfmpegVideoFrameReader&&) = delete;
+
+    std::optional<DecodedVideoFrame> nextFrame(
+        std::stop_token cancellation = {}
+    );
+
+private:
+    class Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 class FfmpegMediaReader final {

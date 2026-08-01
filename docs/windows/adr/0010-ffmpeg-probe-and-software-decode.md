@@ -1,9 +1,9 @@
-# ADR 0010: Isolate FFmpeg probe and first-frame software decode
+# ADR 0010: Isolate FFmpeg probe and stateful software decode
 
 - Status: Accepted for M0 prototype
 - Date: 2026-08-01
 - Owner: Windows media engineering
-- Applies to: FFmpeg 8.1.2 probe and software decode only
+- Applies to: FFmpeg 8.1.2 probe and sequential software decode only
 
 ## Decision
 
@@ -12,8 +12,8 @@ FFmpeg 8.1.2 as dynamic LGPL libraries. Disable default features and request
 only `avcodec`, `avformat`, and `swscale`. GPL and nonfree feature groups remain
 outside the prototype contract.
 
-`windows/media-ffmpeg` owns local-file container probe and decoding the first
-frame emitted by the software decoder. It preserves integer stream time bases,
+`windows/media-ffmpeg` owns local-file container probe and a stateful cursor for
+frames emitted by the software decoder. It preserves integer stream time bases,
 rotation metadata, color metadata, alpha, audio stream shape, and explicit
 failure codes. It owns no project state, timeline decisions, UI state, audio
 output, playback clock, hardware decode, export, or cache.
@@ -21,8 +21,9 @@ output, playback clock, hardware decode, export, or cache.
 The API is synchronous by design and must be called from a dedicated media
 executor. Its `AVIOInterruptCB` observes a `std::stop_token`; cancellation is
 also checked between probe, packet, decoder, conversion, and return boundaries.
-Each call owns its FFmpeg contexts. No process-global log callback or shared
-codec context is installed.
+Each cursor owns its FFmpeg contexts and reusable swscale context.
+`decodeFirstVideoFrame` is a compatibility wrapper over that cursor. No
+process-global log callback or shared codec context is installed.
 
 The first conversion gate accepts only explicit BT.709 primaries, sRGB
 transfer, RGB matrix input. Packed RGB with unspecified range is treated as
@@ -35,7 +36,7 @@ into the float RenderPlan.
 
 ## Test vectors
 
-Tests embed two versioned base64 vectors and write them into a unique temporary
+Tests embed fixed base64 vectors and write them into a unique temporary
 directory at runtime. They do not download or generate media in CI.
 
 - A 4×4 single-frame QTRLE MOV carries asymmetric alpha/color channel values,
@@ -48,6 +49,9 @@ directory at runtime. They do not download or generate media in CI.
   `d7eb5181b706b60b3f3f4e572a72e275f69ad42815c77d76b909f2b17ff77c82`.
 - A mono 8 kHz PCM WAV verifies that video decode reports `noVideoStream`.
   SHA-256: `207503465701ec21fedf076c87748252e66de71d2c8fc8ab5a4c5dffffc05457`.
+- A three-frame 3×2 opaque RGB24 QTRLE MOV verifies exact sequential pixels,
+  time base, PTS order, stable EOF, and cursor cancellation. SHA-256:
+  `14290e9b2efb26f4ca1e2680b9a7589e141577cea53ceab4b5adf583a98a79e8`.
 
 The vectors were generated locally with fixed FFmpeg filter and codec settings.
 They are test data only; the linked prototype dependency remains the locked
@@ -56,7 +60,7 @@ vcpkg FFmpeg build.
 ## Evidence boundary
 
 A green Windows Server 2022 job proves the exact dependency can compile, load its
-DLLs, probe H.264/AAC, and software-decode the lossless reference frame. It does
+DLLs, probe H.264/AAC, and software-decode the lossless reference frames. It does
 not prove Windows 10 build 19045 compatibility, D3D11VA, real-time 1080p
 playback, audio output, long-run synchronization, physical GPU behavior,
 packaging, or distribution approval.

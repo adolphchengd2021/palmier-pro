@@ -39,11 +39,11 @@ lifecycle state before publishing or committing a result.
 
 ## Source-frame boundary
 
-`decodeFirstVideoFrame` does not define a mapping for arbitrary RenderPlan
-`sourceFrame` values. The M0 integration test resolves only source frame zero.
-VFR, frame-rate conversion, seeking, presentation ordering, cache generations,
-stale completion, and render-time cancellation remain outside this adapter.
-They must be owned by a later media session and project compiler.
+The adapter does not define a mapping for arbitrary RenderPlan `sourceFrame`
+values. The M1 presentation pipeline hands one dequeued immutable source to a
+resolver that accepts only source frame zero. VFR, frame-rate conversion,
+seeking, and clock-driven selection remain outside this adapter. They must be
+owned by a later media session and project compiler.
 
 ## Evidence boundary
 
@@ -51,11 +51,13 @@ The FFmpeg CI preset covers exact synthetic orientation and padded-stride
 goldens, alpha/color/storage refusals, pre-cancellation, CPU/WARP parity, and
 bitwise-identical preview/export calls per backend. Internal deterministic
 checkpoints also prove cancellation after a converted row and immediately
-before publication without sleeps. The real QTRLE decoded fixture carries
-unspecified alpha and proves the adapter refuses it.
+before publication without sleeps. The original QTRLE fixture carries
+unspecified alpha and proves the adapter refuses it. A second opaque three-frame
+fixture proves successfully adapted real decoded frames reach both shared
+renderer backends.
 
-This does not yet prove a successfully adapted real media fixture, Swift BGRA8
-pixel equivalence, cancellation while FFmpeg is blocked in external I/O, cache
+This does not prove Swift BGRA8 pixel equivalence, cancellation while FFmpeg is
+blocked in external I/O, cache
 lease behavior, Windows 10 build 19045, physical GPUs, D3D11VA, continuous
 playback, audio sync, encoding, or packaging.
 
