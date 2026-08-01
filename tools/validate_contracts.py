@@ -2601,6 +2601,7 @@ def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
         "interleaved",
         "isValidPcmFormat",
         "format.channelCount > 2 && format.channelMask == 0",
+        "(std::numeric_limits<std::uint16_t>::max)()",
     ]:
         if token not in pcm_header:
             raise ContractError(f"PCM format contract missing token {token!r}")

@@ -47,7 +47,7 @@ constexpr bool isValidPcmFormat(const PcmFormat& format) noexcept {
     }
     const auto bytesPerFrame = static_cast<std::uint32_t>(format.channelCount)
         * (format.containerBitsPerSample / 8);
-    return bytesPerFrame <= std::numeric_limits<std::uint16_t>::max()
+    return bytesPerFrame <= (std::numeric_limits<std::uint16_t>::max)()
         && format.blockAlign == bytesPerFrame;
 }
 
