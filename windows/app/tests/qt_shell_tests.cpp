@@ -265,7 +265,7 @@ private slots:
         coordinator.openFolder(QUrl::fromLocalFile(QStringLiteral("C:/cancel.palmier")));
         coordinator.cancelLoading();
         QCOMPARE(coordinator.state(), QStringLiteral("cancelling"));
-        QTRY_VERIFY_WITH_TIMEOUT(cancellationObserved.tryAcquire(), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(cancellationObserved.available(), 1, 5000);
         QTRY_COMPARE_WITH_TIMEOUT(coordinator.state(), QStringLiteral("empty"), 5000);
         QCOMPARE(coordinator.model()->rowCount(), 0);
     }
@@ -306,7 +306,7 @@ private slots:
         coordinator.openFolder(QUrl::fromLocalFile(QStringLiteral("C:/shutdown.palmier")));
         QVERIFY(!coordinator.requestShutdown());
         QCOMPARE(coordinator.state(), QStringLiteral("cancelling"));
-        QTRY_VERIFY_WITH_TIMEOUT(cancellationObserved.tryAcquire(), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(cancellationObserved.available(), 1, 5000);
         QTRY_COMPARE_WITH_TIMEOUT(shutdownReady.count(), 1, 5000);
         QVERIFY(coordinator.requestShutdown());
         QCOMPARE(coordinator.state(), QStringLiteral("empty"));
@@ -531,7 +531,7 @@ private slots:
         QVERIFY(window->isVisible());
         window->close();
         QVERIFY(window->isVisible());
-        QTRY_VERIFY_WITH_TIMEOUT(cancellationObserved.tryAcquire(), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(cancellationObserved.available(), 1, 5000);
         QTRY_COMPARE_WITH_TIMEOUT(shutdownReady.count(), 1, 5000);
         QTRY_VERIFY_WITH_TIMEOUT(!window->isVisible(), 5000);
     }

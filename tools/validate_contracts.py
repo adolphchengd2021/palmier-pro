@@ -2309,6 +2309,10 @@ def windows_qt_read_only_shell_contract() -> None:
     ]:
         if token not in qt_tests:
             raise ContractError(f"Qt shell test missing token {token!r}")
+    if "QTRY_VERIFY_WITH_TIMEOUT(cancellationObserved.tryAcquire()" in qt_tests:
+        raise ContractError("Qt shell cancellation checks must not consume state while polling")
+    if qt_tests.count("QTRY_COMPARE_WITH_TIMEOUT(cancellationObserved.available(), 1, 5000)") != 3:
+        raise ContractError("Qt shell cancellation checks must poll three non-consuming observations")
     for token in [
         "aqtinstall==3.3.0",
         "py7zr==1.0.0",
