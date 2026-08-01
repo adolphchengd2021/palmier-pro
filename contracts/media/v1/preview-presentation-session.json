@@ -68,7 +68,8 @@
     "resize": "resize marks cached content dirty but does not consume media or render synchronously on the caller's resize request",
     "failure": "render or terminal surface failure stops the matching playback generation, releases cached frame ownership before its receipt, and returns an explicit terminal result; a terminal surface refuses playback and resize until a new session owns a new device",
     "cancellation": "close requests the admitted operation stop source before waiting for serialized ownership; cancellation is rechecked before render and Present, and no work is admitted after close",
-    "settings": "the first boundary accepts only one integer-rate resolved layer and validates the shared RenderPlan before starting playback"
+    "settings": "the first boundary accepts one immutable project-compiled static video layer, refuses nonzero source starts until playback seek exists, requires a new playback generation for source-mapping changes, and rebuilds every timeline frame through the shared project RenderPlan compiler before rendering",
+    "clipBoundary": "the first target frame at or beyond the compiled clip interval stops source playback, preserves the last valid frame, and completes without rendering inactive content"
   },
   "excluded": [
     "Qt timer and window integration",

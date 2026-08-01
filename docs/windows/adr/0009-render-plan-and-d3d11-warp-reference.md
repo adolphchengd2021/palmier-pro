@@ -39,17 +39,22 @@ duration of the render call.
 
 ## Scope boundary
 
-This commit does not compile a Palmier project into a render plan. The current
-C++ project projection is intentionally incomplete and lacks transform and
-effect data. Until a dedicated compiler reads those values and rejects every
-visible unsupported feature, no application path may silently construct an
-identity or pass-through plan from the typed projection.
+ADR 0024 adds the first dedicated project compiler for one static persisted
+video layer. The C++ project projection remains intentionally incomplete, so
+that compiler resolves stable IDs against both the typed projection and retained
+full DOM, reads only the supported render values, and rejects every visible
+unsupported feature. No application path may silently construct an identity or
+pass-through plan from the typed projection.
 
-Project integration must reject same-track overlap, non-1 speed, variable frame
-rate, source/timeline frame-rate mismatch, crop, flip, dynamic keyframes,
-fades, non-normal blends, text, nesting, Lottie, unsupported effects, HDR,
-mixed or unknown color metadata, and unknown alpha representation. These are
-hard refusals, not fallback behavior.
+Static project integration must reject overlapping visible layers, non-1 speed,
+nonzero trim in preview, crop, flip, dynamic keyframes, fades, non-normal
+blends, text, nesting, Lottie, unsupported effects, HDR, mixed or unknown color
+metadata, and unknown alpha representation. These are hard refusals, not fallback behavior.
+
+Source cadence is selected by decoded presentation timestamps against the
+integer timeline clock rather than copied into RenderPlan as a source FPS. The
+current fixed-rate fixtures do not prove VFR or source/timeline FPS mismatch;
+those cases remain unverified until timestamp fixtures pass.
 
 The precise machine-readable boundary is
 `contracts/render/v1/render-plan.json`. The wider effect contract remains

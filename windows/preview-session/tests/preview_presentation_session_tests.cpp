@@ -307,10 +307,11 @@ public:
             throw palmier::render::RenderError("cancelled", "/", "cancelled");
         }
         return {
-            settings.canvasWidth,
-            settings.canvasHeight,
+            settings.renderLayer.canvasWidth,
+            settings.renderLayer.canvasHeight,
             std::vector<palmier::render::Rgba32Float>(
-                static_cast<std::size_t>(settings.canvasWidth) * settings.canvasHeight,
+                static_cast<std::size_t>(settings.renderLayer.canvasWidth)
+                    * settings.renderLayer.canvasHeight,
                 source.source.pixels.front()
             ),
         };
@@ -450,17 +451,21 @@ struct Fixture final {
 };
 
 PreviewPresentationSettings settings(float exposure = 0) {
-    return {
+    return {{
         2,
         1,
         10,
-        "preview-layer",
+        "timeline",
         "video-track",
+        "preview-layer",
         "preview-media",
+        0,
+        100,
+        0,
         {},
         1,
         exposure,
-    };
+    }};
 }
 
 void start(Fixture& fixture, PreviewPresentationSettings value = settings()) {
@@ -565,6 +570,62 @@ void completedPlaybackRetriesAndResizesTheFinalFrame() {
     require(fixture.renderer->calls == 2, "completed resize did not rerender once");
 }
 
+void clipEndCompletesWithoutRenderingPastBoundary() {
+    Fixture fixture;
+    auto value = settings();
+    value.renderLayer.durationFrames = 2;
+    start(fixture, value);
+    enqueueFrame(fixture, 7, 1);
+    require(
+        fixture.session->tick(1).outcome == PreviewPresentationOutcome::presented,
+        "last active clip frame was not presented"
+    );
+
+    auto boundary = playbackReceipt(
+        1,
+        HeadlessAvPlaybackState::playing,
+        HeadlessAvPlaybackOutcome::changed
+    );
+    boundary.hasTargetTimelineFrame = true;
+    boundary.targetTimelineFrame = 2;
+    boundary.frame = frame(2, 8, 0.75F);
+    fixture.playback->ticks.push_back(std::move(boundary));
+    const auto completed = fixture.session->tick(1);
+    require(completed.state == PreviewPresentationState::completed, "clip end did not complete");
+    require(completed.outcome == PreviewPresentationOutcome::changed, "clip end was hidden");
+    require(completed.sourcePresentationTimestamp == 7, "clip end replaced the last valid frame");
+    require(fixture.playback->cancelCalls == 1, "clip end did not stop source playback");
+    require(fixture.renderer->calls == 1, "clip end rendered an inactive frame");
+    require(fixture.surface->presentCalls == 1, "clip end presented an inactive frame");
+    require(
+        fixture.session->tick(1).outcome == PreviewPresentationOutcome::noOp,
+        "completed clip consumed another playback tick"
+    );
+    require(fixture.playback->tickCalls == 2, "completed clip reached playback again");
+
+    Fixture failed;
+    start(failed, value);
+    enqueueFrame(failed, 7, 1);
+    static_cast<void>(failed.session->tick(1));
+    failed.playback->failCancel = true;
+    auto failedBoundary = playbackReceipt(
+        1,
+        HeadlessAvPlaybackState::playing,
+        HeadlessAvPlaybackOutcome::changed
+    );
+    failedBoundary.hasTargetTimelineFrame = true;
+    failedBoundary.targetTimelineFrame = 2;
+    failedBoundary.frame = frame(2, 8, 0.75F);
+    failed.playback->ticks.push_back(std::move(failedBoundary));
+    const auto failure = failed.session->tick(1);
+    require(failure.outcome == PreviewPresentationOutcome::failed, "clip-end stop failure hidden");
+    require(
+        failure.failure == PreviewPresentationFailureCode::playbackFailure,
+        "clip-end stop failure lost its code"
+    );
+    require(failed.renderer->calls == 1, "clip-end stop failure rendered inactive content");
+}
+
 void resizeMarksTheCachedFrameDirty() {
     Fixture fixture;
     start(fixture);
@@ -586,32 +647,123 @@ void resizeMarksTheCachedFrameDirty() {
 }
 
 void settingsCanChangeWithoutRestartingPlayback() {
-    Fixture fixture;
-    start(fixture);
-    enqueueFrame(fixture);
-    static_cast<void>(fixture.session->tick(1));
+    const auto verify = [](
+        const std::string& name,
+        const std::function<void(PreviewPresentationSettings&)>& mutate,
+        std::int64_t timelineFrame
+    ) {
+        Fixture fixture;
+        auto initial = settings();
+        initial.renderLayer.timelineStartFrame = timelineFrame;
+        require(
+            fixture.session->play(
+                "input.mov",
+                timelineFrame,
+                {static_cast<std::uint32_t>(initial.renderLayer.framesPerSecond), 1},
+                initial
+            ).outcome
+                == PreviewPresentationOutcome::changed,
+            name + " initial play failed"
+        );
+        enqueueFrame(fixture, 0, timelineFrame);
+        static_cast<void>(fixture.session->tick(1));
 
-    const auto changed = fixture.session->play("input.mov", 0, {10, 1}, settings(1));
-    require(changed.outcome == PreviewPresentationOutcome::changed, "settings change no-op'd");
-    require(changed.generation == 1, "settings change restarted playback");
-    require(fixture.playback->playCalls == 2, "settings change skipped playback validation");
+        auto changedSettings = initial;
+        mutate(changedSettings);
+        const auto changed = fixture.session->play(
+            "input.mov",
+            timelineFrame,
+            {static_cast<std::uint32_t>(changedSettings.renderLayer.framesPerSecond), 1},
+            changedSettings
+        );
+        require(changed.outcome == PreviewPresentationOutcome::changed, name + " no-op'd");
+        require(changed.generation == 1, name + " restarted playback");
+        require(fixture.playback->playCalls == 2, name + " skipped playback validation");
+        require(
+            fixture.session->tick(1).outcome == PreviewPresentationOutcome::presented,
+            name + " did not rerender cached frame"
+        );
+        require(fixture.renderer->calls == 2, name + " render count differs");
+        require(
+            fixture.session->play(
+                "input.mov",
+                timelineFrame,
+                {static_cast<std::uint32_t>(changedSettings.renderLayer.framesPerSecond), 1},
+                changedSettings
+            ).outcome == PreviewPresentationOutcome::noOp,
+            name + " identical settings changed twice"
+        );
+    };
+
+    verify("canvas width", [](auto& value) { value.renderLayer.canvasWidth = 3; }, 0);
+    verify("canvas height", [](auto& value) { value.renderLayer.canvasHeight = 2; }, 0);
+    verify("timeline ID", [](auto& value) { value.renderLayer.timelineId = "other"; }, 0);
+    verify("track ID", [](auto& value) { value.renderLayer.trackId = "other"; }, 0);
+    verify("clip ID", [](auto& value) { value.renderLayer.clipId = "other"; }, 0);
+    verify("media ID", [](auto& value) { value.renderLayer.mediaId = "other"; }, 0);
+    verify("duration", [](auto& value) { value.renderLayer.durationFrames = 99; }, 0);
+    verify("center X", [](auto& value) { value.renderLayer.transform.centerX = 0.25F; }, 0);
+    verify("center Y", [](auto& value) { value.renderLayer.transform.centerY = 0.75F; }, 0);
+    verify("width", [](auto& value) { value.renderLayer.transform.width = 0.5F; }, 0);
+    verify("height", [](auto& value) { value.renderLayer.transform.height = 0.5F; }, 0);
+    verify("rotation", [](auto& value) { value.renderLayer.transform.rotationDegrees = 15; }, 0);
+    verify("opacity", [](auto& value) { value.renderLayer.opacity = 0.5F; }, 0);
+    verify("exposure", [](auto& value) { value.renderLayer.exposureEv = 1; }, 0);
+}
+
+void sourceMappingChangeRequiresPlaybackRestart() {
+    Fixture fixture;
+    auto initial = settings();
+    initial.renderLayer.timelineStartFrame = 5;
     require(
-        fixture.session->tick(1).outcome == PreviewPresentationOutcome::presented,
-        "settings change did not rerender cached frame"
+        fixture.session->play("input.mov", 5, {10, 1}, initial).outcome
+            == PreviewPresentationOutcome::changed,
+        "source mapping baseline did not start"
     );
-    require(fixture.renderer->calls == 2, "settings change render count differs");
+    auto changed = initial;
+    changed.renderLayer.timelineStartFrame = 4;
+    require(
+        fixture.session->play("input.mov", 5, {10, 1}, changed).outcome
+            == PreviewPresentationOutcome::refused,
+        "source mapping changed without a playback restart"
+    );
+
+    fixture.playback->plays.push_back(playbackReceipt(
+        2,
+        HeadlessAvPlaybackState::playing,
+        HeadlessAvPlaybackOutcome::changed
+    ));
+    const auto restarted = fixture.session->play("input.mov", 5, {10, 1}, changed);
+    require(restarted.outcome == PreviewPresentationOutcome::changed, "restarted mapping refused");
+    require(restarted.generation == 2, "restarted mapping kept the old generation");
+
+    auto rateChanged = changed;
+    rateChanged.renderLayer.framesPerSecond = 11;
+    require(
+        fixture.session->play("input.mov", 5, {11, 1}, rateChanged).outcome
+            == PreviewPresentationOutcome::refused,
+        "frame-rate mapping changed without a playback restart"
+    );
 }
 
 void invalidAndStaleRequestsDoNotReachOwnedPorts() {
     Fixture fixture;
     auto invalid = settings();
-    invalid.canvasWidth = 0;
+    invalid.renderLayer.canvasWidth = 0;
     require(
         fixture.session->play("input.mov", 0, {10, 1}, invalid).outcome
             == PreviewPresentationOutcome::refused,
         "invalid settings were accepted"
     );
     require(fixture.playback->playCalls == 0, "invalid settings reached playback");
+    auto unseekable = settings();
+    unseekable.renderLayer.sourceStartFrame = 1;
+    require(
+        fixture.session->play("input.mov", 0, {10, 1}, unseekable).outcome
+            == PreviewPresentationOutcome::refused,
+        "nonzero source start was accepted before seek support"
+    );
+    require(fixture.playback->playCalls == 0, "nonzero source start reached playback");
     start(fixture);
     require(
         fixture.session->tick(2).outcome == PreviewPresentationOutcome::stale,
@@ -821,8 +973,10 @@ int main() {
         oneTickConsumesAndPresentsOneFrame();
         busySurfaceRetriesTheRenderedFrame();
         completedPlaybackRetriesAndResizesTheFinalFrame();
+        clipEndCompletesWithoutRenderingPastBoundary();
         resizeMarksTheCachedFrameDirty();
         settingsCanChangeWithoutRestartingPlayback();
+        sourceMappingChangeRequiresPlaybackRestart();
         invalidAndStaleRequestsDoNotReachOwnedPorts();
         terminalSurfaceStopsPlayback();
         renderFailureStopsPlayback();

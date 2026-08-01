@@ -59,14 +59,17 @@ This does not replace the Python schema and Swift-source audit. The GitHub
 Windows Server build also does not prove Windows 10 19045 runtime compatibility;
 that remains a clean-VM gate.
 
-The next synthetic rendering boundary is also compiled in Windows CI.
+The render boundary is also compiled in Windows CI.
 `core/render` defines the immutable v1 RenderPlan and CPU oracle;
 `windows/render-d3d11` consumes it through a headless feature-level 11_0 WARP
 backend. Its CTest checks CPU/WARP float-frame parity and identical full-quality
-preview/export entry points. This does not yet establish parity with the Swift
-BGRA8 compositor. It has no project compiler, Swift pixel goldens, FFmpeg, WASAPI,
-swapchain, Qt, physical-GPU, or Windows 10 runtime evidence yet. ADR 0009 lists
-the required hard refusals before project integration.
+preview/export render test entry points. `core/project-render` now compiles one persisted
+static video clip through stable IDs into the same plan, including transform,
+opacity, normal blend, and one exposure effect. Unsupported visual properties
+are explicit refusals. This does not yet establish parity with the Swift BGRA8
+compositor or prove multi-layer composition, encoding, physical-GPU behavior,
+or Windows 10 runtime behavior. A production export planner/encoder is not yet
+connected. See ADR 0009 and ADR 0024.
 
 The optional FFmpeg prototype activates the first vcpkg manifest dependency:
 

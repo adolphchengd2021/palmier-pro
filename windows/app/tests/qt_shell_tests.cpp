@@ -165,7 +165,7 @@ private slots:
         std::exception_ptr failure;
         std::jthread worker([&] {
             try {
-                constexpr auto source = R"({"timelines":[{"id":"timeline","name":"Timeline","fps":30,"width":1920,"height":1080,"tracks":[{"id":"track-a","type":"video","clips":[{"id":"clip-unsafe","mediaRef":"media-unsafe","mediaType":"video","sourceClipType":"video","startFrame":-1,"durationFrames":30},{"id":"clip-late","mediaRef":"media-late","mediaType":"video","sourceClipType":"video","startFrame":30,"durationFrames":30},{"id":"clip-first","mediaRef":"media-first","mediaType":"video","sourceClipType":"video","startFrame":5,"durationFrames":30}]}]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]})";
+                constexpr auto source = R"({"timelines":[{"id":"timeline","name":"Timeline","fps":30,"width":1920,"height":1080,"tracks":[{"id":"track-a","type":"video","clips":[{"id":"clip-late","mediaRef":"media-late","mediaType":"video","sourceClipType":"video","startFrame":40,"durationFrames":30},{"id":"clip-first","mediaRef":"media-first","mediaType":"video","sourceClipType":"video","startFrame":5,"durationFrames":30,"opacity":0.75,"transform":{"centerX":0.25,"centerY":0.75,"width":0.5,"height":0.25,"rotation":15,"flipHorizontal":false,"flipVertical":false},"effects":[{"type":"color.exposure","params":{"ev":{"value":1}}}]}]}]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]})";
                 const auto document = palmier::project::readProject(
                     source,
                     [] { return std::string("generated"); }
@@ -207,11 +207,163 @@ private slots:
             palmier::windows::PreviewCandidateAvailability::available
         );
         QVERIFY(preview.candidate.has_value());
-        QCOMPARE(preview.candidate->timelineId, std::string("timeline"));
-        QCOMPARE(preview.candidate->trackId, std::string("track-a"));
-        QCOMPARE(preview.candidate->clipId, std::string("clip-first"));
-        QCOMPARE(preview.candidate->mediaId, std::string("media-first"));
-        QCOMPARE(preview.candidate->timelineFrame, std::int64_t{5});
+        const auto& layer = preview.candidate->renderLayer;
+        QCOMPARE(layer.timelineId, std::string("timeline"));
+        QCOMPARE(layer.trackId, std::string("track-a"));
+        QCOMPARE(layer.clipId, std::string("clip-first"));
+        QCOMPARE(layer.mediaId, std::string("media-first"));
+        QCOMPARE(layer.timelineStartFrame, std::int64_t{5});
+        QCOMPARE(layer.transform.centerX, 0.25F);
+        QCOMPARE(layer.transform.centerY, 0.75F);
+        QCOMPARE(layer.transform.width, 0.5F);
+        QCOMPARE(layer.transform.height, 0.25F);
+        QCOMPARE(layer.transform.rotationDegrees, 15.0F);
+        QCOMPARE(layer.opacity, 0.75F);
+        QVERIFY(layer.exposureEv == std::optional<float>{1});
+    }
+
+    void unsupportedVisualPropertiesAreNotSilentlyDropped() {
+        palmier::windows::ProjectPreviewProjection preview;
+        std::exception_ptr failure;
+        std::jthread worker([&] {
+            try {
+                constexpr auto source = R"({"timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{"id":"track","type":"video","clips":[{"id":"clip","mediaRef":"media","mediaType":"video","sourceClipType":"video","startFrame":0,"durationFrames":30,"crop":{"left":0.1,"top":0,"right":0,"bottom":0}}]}]}],"activeTimelineId":"timeline"})";
+                const auto document = palmier::project::readProject(
+                    source,
+                    [] { return std::string("generated"); }
+                );
+                const palmier::project::MediaManifest manifest{{{
+                    "media",
+                    "video",
+                    {palmier::project::MediaSourceKind::project, "project.json"},
+                    true,
+                }}};
+                preview = palmier::windows::projectPreviewForActiveTimeline(
+                    document,
+                    manifest,
+                    fixture("current-multitimeline.palmier"),
+                    {}
+                );
+            } catch (...) {
+                failure = std::current_exception();
+            }
+        });
+        worker.join();
+        if (failure) std::rethrow_exception(failure);
+        QCOMPARE(
+            preview.availability,
+            palmier::windows::PreviewCandidateAvailability::unsupported
+        );
+        QCOMPARE(preview.reasonCode, std::string("unsupportedMasking"));
+        QVERIFY(!preview.candidate.has_value());
+    }
+
+    void malformedEarlierVisualCannotBeSkippedForLaterCandidate() {
+        palmier::windows::ProjectPreviewProjection preview;
+        std::exception_ptr failure;
+        std::jthread worker([&] {
+            try {
+                constexpr auto source = R"({"timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{"id":"track","type":"video","clips":[{"id":"malformed","mediaRef":"media-one","mediaType":"video","sourceClipType":"video","startFrame":0,"durationFrames":30,"transform":{"width":"bad"}},{"id":"later","mediaRef":"media-two","mediaType":"video","sourceClipType":"video","startFrame":30,"durationFrames":30}]}]}],"activeTimelineId":"timeline"})";
+                const auto document = palmier::project::readProject(
+                    source,
+                    [] { return std::string("generated"); }
+                );
+                const palmier::project::MediaManifest manifest{{{
+                    "media-two",
+                    "video",
+                    {palmier::project::MediaSourceKind::project, "project.json"},
+                    true,
+                }}};
+                preview = palmier::windows::projectPreviewForActiveTimeline(
+                    document,
+                    manifest,
+                    fixture("current-multitimeline.palmier"),
+                    {}
+                );
+            } catch (...) {
+                failure = std::current_exception();
+            }
+        });
+        worker.join();
+        if (failure) std::rethrow_exception(failure);
+        QCOMPARE(
+            preview.availability,
+            palmier::windows::PreviewCandidateAvailability::unsupported
+        );
+        QCOMPARE(preview.reasonCode, std::string("malformedVisualProperty"));
+        QVERIFY(!preview.candidate.has_value());
+    }
+
+    void unsupportedTimingCannotBeSkippedForLaterCandidate() {
+        palmier::windows::ProjectPreviewProjection preview;
+        std::exception_ptr failure;
+        std::jthread worker([&] {
+            try {
+                constexpr auto source = R"({"timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{"id":"track","type":"video","clips":[{"id":"trimmed","mediaRef":"media-one","mediaType":"video","sourceClipType":"video","startFrame":0,"durationFrames":30,"trimStartFrame":1},{"id":"later","mediaRef":"media-two","mediaType":"video","sourceClipType":"video","startFrame":30,"durationFrames":30}]}]}],"activeTimelineId":"timeline"})";
+                const auto document = palmier::project::readProject(
+                    source,
+                    [] { return std::string("generated"); }
+                );
+                const palmier::project::MediaManifest manifest{{{
+                    "media-two",
+                    "video",
+                    {palmier::project::MediaSourceKind::project, "project.json"},
+                    true,
+                }}};
+                preview = palmier::windows::projectPreviewForActiveTimeline(
+                    document,
+                    manifest,
+                    fixture("current-multitimeline.palmier"),
+                    {}
+                );
+            } catch (...) {
+                failure = std::current_exception();
+            }
+        });
+        worker.join();
+        if (failure) std::rethrow_exception(failure);
+        QCOMPARE(
+            preview.availability,
+            palmier::windows::PreviewCandidateAvailability::unsupported
+        );
+        QCOMPARE(preview.reasonCode, std::string("unsupportedClipTiming"));
+        QVERIFY(!preview.candidate.has_value());
+    }
+
+    void overlappingVisualLayerIsExplicitlyRefused() {
+        palmier::windows::ProjectPreviewProjection preview;
+        std::exception_ptr failure;
+        std::jthread worker([&] {
+            try {
+                constexpr auto source = R"({"timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{"id":"bottom-track","type":"video","clips":[{"id":"bottom","mediaRef":"media-bottom","mediaType":"video","sourceClipType":"video","startFrame":0,"durationFrames":30}]},{"id":"top-track","type":"text","clips":[{"id":"top","mediaRef":"media-top","mediaType":"text","sourceClipType":"text","startFrame":10,"durationFrames":10}]}]}],"activeTimelineId":"timeline"})";
+                const auto document = palmier::project::readProject(
+                    source,
+                    [] { return std::string("generated"); }
+                );
+                const palmier::project::MediaManifest manifest{{{
+                    "media-bottom",
+                    "video",
+                    {palmier::project::MediaSourceKind::project, "project.json"},
+                    true,
+                }}};
+                preview = palmier::windows::projectPreviewForActiveTimeline(
+                    document,
+                    manifest,
+                    fixture("current-multitimeline.palmier"),
+                    {}
+                );
+            } catch (...) {
+                failure = std::current_exception();
+            }
+        });
+        worker.join();
+        if (failure) std::rethrow_exception(failure);
+        QCOMPARE(
+            preview.availability,
+            palmier::windows::PreviewCandidateAvailability::unsupported
+        );
+        QCOMPARE(preview.reasonCode, std::string("multiLayerPreviewUnsupported"));
+        QVERIFY(!preview.candidate.has_value());
     }
 
     void modelPublishesReadOnlyTrackLayout() {

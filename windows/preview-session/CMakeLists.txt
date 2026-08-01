@@ -15,7 +15,7 @@ target_compile_options(
 )
 target_link_libraries(
     palmier_preview_session
-    PUBLIC palmier_media_session palmier_render_d3d11
+    PUBLIC palmier_media_session palmier_project_render palmier_render_d3d11
 )
 
 if(BUILD_TESTING)

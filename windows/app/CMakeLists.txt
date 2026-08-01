@@ -19,7 +19,7 @@ add_library(palmier_qt_shell_core STATIC
 target_include_directories(palmier_qt_shell_core PUBLIC "${app_include_dir}")
 target_link_libraries(
     palmier_qt_shell_core
-    PUBLIC Qt6::Core Qt6::Concurrent palmier_project_reader
+    PUBLIC Qt6::Core Qt6::Concurrent palmier_project_reader palmier_project_render
 )
 target_compile_features(palmier_qt_shell_core PUBLIC cxx_std_20)
 
@@ -104,6 +104,22 @@ if(BUILD_TESTING)
     add_palmier_qt_shell_test(
         stable_preview_candidate_uses_persisted_ids
         stablePreviewCandidateUsesPersistedIds
+    )
+    add_palmier_qt_shell_test(
+        unsupported_visual_properties_are_not_silently_dropped
+        unsupportedVisualPropertiesAreNotSilentlyDropped
+    )
+    add_palmier_qt_shell_test(
+        malformed_earlier_visual_cannot_be_skipped
+        malformedEarlierVisualCannotBeSkippedForLaterCandidate
+    )
+    add_palmier_qt_shell_test(
+        unsupported_timing_cannot_be_skipped
+        unsupportedTimingCannotBeSkippedForLaterCandidate
+    )
+    add_palmier_qt_shell_test(
+        overlapping_visual_layer_is_explicitly_refused
+        overlappingVisualLayerIsExplicitlyRefused
     )
     add_palmier_qt_shell_test(model_publishes_track_layout modelPublishesReadOnlyTrackLayout)
     add_palmier_qt_shell_test(failure_preserves_model failurePreservesPreviousModel)

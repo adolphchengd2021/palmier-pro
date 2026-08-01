@@ -38,44 +38,18 @@ public:
         const PreviewMediaCandidateProjection& candidate,
         std::stop_token cancellation
     ) override {
-        if (
-            candidate.framesPerSecond <= 0
-            || candidate.framesPerSecond > static_cast<std::int64_t>(
-                std::numeric_limits<std::int32_t>::max()
-            )
-            || candidate.canvasWidth <= 0
-            || candidate.canvasWidth > static_cast<std::int64_t>(
-                std::numeric_limits<std::uint32_t>::max()
-            )
-            || candidate.canvasHeight <= 0
-            || candidate.canvasHeight > static_cast<std::int64_t>(
-                std::numeric_limits<std::uint32_t>::max()
-            )
-        ) {
+        if (candidate.renderLayer.framesPerSecond <= 0) {
             auto receipt = failedReceipt();
             receipt.outcome = preview::PreviewPresentationOutcome::refused;
             receipt.failure = preview::PreviewPresentationFailureCode::invalidRequest;
             receipt.hresult = E_INVALIDARG;
             return receipt;
         }
-        const auto framesPerSecond = static_cast<std::int32_t>(
-            candidate.framesPerSecond
-        );
         return session_.play(
             candidate.inputPath,
-            candidate.timelineFrame,
-            {static_cast<std::uint32_t>(framesPerSecond), 1},
-            {
-                static_cast<std::uint32_t>(candidate.canvasWidth),
-                static_cast<std::uint32_t>(candidate.canvasHeight),
-                framesPerSecond,
-                candidate.clipId,
-                candidate.trackId,
-                candidate.mediaId,
-                {},
-                static_cast<float>(candidate.opacity),
-                std::nullopt,
-            },
+            candidate.renderLayer.timelineStartFrame,
+            {static_cast<std::uint32_t>(candidate.renderLayer.framesPerSecond), 1},
+            {candidate.renderLayer},
             cancellation
         );
     }
@@ -793,7 +767,7 @@ void PreviewPresentationController::completeOperation(OperationResult result) {
             scheduleNextTick(
                 result.sourceSerial,
                 playbackGeneration_,
-                desiredPreview_->preview.candidate->framesPerSecond
+                desiredPreview_->preview.candidate->renderLayer.framesPerSecond
             );
         }
         servicePendingWork();
@@ -839,7 +813,7 @@ void PreviewPresentationController::completeOperation(OperationResult result) {
             scheduleNextTick(
                 result.sourceSerial,
                 playbackGeneration_,
-                desiredPreview_->preview.candidate->framesPerSecond
+                desiredPreview_->preview.candidate->renderLayer.framesPerSecond
             );
         }
         servicePendingWork();

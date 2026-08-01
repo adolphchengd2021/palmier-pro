@@ -1,6 +1,7 @@
 #pragma once
 
 #include "palmier/media/headless_av_playback_session.hpp"
+#include "palmier/project_render/project_render_compiler.hpp"
 #include "palmier/render/d3d11_preview_surface.hpp"
 
 #include <Windows.h>
@@ -16,15 +17,7 @@
 namespace palmier::preview {
 
 struct PreviewPresentationSettings final {
-    std::uint32_t canvasWidth{};
-    std::uint32_t canvasHeight{};
-    std::int32_t framesPerSecond{};
-    std::string layerId;
-    std::string trackId;
-    std::string mediaId;
-    render::Transform2D transform;
-    float opacity{1};
-    std::optional<float> exposureEv;
+    project_render::StaticVideoLayer renderLayer;
 };
 
 struct PreviewPresentationLimits final {

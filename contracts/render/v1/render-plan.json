@@ -1,10 +1,10 @@
 {
   "contractVersion": 1,
   "sourceCommit": "b88d553231327df734758ac1f6aaf6f4a2b79b7e",
-  "status": "synthetic-reference-spike",
+  "status": "project-static-layer-spike",
   "immutable": true,
   "layerOrder": "bottom-to-top",
-  "semanticEvidence": "self-consistent-cpu-warp-only",
+  "semanticEvidence": "project-compiled-render-entrypoint-parity",
   "swiftPixelGoldenAvailable": false,
   "previewExportEntryPoints": [
     "renderPreviewFrame",
@@ -87,11 +87,10 @@
       1
     ]
   },
-  "hardRefusalsBeforeProjectIntegration": [
-    "same-track-overlap",
+  "hardRefusalsForStaticProjectIntegration": [
+    "overlapping-visible-layers",
     "speed-not-one",
-    "variable-frame-rate",
-    "source-fps-mismatch",
+    "nonzero-trim-preview",
     "crop",
     "flip",
     "dynamic-keyframes",
@@ -105,7 +104,35 @@
     "mixed-or-unknown-color-metadata",
     "unknown-alpha-mode"
   ],
-  "projectCompilerAvailable": false,
+  "timestampCadence": {
+    "selection": "decoded presentation timestamps against the integer timeline clock",
+    "status": "VFR and source-fps-mismatch behavior remains unverified"
+  },
+  "projectCompilerAvailable": true,
+  "projectCompiler": {
+    "owner": "core/project-render",
+    "input": "read-only ProjectDocument full DOM plus persisted timeline, track, and clip IDs",
+    "output": "immutable single static video layer template",
+    "sourceFrame": "trimStartFrame plus timelineFrame minus clip start at exact 1x speed",
+    "supported": [
+      "static transform without flips",
+      "static opacity",
+      "normal blend",
+      "zero or one enabled static color.exposure effect"
+    ],
+    "explicitRefusals": [
+      "synthesized or duplicate IDs",
+      "hidden or non-video track",
+      "unsafe or non-1x clip timing",
+      "source-frame range overflow",
+      "malformed visual properties",
+      "crop or edge masking",
+      "flip",
+      "fades or active visual keyframes",
+      "non-normal blend",
+      "multiple, dynamic, out-of-range, or unsupported enabled effects"
+    ]
+  },
   "rendererConcurrency": "a stop-token-aware gate serializes the immediate context per backend instance",
   "rendererCancellation": "shared preview/export and CPU/WARP backends accept a stop token and check it before validation, allocation, each layer, and bounded row work; a synchronous D3D11 staging Map remains non-interruptible",
   "resolverLifetime": "immutable-source-through-render-call",

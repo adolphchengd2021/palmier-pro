@@ -2,6 +2,7 @@
 
 #include "palmier/project/project_package_reader.hpp"
 #include "palmier/project/media_manifest_reader.hpp"
+#include "palmier/project_render/project_render_compiler.hpp"
 
 #include <QVariantMap>
 
@@ -113,6 +114,32 @@ bool supportedClip(const palmier::project::Clip& clip) {
         && clip.opacity >= 0
         && clip.opacity <= 1
         && (!clip.blendMode || *clip.blendMode == "normal");
+}
+
+bool hasOverlappingVisualClip(
+    const palmier::project::Timeline& timeline,
+    const palmier::project::Clip& candidate,
+    std::stop_token cancellation
+) {
+    const auto candidateEnd = checkedClipEnd(candidate);
+    if (!candidateEnd) return false;
+    for (const auto& track : timeline.tracks) {
+        checkCancellation(cancellation);
+        if (track.hidden || track.type == "audio") continue;
+        for (const auto& clip : track.clips) {
+            checkCancellation(cancellation);
+            if (&clip == &candidate || clip.mediaType == "audio") continue;
+            const auto clipEnd = checkedClipEnd(clip);
+            if (
+                clipEnd
+                && clip.startFrame < *candidateEnd
+                && candidate.startFrame < *clipEnd
+            ) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 }
@@ -238,14 +265,42 @@ ProjectPreviewProjection projectPreviewForActiveTimeline(
             track.id.origin != palmier::project::EntityIdOrigin::persisted
             || clip.id.origin != palmier::project::EntityIdOrigin::persisted
         ) {
-            firstReason = "unstableCandidateId";
-            firstAvailability = PreviewCandidateAvailability::unsupported;
-            continue;
+            return {
+                PreviewCandidateAvailability::unsupported,
+                "unstableCandidateId",
+                std::nullopt,
+            };
         }
         if (!supportedClip(clip)) {
-            firstReason = "unsupportedClipTiming";
-            firstAvailability = PreviewCandidateAvailability::unsupported;
-            continue;
+            return {
+                PreviewCandidateAvailability::unsupported,
+                "unsupportedClipTiming",
+                std::nullopt,
+            };
+        }
+        std::optional<project_render::StaticVideoLayer> renderLayer;
+        try {
+            renderLayer = project_render::compileStaticVideoLayer(
+                document,
+                activeTimeline->id.value,
+                track.id.value,
+                clip.id.value,
+                cancellation
+            );
+        } catch (const project_render::ProjectRenderCompileError& error) {
+            checkCancellation(cancellation);
+            return {
+                PreviewCandidateAvailability::unsupported,
+                error.code,
+                std::nullopt,
+            };
+        }
+        if (hasOverlappingVisualClip(*activeTimeline, clip, cancellation)) {
+            return {
+                PreviewCandidateAvailability::unsupported,
+                "multiLayerPreviewUnsupported",
+                std::nullopt,
+            };
         }
         const auto* entry = firstManifestEntry(*manifest, clip.mediaRef);
         if (entry == nullptr) {
@@ -273,17 +328,8 @@ ProjectPreviewProjection projectPreviewForActiveTimeline(
             PreviewCandidateAvailability::available,
             {},
             PreviewMediaCandidateProjection{
-                activeTimeline->id.value,
-                track.id.value,
-                clip.id.value,
-                clip.mediaRef,
                 *inputPath,
-                clip.startFrame,
-                clip.durationFrames,
-                activeTimeline->fps,
-                activeTimeline->width,
-                activeTimeline->height,
-                clip.opacity,
+                std::move(*renderLayer),
                 entry->hasAudio,
             },
         };

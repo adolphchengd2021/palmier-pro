@@ -1,5 +1,7 @@
 #pragma once
 
+#include "palmier/project_render/project_render_compiler.hpp"
+
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -15,17 +17,8 @@ enum class PreviewCandidateAvailability {
 };
 
 struct PreviewMediaCandidateProjection final {
-    std::string timelineId;
-    std::string trackId;
-    std::string clipId;
-    std::string mediaId;
     std::filesystem::path inputPath;
-    std::int64_t timelineFrame{};
-    std::int64_t durationFrames{};
-    std::int64_t framesPerSecond{};
-    std::int64_t canvasWidth{};
-    std::int64_t canvasHeight{};
-    double opacity{1};
+    project_render::StaticVideoLayer renderLayer;
     std::optional<bool> hasAudio;
 };
 

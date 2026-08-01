@@ -1,3 +1,5 @@
+#include "palmier/project/project_reader.hpp"
+#include "palmier/project_render/project_render_compiler.hpp"
 #include "palmier/render/cpu_renderer.hpp"
 #include "palmier/render/d3d11_warp_renderer.hpp"
 
@@ -165,6 +167,57 @@ void clockwiseRotationCoverage() {
     compareFrames(expected, warp.render(plan, resolver), 2e-5F);
 }
 
+void projectCompiledPreviewExportParity() {
+    constexpr auto projectSource = R"({
+        "timelines":[{
+            "id":"timeline","fps":30,"width":8,"height":8,
+            "tracks":[{"id":"track","type":"video","clips":[{
+                "id":"clip","mediaRef":"media","mediaType":"video",
+                "sourceClipType":"video","startFrame":0,"durationFrames":1,
+                "opacity":0.75,"blendMode":"normal",
+                "transform":{
+                    "centerX":0.5,"centerY":0.5,"width":0.5,"height":0.5,
+                    "rotation":15,"flipHorizontal":false,"flipVertical":false
+                },
+                "effects":[{
+                    "type":"color.exposure","enabled":true,
+                    "params":{"ev":{"value":1}}
+                }]
+            }]}]
+        }],
+        "activeTimelineId":"timeline"
+    })";
+    const auto project = palmier::project::readProject(projectSource, [] {
+        return std::string("unexpected-generated-id");
+    });
+    const auto compiled = palmier::project_render::compileStaticVideoLayer(
+        project,
+        "timeline",
+        "track",
+        "clip"
+    );
+    const auto plan = palmier::project_render::makeRenderPlan(compiled, 0);
+    const SourceFrame source{
+        2,
+        2,
+        {
+            {0.1F, 0.2F, 0.3F, 1}, {0.4F, 0.3F, 0.2F, 1},
+            {0.2F, 0.4F, 0.1F, 1}, {0.3F, 0.1F, 0.4F, 1},
+        },
+    };
+    const auto resolver = [&](std::string_view mediaId, std::int64_t sourceFrame)
+        -> const SourceFrame* {
+        return mediaId == "media" && sourceFrame == 0 ? &source : nullptr;
+    };
+    palmier::render::CpuRenderer cpu;
+    const auto expected = palmier::render::renderPreviewFrame(plan, resolver, cpu);
+    palmier::render::D3d11WarpRenderer warp;
+    const auto preview = palmier::render::renderPreviewFrame(plan, resolver, warp);
+    const auto exported = palmier::render::renderExportFrame(plan, resolver, warp);
+    require(preview.pixels == exported.pixels, "project WARP preview/export frames differ");
+    compareFrames(expected, preview, 2e-5F);
+}
+
 void cancellationStopsWarpBeforeRendering() {
     const SourceFrame source{1, 1, {{1, 0, 0, 1}}};
     const auto plan = RenderPlan::create(
@@ -193,6 +246,7 @@ int main() {
     try {
         renderParity();
         clockwiseRotationCoverage();
+        projectCompiledPreviewExportParity();
         cancellationStopsWarpBeforeRendering();
         std::cout << "PALMIER_D3D11_WARP_TESTS_OK\n";
         return 0;

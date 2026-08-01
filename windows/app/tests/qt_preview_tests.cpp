@@ -123,7 +123,22 @@ ProjectPackageFixture createProjectPackageFixture() {
               "startFrame": 0,
               "durationFrames": 5,
               "speed": 1,
-              "opacity": 1,
+              "opacity": 0.75,
+              "transform": {
+                "centerX": 0.5,
+                "centerY": 0.5,
+                "width": 1,
+                "height": 1,
+                "rotation": 0,
+                "flipHorizontal": false,
+                "flipVertical": false
+              },
+              "effects": [{
+                "id": "effect-exposure",
+                "type": "color.exposure",
+                "enabled": true,
+                "params": {"ev": {"value": 1}}
+              }],
               "blendMode": "normal"
             }
           ]
@@ -459,17 +474,22 @@ palmier::windows::ProjectPreviewProjection availablePreview(std::string mediaId)
         palmier::windows::PreviewCandidateAvailability::available,
         {},
         palmier::windows::PreviewMediaCandidateProjection{
-            "timeline",
-            "video-track",
-            "clip-" + mediaId,
-            std::move(mediaId),
             std::filesystem::path(L"C:\\fixture.mp4"),
-            0,
-            30,
-            30,
-            1920,
-            1080,
-            1,
+            {
+                1920,
+                1080,
+                30,
+                "timeline",
+                "video-track",
+                "clip-" + mediaId,
+                std::move(mediaId),
+                0,
+                30,
+                0,
+                {},
+                1,
+                std::nullopt,
+            },
             true,
         },
     };

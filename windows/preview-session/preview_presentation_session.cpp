@@ -26,35 +26,25 @@ bool settingsEqual(
     const PreviewPresentationSettings& lhs,
     const PreviewPresentationSettings& rhs
 ) noexcept {
-    return lhs.canvasWidth == rhs.canvasWidth
-        && lhs.canvasHeight == rhs.canvasHeight
-        && lhs.framesPerSecond == rhs.framesPerSecond
-        && lhs.layerId == rhs.layerId
-        && lhs.trackId == rhs.trackId
-        && lhs.mediaId == rhs.mediaId
-        && lhs.transform.centerX == rhs.transform.centerX
-        && lhs.transform.centerY == rhs.transform.centerY
-        && lhs.transform.width == rhs.transform.width
-        && lhs.transform.height == rhs.transform.height
-        && lhs.transform.rotationDegrees == rhs.transform.rotationDegrees
-        && lhs.opacity == rhs.opacity
-        && lhs.exposureEv == rhs.exposureEv;
-}
-
-render::RenderLayer layer(
-    const PreviewPresentationSettings& settings,
-    std::int64_t sourceFrame
-) {
-    return {
-        settings.layerId,
-        settings.trackId,
-        settings.mediaId,
-        sourceFrame,
-        settings.transform,
-        settings.opacity,
-        render::BlendMode::normal,
-        settings.exposureEv,
-    };
+    const auto& left = lhs.renderLayer;
+    const auto& right = rhs.renderLayer;
+    return left.canvasWidth == right.canvasWidth
+        && left.canvasHeight == right.canvasHeight
+        && left.framesPerSecond == right.framesPerSecond
+        && left.timelineId == right.timelineId
+        && left.trackId == right.trackId
+        && left.clipId == right.clipId
+        && left.mediaId == right.mediaId
+        && left.timelineStartFrame == right.timelineStartFrame
+        && left.durationFrames == right.durationFrames
+        && left.sourceStartFrame == right.sourceStartFrame
+        && left.transform.centerX == right.transform.centerX
+        && left.transform.centerY == right.transform.centerY
+        && left.transform.width == right.transform.width
+        && left.transform.height == right.transform.height
+        && left.transform.rotationDegrees == right.transform.rotationDegrees
+        && left.opacity == right.opacity
+        && left.exposureEv == right.exposureEv;
 }
 
 PreviewPresentationState stateFor(media::HeadlessAvPlaybackState state) noexcept {
@@ -170,16 +160,17 @@ public:
         const PreviewPresentationSettings& settings,
         std::stop_token cancellation
     ) override {
-        const auto plan = render::RenderPlan::create(
-            settings.canvasWidth,
-            settings.canvasHeight,
-            settings.framesPerSecond,
-            targetTimelineFrame,
-            {layer(settings, 0)}
+        const auto plan = project_render::makeRenderPlan(
+            settings.renderLayer,
+            targetTimelineFrame
         );
+        const auto expectedSourceFrame = plan.layers().front().sourceFrame;
         const auto resolver = [&](std::string_view mediaId, std::int64_t sourceFrame)
             -> const render::SourceFrame* {
-            if (mediaId == settings.mediaId && sourceFrame == 0) {
+            if (
+                mediaId == settings.renderLayer.mediaId
+                && sourceFrame == expectedSourceFrame
+            ) {
                 return &frame.source;
             }
             return nullptr;
@@ -310,10 +301,11 @@ PreviewPresentationReceipt PreviewPresentationSession::play(
             HRESULT_FROM_WIN32(ERROR_CANCELLED)
         );
     }
-    if (settings.framesPerSecond <= 0
+    if (settings.renderLayer.framesPerSecond <= 0
+        || settings.renderLayer.sourceStartFrame != 0
         || timelineFrameRate.denominator != 1
         || timelineFrameRate.numerator
-            != static_cast<std::uint32_t>(settings.framesPerSecond)) {
+            != static_cast<std::uint32_t>(settings.renderLayer.framesPerSecond)) {
         return refused(
             PreviewPresentationStage::validate,
             PreviewPresentationFailureCode::invalidRequest,
@@ -321,12 +313,9 @@ PreviewPresentationReceipt PreviewPresentationSession::play(
         );
     }
     try {
-        static_cast<void>(render::RenderPlan::create(
-            settings.canvasWidth,
-            settings.canvasHeight,
-            settings.framesPerSecond,
-            timelineFrame,
-            {layer(settings, 0)}
+        static_cast<void>(project_render::makeRenderPlan(
+            settings.renderLayer,
+            timelineFrame
         ));
     } catch (const std::exception&) {
         return refused(
@@ -364,6 +353,20 @@ PreviewPresentationReceipt PreviewPresentationSession::play(
     const bool generationChanged = playback.generation != generation_;
     const bool settingsChanged = !settings_.has_value()
         || !settingsEqual(*settings_, settings);
+    const bool sourceMappingChanged = settings_.has_value()
+        && (settings_->renderLayer.framesPerSecond
+                != settings.renderLayer.framesPerSecond
+            || settings_->renderLayer.timelineStartFrame
+                != settings.renderLayer.timelineStartFrame
+            || settings_->renderLayer.sourceStartFrame
+                != settings.renderLayer.sourceStartFrame);
+    if (!generationChanged && sourceMappingChanged) {
+        return refused(
+            PreviewPresentationStage::validate,
+            PreviewPresentationFailureCode::invalidRequest,
+            E_INVALIDARG
+        );
+    }
     generation_ = playback.generation;
     state_ = stateFor(playback.state);
     if (generationChanged) {
@@ -434,7 +437,42 @@ PreviewPresentationReceipt PreviewPresentationSession::tick(
         expectedGeneration,
         operation->cancellation.get_token()
     );
+    const auto playbackOutcome = outcomeFor(playback.outcome);
     state_ = stateFor(playback.state);
+    if (
+        (playbackOutcome == PreviewPresentationOutcome::changed
+            || playbackOutcome == PreviewPresentationOutcome::noOp)
+        && playback.hasTargetTimelineFrame
+        && settings_.has_value()
+    ) {
+        const auto& layer = settings_->renderLayer;
+        if (
+            playback.targetTimelineFrame >= layer.timelineStartFrame
+            && playback.targetTimelineFrame - layer.timelineStartFrame
+                >= layer.durationFrames
+        ) {
+            const auto stopped = playback_->cancel(expectedGeneration);
+            const auto stopOutcome = outcomeFor(stopped.outcome);
+            if (
+                stopOutcome != PreviewPresentationOutcome::changed
+                && stopOutcome != PreviewPresentationOutcome::noOp
+                && stopOutcome != PreviewPresentationOutcome::cancelled
+            ) {
+                state_ = stateFor(stopped.state);
+                auto value = receipt(stopOutcome, PreviewPresentationStage::tickPlayback);
+                value.failure = stopped.failure == media::HeadlessAvPlaybackFailureCode::none
+                    ? PreviewPresentationFailureCode::none
+                    : PreviewPresentationFailureCode::playbackFailure;
+                value.hresult = stopped.hresult;
+                value.mediaFailureCode = stopped.mediaFailureCode;
+                value.audioFailure = stopped.audioFailure;
+                return value;
+            }
+            state_ = PreviewPresentationState::completed;
+            playback.frame.reset();
+            playback.hasTargetTimelineFrame = false;
+        }
+    }
     if (playback.frame.has_value()) {
         cachedFrame_ = std::move(playback.frame);
         presentationDirty_ = true;
@@ -450,7 +488,6 @@ PreviewPresentationReceipt PreviewPresentationSession::tick(
         targetTimelineFrame_ = playback.targetTimelineFrame;
     }
 
-    const auto playbackOutcome = outcomeFor(playback.outcome);
     if (playbackOutcome == PreviewPresentationOutcome::cancelled) {
         clearFrameState();
     }
@@ -680,6 +717,7 @@ PreviewPresentationReceipt PreviewPresentationSession::cancel(
     const auto surface = surface_->clear({});
     state_ = stateFor(playback.state);
     presentSerial_ = surface.presentSerial;
+    settings_.reset();
     clearFrameState();
     const bool terminalSurface = isSurfaceTerminal(surface.outcome);
     if (terminalSurface) {

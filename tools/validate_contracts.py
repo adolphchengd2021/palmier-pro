@@ -1653,13 +1653,13 @@ def windows_render_plan_contract() -> None:
         contract["sourceCommit"],
         "b88d553231327df734758ac1f6aaf6f4a2b79b7e",
     )
-    require_equal("render plan status", contract["status"], "synthetic-reference-spike")
+    require_equal("render plan status", contract["status"], "project-static-layer-spike")
     require_equal("render plan immutability", contract["immutable"], True)
     require_equal("render plan layer order", contract["layerOrder"], "bottom-to-top")
     require_equal(
         "render plan semantic evidence",
         contract["semanticEvidence"],
-        "self-consistent-cpu-warp-only",
+        "project-compiled-render-entrypoint-parity",
     )
     require_equal("Swift pixel golden availability", contract["swiftPixelGoldenAvailable"], False)
     require_equal("render plan maximum pixels", contract["canvas"]["maximumPixelCount"], 8_294_400)
@@ -1698,7 +1698,35 @@ def windows_render_plan_contract() -> None:
     require_equal(
         "render plan project compiler availability",
         contract["projectCompilerAvailable"],
-        False,
+        True,
+    )
+    require_equal(
+        "render plan project compiler",
+        contract["projectCompiler"],
+        {
+            "owner": "core/project-render",
+            "input": "read-only ProjectDocument full DOM plus persisted timeline, track, and clip IDs",
+            "output": "immutable single static video layer template",
+            "sourceFrame": "trimStartFrame plus timelineFrame minus clip start at exact 1x speed",
+            "supported": [
+                "static transform without flips",
+                "static opacity",
+                "normal blend",
+                "zero or one enabled static color.exposure effect",
+            ],
+            "explicitRefusals": [
+                "synthesized or duplicate IDs",
+                "hidden or non-video track",
+                "unsafe or non-1x clip timing",
+                "source-frame range overflow",
+                "malformed visual properties",
+                "crop or edge masking",
+                "flip",
+                "fades or active visual keyframes",
+                "non-normal blend",
+                "multiple, dynamic, out-of-range, or unsupported enabled effects",
+            ],
+        },
     )
     require_equal(
         "decoded source adapter",
@@ -1724,10 +1752,9 @@ def windows_render_plan_contract() -> None:
         "immutable-source-through-render-call",
     )
     required_refusals = {
-        "same-track-overlap",
+        "overlapping-visible-layers",
         "speed-not-one",
-        "variable-frame-rate",
-        "source-fps-mismatch",
+        "nonzero-trim-preview",
         "crop",
         "flip",
         "dynamic-keyframes",
@@ -1743,8 +1770,16 @@ def windows_render_plan_contract() -> None:
     }
     require_equal(
         "render plan hard refusals",
-        set(contract["hardRefusalsBeforeProjectIntegration"]),
+        set(contract["hardRefusalsForStaticProjectIntegration"]),
         required_refusals,
+    )
+    require_equal(
+        "render plan timestamp cadence",
+        contract["timestampCadence"],
+        {
+            "selection": "decoded presentation timestamps against the integer timeline clock",
+            "status": "VFR and source-fps-mismatch behavior remains unverified",
+        },
     )
     require_equal(
         "render plan runtime gates",
@@ -1767,6 +1802,18 @@ def windows_render_plan_contract() -> None:
     plan_source = read_text("core/render/render_plan.cpp")
     cpu_source = read_text("core/render/cpu_renderer.cpp")
     warp_source = read_text("windows/render-d3d11/d3d11_warp_renderer.cpp")
+    compiler_header = read_text(
+        "core/project-render/include/palmier/project_render/"
+        "project_render_compiler.hpp"
+    )
+    compiler_source = read_text(
+        "core/project-render/project_render_compiler.cpp"
+    )
+    compiler_tests = read_text(
+        "core/project-render/tests/project_render_compiler_tests.cpp"
+    )
+    compiler_cmake = read_text("core/project-render/CMakeLists.txt")
+    warp_tests = read_text("windows/render-d3d11/tests/warp_render_tests.cpp")
     warp_cmake = read_text("windows/render-d3d11/CMakeLists.txt")
     root_cmake = read_text("CMakeLists.txt")
     for token in [
@@ -1822,6 +1869,50 @@ def windows_render_plan_contract() -> None:
         if token not in warp_source:
             raise ContractError(f"D3D11 WARP renderer missing token {token!r}")
     for token in [
+        "struct StaticVideoLayer final",
+        "class ProjectRenderCompileError final",
+        "StaticVideoLayer compileStaticVideoLayer(",
+        "render::RenderPlan makeRenderPlan(",
+    ]:
+        if token not in compiler_header:
+            raise ContractError(f"project render compiler API missing token {token!r}")
+    for token in [
+        "uniquePersistedEntity(",
+        "rawTimeline(document, timelineId, cancellation)",
+        'fail("unsupportedMasking"',
+        'fail("unsupportedFlip"',
+        '"dynamicVisualsUnsupported"',
+        'fail("unsupportedEffect"',
+        '"malformedVisualProperty"',
+        "clip->trimStartFrame > std::numeric_limits<std::int64_t>::max()",
+        "layer.sourceStartFrame + offset",
+        "render::RenderPlan::create(",
+    ]:
+        if token not in compiler_source:
+            raise ContractError(f"project render compiler missing token {token!r}")
+    for token in [
+        "staticProjectPropertiesDriveOnePlan",
+        "projectPlanKeepsPreviewExportParity",
+        "unsupportedVisualsAreRefused",
+        "lifecycleAndFrameBoundariesAreRefused",
+        "identityTimingAndNumericRefusals",
+        "malformedVisualValuesAreRefusedInsteadOfDefaulted",
+        "source frame mapping changed",
+        "project preview/export pixels differ",
+    ]:
+        if token not in compiler_tests:
+            raise ContractError(f"project render compiler test missing token {token!r}")
+    for token in [
+        "palmier_project_render",
+        "palmier_project_render_compiler_tests",
+        "project_render.static_video_layer",
+        "/W4 /WX /permissive- /Zc:__cplusplus /utf-8",
+    ]:
+        if token not in compiler_cmake:
+            raise ContractError(f"project render compiler CMake missing token {token!r}")
+    if "projectCompiledPreviewExportParity" not in warp_tests:
+        raise ContractError("D3D11 WARP test is missing project compiler parity")
+    for token in [
         "render_d3d11.warp_parity",
         "RUN_SERIAL TRUE TIMEOUT 60",
         "d3d11 d3dcompiler",
@@ -1830,6 +1921,7 @@ def windows_render_plan_contract() -> None:
             raise ContractError(f"D3D11 WARP CMake missing token {token!r}")
     for token in [
         "add_subdirectory(core/render)",
+        "add_subdirectory(core/project-render)",
         "add_subdirectory(windows/render-d3d11)",
     ]:
         if token not in root_cmake:
@@ -1837,15 +1929,31 @@ def windows_render_plan_contract() -> None:
 
     adr = read_text("docs/windows/adr/0009-render-plan-and-d3d11-warp-reference.md")
     for token in [
-        "does not compile a Palmier project into a render plan",
-        "no application path may silently construct",
+        "first dedicated project compiler for one static persisted",
+        "No application path may silently construct",
         "hard refusals, not fallback behavior",
+        "decoded presentation timestamps against the",
+        "VFR or source/timeline FPS mismatch",
         "does not prove Windows 10 build 19045",
         "not yet an oracle for the shipping Swift",
         "Swift-generated BGRA8 goldens are still required",
     ]:
         if token not in adr:
             raise ContractError(f"render plan ADR missing token {token!r}")
+    compiler_adr = read_text(
+        "docs/windows/adr/0024-project-static-render-compiler.md"
+    )
+    for token in [
+        "sole first-stage compiler",
+        "full JSON DOM",
+        "trimStartFrame +",
+        "explicit refusals",
+        "same `makeRenderPlan` operation",
+        "do not prove\nmulti-layer composition",
+        "Windows 10 build 19045",
+    ]:
+        if token not in compiler_adr:
+            raise ContractError(f"project render compiler ADR missing token {token!r}")
 
 
 def windows_media_render_adapter_contract() -> None:
@@ -3323,9 +3431,13 @@ def windows_preview_presentation_session_contract() -> None:
         "surface_->present(",
         "pendingRenderedSourceTimestamp_ != sourceTimestamp",
         "pendingRenderedTargetFrame_ != targetFrame",
+        "settings.renderLayer.sourceStartFrame != 0",
+        "sourceMappingChanged",
         "isSurfaceTerminal(surface.outcome)",
         "terminalSurfaceReceipt_ = surface",
         "playback_->cancel(generation_)",
+        "playback.targetTimelineFrame - layer.timelineStartFrame",
+        "state_ = PreviewPresentationState::completed",
         "activeOperation_->cancellation.request_stop()",
         "PreviewPresentationStage::render",
         "closeRequested_ = true",
@@ -3343,8 +3455,10 @@ def windows_preview_presentation_session_contract() -> None:
         "oneTickConsumesAndPresentsOneFrame",
         "busySurfaceRetriesTheRenderedFrame",
         "completedPlaybackRetriesAndResizesTheFinalFrame",
+        "clipEndCompletesWithoutRenderingPastBoundary",
         "resizeMarksTheCachedFrameDirty",
         "settingsCanChangeWithoutRestartingPlayback",
+        "sourceMappingChangeRequiresPlaybackRestart",
         "invalidAndStaleRequestsDoNotReachOwnedPorts",
         "terminalSurfaceStopsPlayback",
         "renderFailureStopsPlayback",
@@ -3847,6 +3961,14 @@ def windows_qt_read_only_shell_contract() -> None:
         "PROPERTIES ENVIRONMENT \"QT_QPA_PLATFORM=offscreen\" TIMEOUT 30",
         "add_palmier_qt_shell_test(reader_maps_current_project readerMapsCurrentProject)",
         "stablePreviewCandidateUsesPersistedIds",
+        "unsupported_visual_properties_are_not_silently_dropped",
+        "unsupportedVisualPropertiesAreNotSilentlyDropped",
+        "malformed_earlier_visual_cannot_be_skipped",
+        "malformedEarlierVisualCannotBeSkippedForLaterCandidate",
+        "unsupported_timing_cannot_be_skipped",
+        "unsupportedTimingCannotBeSkippedForLaterCandidate",
+        "overlapping_visual_layer_is_explicitly_refused",
+        "overlappingVisualLayerIsExplicitlyRefused",
         "add_palmier_qt_shell_test(model_publishes_track_layout modelPublishesReadOnlyTrackLayout)",
         "add_palmier_qt_shell_test(failure_preserves_model failurePreservesPreviousModel)",
         "add_palmier_qt_shell_test(stale_generation_is_rejected staleGenerationCannotReplaceNewerProject)",
@@ -3894,6 +4016,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "weakly_canonical",
         "unstableCandidateId",
         "mediaFileUnavailable",
+        "compileStaticVideoLayer",
     ]:
         if token not in projection:
             raise ContractError(f"Qt project projection missing token {token!r}")
@@ -3934,6 +4057,14 @@ def windows_qt_read_only_shell_contract() -> None:
     for token in [
         "readerMapsCurrentProject",
         "stablePreviewCandidateUsesPersistedIds",
+        "unsupportedVisualPropertiesAreNotSilentlyDropped",
+        "unsupportedMasking",
+        "malformedEarlierVisualCannotBeSkippedForLaterCandidate",
+        "malformedVisualProperty",
+        "unsupportedTimingCannotBeSkippedForLaterCandidate",
+        "unsupportedClipTiming",
+        "overlappingVisualLayerIsExplicitlyRefused",
+        "multiLayerPreviewUnsupported",
         "failurePreservesPreviousModel",
         "cancellationReachesReader",
         "cancellationAfterWorkBeforeCommitRejectsResult",
@@ -4045,7 +4176,7 @@ def windows_qt_preview_host_contract() -> None:
         "Qt preview host exclusions",
         contract.get("excluded"),
         [
-            "multi-layer timeline composition and source-time mapping",
+            "multi-layer timeline composition and nonzero-trim source seeking",
             "video-only steady-clock playback",
             "visible pixel and overlay correctness",
             "physical GPU performance",
@@ -4096,6 +4227,8 @@ def windows_qt_preview_host_contract() -> None:
             raise ContractError(f"Qt preview host invariant missing token {token!r}")
     if "QThread::wait" in source or ".waitForFinished(" in source:
         raise ContractError("Qt preview host must not wait on the UI thread")
+    if "candidate->framesPerSecond" in source:
+        raise ContractError("Qt preview host still reads the removed candidate frame-rate field")
     for token in [
         "nativeChildUsesOneBackgroundSessionOwner",
         "resizeBurstKeepsOnlyLatestPhysicalSize",

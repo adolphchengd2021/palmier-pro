@@ -31,7 +31,7 @@ if(BUILD_TESTING)
     )
     target_link_libraries(
         palmier_d3d11_warp_tests
-        PRIVATE palmier_render_d3d11
+        PRIVATE palmier_project_render palmier_render_d3d11
     )
     target_compile_options(
         palmier_d3d11_warp_tests
