@@ -14,4 +14,16 @@ D3d11PreviewResultClassification classifyD3d11PreviewResult(
     D3d11PreviewSurfaceOutcome successOutcome
 ) noexcept;
 
+class D3d11PreviewSurfaceTestAccess final {
+public:
+    static HRESULT prepareUploadResources(
+        D3d11PreviewSurface& surface,
+        std::uint32_t width,
+        std::uint32_t height
+    );
+    static std::uint64_t uploadResourceSerial(
+        const D3d11PreviewSurface& surface
+    );
+};
+
 }

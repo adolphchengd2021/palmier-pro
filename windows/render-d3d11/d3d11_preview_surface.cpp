@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstring>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
@@ -293,40 +294,47 @@ public:
             state_ = D3d11PreviewSurfaceState::ready;
         }
 
-        const D3D11_TEXTURE2D_DESC sourceDescription{
-            frame.width,
-            frame.height,
-            1,
-            1,
-            DXGI_FORMAT_R32G32B32A32_FLOAT,
-            {1, 0},
-            D3D11_USAGE_IMMUTABLE,
-            D3D11_BIND_SHADER_RESOURCE,
+        auto result = ensureUploadResources(frame.width, frame.height);
+        if (FAILED(result)) {
+            return failResult(result, D3d11PreviewSurfaceStage::upload);
+        }
+        if (cancellation.stop_requested()) {
+            return cancelled(D3d11PreviewSurfaceStage::upload);
+        }
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        result = context_->Map(
+            sourceTexture_.Get(),
             0,
+            D3D11_MAP_WRITE_DISCARD,
             0,
-        };
-        const D3D11_SUBRESOURCE_DATA sourceData{
-            frame.pixels.data(),
-            frame.width * static_cast<UINT>(sizeof(Rgba32Float)),
-            0,
-        };
-        ComPtr<ID3D11Texture2D> sourceTexture;
-        auto result = device_->CreateTexture2D(
-            &sourceDescription,
-            &sourceData,
-            &sourceTexture
+            &mapped
         );
         if (FAILED(result)) {
             return failResult(result, D3d11PreviewSurfaceStage::upload);
         }
-        ComPtr<ID3D11ShaderResourceView> sourceView;
-        result = device_->CreateShaderResourceView(
-            sourceTexture.Get(),
-            nullptr,
-            &sourceView
-        );
-        if (FAILED(result)) {
-            return failResult(result, D3d11PreviewSurfaceStage::upload);
+        const auto sourceRowBytes = static_cast<std::size_t>(frame.width)
+            * sizeof(Rgba32Float);
+        if (mapped.RowPitch < sourceRowBytes) {
+            context_->Unmap(sourceTexture_.Get(), 0);
+            return failResult(E_UNEXPECTED, D3d11PreviewSurfaceStage::upload);
+        }
+        auto* destination = static_cast<std::byte*>(mapped.pData);
+        const auto* source = reinterpret_cast<const std::byte*>(frame.pixels.data());
+        bool uploadCancelled = false;
+        for (std::uint32_t row = 0; row < frame.height; ++row) {
+            if (cancellation.stop_requested()) {
+                uploadCancelled = true;
+                break;
+            }
+            std::memcpy(
+                destination + static_cast<std::size_t>(row) * mapped.RowPitch,
+                source + static_cast<std::size_t>(row) * sourceRowBytes,
+                sourceRowBytes
+            );
+        }
+        context_->Unmap(sourceTexture_.Get(), 0);
+        if (uploadCancelled) {
+            return cancelled(D3d11PreviewSurfaceStage::upload);
         }
         if (cancellation.stop_requested()) {
             return cancelled(D3d11PreviewSurfaceStage::draw);
@@ -364,7 +372,7 @@ public:
         context_->PSSetShader(pixelShader_.Get(), nullptr, 0);
         ID3D11Buffer* constantBuffers[]{constants_.Get()};
         context_->PSSetConstantBuffers(0, 1, constantBuffers);
-        ID3D11ShaderResourceView* sourceViews[]{sourceView.Get()};
+        ID3D11ShaderResourceView* sourceViews[]{sourceView_.Get()};
         context_->PSSetShaderResources(0, 1, sourceViews);
         ID3D11SamplerState* samplers[]{sampler_.Get()};
         context_->PSSetSamplers(0, 1, samplers);
@@ -424,6 +432,10 @@ public:
         }
         releaseBackBuffer();
         swapChain_.Reset();
+        sourceView_.Reset();
+        sourceTexture_.Reset();
+        sourceWidth_ = 0;
+        sourceHeight_ = 0;
         sampler_.Reset();
         constants_.Reset();
         pixelShader_.Reset();
@@ -443,6 +455,22 @@ public:
         );
         publish(value);
         return value;
+    }
+
+    HRESULT prepareUploadResourcesForTesting(
+        std::uint32_t width,
+        std::uint32_t height
+    ) {
+        std::lock_guard lock(mutex_);
+        if (device_ == nullptr || !validDimensions(width, height)) {
+            return E_INVALIDARG;
+        }
+        return ensureUploadResources(width, height);
+    }
+
+    std::uint64_t uploadResourceSerial() const {
+        std::lock_guard lock(mutex_);
+        return uploadResourceSerial_;
     }
 
 private:
@@ -581,6 +609,56 @@ private:
         return result;
     }
 
+    HRESULT ensureUploadResources(
+        std::uint32_t width,
+        std::uint32_t height
+    ) {
+        if (sourceTexture_ != nullptr && sourceView_ != nullptr
+            && sourceWidth_ == width && sourceHeight_ == height) {
+            return S_OK;
+        }
+        if (uploadResourceSerial_
+            == (std::numeric_limits<std::uint64_t>::max)()) {
+            return HRESULT_FROM_WIN32(ERROR_ARITHMETIC_OVERFLOW);
+        }
+        const D3D11_TEXTURE2D_DESC description{
+            width,
+            height,
+            1,
+            1,
+            DXGI_FORMAT_R32G32B32A32_FLOAT,
+            {1, 0},
+            D3D11_USAGE_DYNAMIC,
+            D3D11_BIND_SHADER_RESOURCE,
+            D3D11_CPU_ACCESS_WRITE,
+            0,
+        };
+        ComPtr<ID3D11Texture2D> candidateTexture;
+        auto result = device_->CreateTexture2D(
+            &description,
+            nullptr,
+            &candidateTexture
+        );
+        if (FAILED(result)) {
+            return result;
+        }
+        ComPtr<ID3D11ShaderResourceView> candidateView;
+        result = device_->CreateShaderResourceView(
+            candidateTexture.Get(),
+            nullptr,
+            &candidateView
+        );
+        if (FAILED(result)) {
+            return result;
+        }
+        sourceTexture_ = std::move(candidateTexture);
+        sourceView_ = std::move(candidateView);
+        sourceWidth_ = width;
+        sourceHeight_ = height;
+        ++uploadResourceSerial_;
+        return S_OK;
+    }
+
     void releaseBackBuffer() noexcept {
         if (context_ != nullptr) {
             context_->OMSetRenderTargets(0, nullptr, nullptr);
@@ -677,6 +755,11 @@ private:
     ComPtr<IDXGIFactory2> factory_;
     ComPtr<IDXGISwapChain1> swapChain_;
     ComPtr<ID3D11RenderTargetView> renderTarget_;
+    ComPtr<ID3D11Texture2D> sourceTexture_;
+    ComPtr<ID3D11ShaderResourceView> sourceView_;
+    std::uint32_t sourceWidth_{};
+    std::uint32_t sourceHeight_{};
+    std::uint64_t uploadResourceSerial_{};
     ComPtr<ID3D11VertexShader> vertexShader_;
     ComPtr<ID3D11PixelShader> pixelShader_;
     ComPtr<ID3D11Buffer> constants_;
@@ -718,6 +801,20 @@ D3d11PreviewSurfaceReceipt D3d11PreviewSurface::snapshot() const {
 
 D3d11PreviewSurfaceReceipt D3d11PreviewSurface::close() {
     return impl_->close();
+}
+
+HRESULT detail::D3d11PreviewSurfaceTestAccess::prepareUploadResources(
+    D3d11PreviewSurface& surface,
+    std::uint32_t width,
+    std::uint32_t height
+) {
+    return surface.impl_->prepareUploadResourcesForTesting(width, height);
+}
+
+std::uint64_t detail::D3d11PreviewSurfaceTestAccess::uploadResourceSerial(
+    const D3d11PreviewSurface& surface
+) {
+    return surface.impl_->uploadResourceSerial();
 }
 
 }

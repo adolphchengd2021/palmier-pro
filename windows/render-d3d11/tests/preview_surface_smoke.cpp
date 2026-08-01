@@ -16,6 +16,7 @@ using palmier::render::D3d11PreviewSurface;
 using palmier::render::D3d11PreviewSurfaceOutcome;
 using palmier::render::D3d11PreviewSurfaceState;
 using palmier::render::RenderedFrame;
+using palmier::render::detail::D3d11PreviewSurfaceTestAccess;
 
 void require(bool condition, const std::string& message) {
     if (!condition) {
@@ -106,6 +107,10 @@ RenderedFrame frame() {
     };
 }
 
+RenderedFrame smallFrame() {
+    return {1, 1, {{0.25F, 0.5F, 0.75F, 1}}};
+}
+
 void presentsToAHiddenWarpSwapChain() {
     HiddenWindow window;
     D3d11PreviewSurface surface(window.get(), D3d11PreviewDriver::warp);
@@ -125,6 +130,29 @@ void presentsToAHiddenWarpSwapChain() {
         surface.resize(64, 48).outcome == D3d11PreviewSurfaceOutcome::noOp,
         "same WARP resize changed state"
     );
+    require(
+        SUCCEEDED(D3d11PreviewSurfaceTestAccess::prepareUploadResources(surface, 2, 2)),
+        "WARP upload resource preparation failed"
+    );
+    const auto firstUploadSerial = D3d11PreviewSurfaceTestAccess::uploadResourceSerial(surface);
+    require(firstUploadSerial == 1, "first WARP upload resource was not recorded");
+    require(
+        SUCCEEDED(D3d11PreviewSurfaceTestAccess::prepareUploadResources(surface, 2, 2)),
+        "same-size WARP upload resource reuse failed"
+    );
+    require(
+        D3d11PreviewSurfaceTestAccess::uploadResourceSerial(surface) == firstUploadSerial,
+        "same-size WARP frame recreated upload resources"
+    );
+    require(
+        SUCCEEDED(D3d11PreviewSurfaceTestAccess::prepareUploadResources(surface, 1, 1)),
+        "resized WARP upload resource preparation failed"
+    );
+    require(
+        D3d11PreviewSurfaceTestAccess::uploadResourceSerial(surface)
+            == firstUploadSerial + 1,
+        "resized WARP frame did not replace upload resources"
+    );
 
     auto invalid = frame();
     invalid.pixels.pop_back();
@@ -142,6 +170,30 @@ void presentsToAHiddenWarpSwapChain() {
             || presented.state == D3d11PreviewSurfaceState::occluded,
         "hidden WARP Present returned the wrong state"
     );
+    const auto uploadSerialAfterPresent
+        = D3d11PreviewSurfaceTestAccess::uploadResourceSerial(surface);
+    const auto repeated = surface.present(frame());
+    require(
+        acceptedEnvironmentOutcome(repeated.outcome),
+        "repeated hidden WARP Present was not classified"
+    );
+    require(
+        D3d11PreviewSurfaceTestAccess::uploadResourceSerial(surface)
+            == uploadSerialAfterPresent,
+        "same-size WARP Present recreated upload resources"
+    );
+    if (repeated.state == D3d11PreviewSurfaceState::ready) {
+        const auto resizedSource = surface.present(smallFrame());
+        require(
+            acceptedEnvironmentOutcome(resizedSource.outcome),
+            "resized-source hidden WARP Present was not classified"
+        );
+        require(
+            D3d11PreviewSurfaceTestAccess::uploadResourceSerial(surface)
+                == uploadSerialAfterPresent + 1,
+            "resized-source WARP Present did not replace upload resources"
+        );
+    }
 
     const auto secondResize = surface.resize(32, 32);
     require(secondResize.state == D3d11PreviewSurfaceState::ready, "WARP re-resize failed");

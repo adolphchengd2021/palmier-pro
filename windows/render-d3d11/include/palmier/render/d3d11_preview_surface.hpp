@@ -10,6 +10,10 @@
 
 namespace palmier::render {
 
+namespace detail {
+class D3d11PreviewSurfaceTestAccess;
+}
+
 enum class D3d11PreviewDriver {
     hardware,
     warp,
@@ -89,6 +93,8 @@ public:
     D3d11PreviewSurfaceReceipt close();
 
 private:
+    friend class detail::D3d11PreviewSurfaceTestAccess;
+
     class Impl;
     std::unique_ptr<Impl> impl_;
 };

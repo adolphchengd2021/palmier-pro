@@ -48,7 +48,7 @@
     "initialization": "device, immediate context, factory, shaders, constant buffer, and sampler are lazily created before the first swap chain",
     "swapChain": "the HWND owns one two-buffer B8G8R8A8 flip-discard swap chain with Alt+Enter disabled",
     "resize": "all direct and indirect back-buffer bindings are cleared and flushed before ResizeBuffers; invalid and unchanged dimensions do not mutate the surface",
-    "upload": "one validated RGBA32-float frame is uploaded to one immutable texture per admitted present with no unbounded queue",
+    "upload": "one validated RGBA32-float frame is write-discard uploaded into one bounded texture and SRV reused until source dimensions change, with no frame queue",
     "draw": "one full-screen triangle letterboxes the source into the current surface and clears uncovered pixels to opaque black",
     "present": "one non-blocking Present call classifies success, occlusion, busy, unavailability, device loss, and failure without retry loops",
     "cancellation": "pre-requested cancellation refuses each expensive phase before it begins and never reports an unpresented frame as presented",

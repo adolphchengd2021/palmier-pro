@@ -22,8 +22,9 @@ requests do not partially replace the live back buffer.
 
 Each admitted frame is a complete `RenderedFrame` produced by the existing
 shared preview renderer. The boundary validates dimensions and exact storage,
-uploads one immutable `R32G32B32A32_FLOAT` texture, draws one full-screen
-triangle, letterboxes the source, and clears uncovered pixels to opaque black.
+reuses one dynamic `R32G32B32A32_FLOAT` texture and SRV until source dimensions
+change, uploads with `D3D11_MAP_WRITE_DISCARD`, draws one full-screen triangle,
+letterboxes the source, and clears uncovered pixels to opaque black.
 There is no frame queue and no retry loop. `Present(0,
 DXGI_PRESENT_DO_NOT_WAIT)` executes at most once per call.
 
@@ -46,9 +47,10 @@ swap chain and releases the context before the device and factory.
 Deterministic result-classification tests inject success, occlusion, busy,
 unsupported, device-removed, and generic failure HRESULT values. A native smoke
 creates a hidden HWND and WARP device, exercises initial resize, same-size
-no-op, invalid frame refusal, one classified present, second resize, clear,
-pre-cancellation, invalid limits, and repeated close. It uses a hard timeout and
-contains no polling or retry loop.
+no-op, same-size upload-resource reuse, dimension-change replacement, invalid
+frame refusal, one classified present, second resize, clear, pre-cancellation,
+invalid limits, and repeated close. It uses a hard timeout and contains no
+polling or retry loop.
 
 ## Evidence boundary
 
