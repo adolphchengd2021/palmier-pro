@@ -121,7 +121,7 @@ ProjectPackageFixture createProjectPackageFixture() {
               "mediaType": "video",
               "sourceClipType": "video",
               "startFrame": 0,
-              "durationFrames": 1,
+              "durationFrames": 5,
               "speed": 1,
               "opacity": 1,
               "blendMode": "normal"
@@ -142,7 +142,7 @@ ProjectPackageFixture createProjectPackageFixture() {
       "name": "H.264 AAC fixture",
       "type": "video",
       "source": {"project": {"relativePath": "media/h264-aac.mp4"}},
-      "duration": 0.1,
+      "duration": 0.5,
       "sourceWidth": 16,
       "sourceHeight": 16,
       "sourceFPS": 10,
@@ -816,21 +816,16 @@ private slots:
             return;
         }
 
-        QVERIFY(
-            receipt.stage == palmier::preview::PreviewPresentationStage::startPlayback
-        );
-        QVERIFY(
-            receipt.failure
-            == palmier::preview::PreviewPresentationFailureCode::playbackFailure
-        );
-        QVERIFY(
-            receipt.audioFailure
-            == palmier::media::AudioPlaybackFailureCode::deviceUnavailable
-        );
-        QCOMPARE(receipt.mediaFailureCode, std::int32_t{-1});
         QVERIFY(environment.has_value());
         if (
-            environment->status == palmier::audio::WasapiProbeStatus::unavailable
+            receipt.stage == palmier::preview::PreviewPresentationStage::startPlayback
+            && receipt.failure
+                == palmier::preview::PreviewPresentationFailureCode::playbackFailure
+            && receipt.audioFailure
+                == palmier::media::AudioPlaybackFailureCode::deviceUnavailable
+            && receipt.mediaFailureCode == -1
+            && environment->status
+                == palmier::audio::WasapiProbeStatus::unavailable
             && environment->hresult == receipt.hresult
         ) {
             const auto message = QStringLiteral(
@@ -849,22 +844,28 @@ private slots:
             QSKIP(encoded.constData());
         }
         const auto failure = QStringLiteral(
-            "project playback failed while WASAPI probe status was %1 at %2 "
-            "(playback HRESULT 0x%3, probe HRESULT 0x%4)"
-        ).arg(
-            QString::number(static_cast<int>(environment->status)),
-            QString::fromStdString(environment->stage),
-            QString::number(
+            "project playback failed with state=%1 outcome=%2 stage=%3 failure=%4 "
+            "audioFailure=%5 mediaFailure=%6 HRESULT=0x%7 while WASAPI probe "
+            "status=%8 stage=%9 HRESULT=0x%10"
+        ).arg(QString::number(static_cast<int>(receipt.state)))
+        .arg(QString::number(static_cast<int>(receipt.outcome)))
+        .arg(QString::number(static_cast<int>(receipt.stage)))
+        .arg(QString::number(static_cast<int>(receipt.failure)))
+        .arg(QString::number(static_cast<int>(receipt.audioFailure)))
+        .arg(QString::number(receipt.mediaFailureCode))
+        .arg(QString::number(
                 static_cast<qulonglong>(static_cast<std::uint32_t>(receipt.hresult)),
                 16
-            ).rightJustified(8, QLatin1Char('0')),
-            QString::number(
+            ).rightJustified(8, QLatin1Char('0')))
+        .arg(QString::number(static_cast<int>(environment->status)))
+        .arg(QString::fromStdString(environment->stage))
+        .arg(QString::number(
                 static_cast<qulonglong>(
                     static_cast<std::uint32_t>(environment->hresult)
                 ),
                 16
-            ).rightJustified(8, QLatin1Char('0'))
-        ).toUtf8();
+            ).rightJustified(8, QLatin1Char('0')))
+        .toUtf8();
         QFAIL(failure.constData());
     }
 

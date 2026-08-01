@@ -160,7 +160,7 @@ void dependencyContract() {
 void probesH264AndAac(const std::filesystem::path& input) {
     const auto probe = FfmpegMediaReader::probe(input);
     require(probe.containerName.find("mov") != std::string::npos, "wrong container");
-    require(probe.durationMicroseconds == 100'000, "wrong container duration");
+    require(probe.durationMicroseconds == 500'000, "wrong container duration");
     require(probe.streams.size() == 2, "expected video and audio streams");
 
     const auto& video = probe.streams[0];
@@ -373,6 +373,38 @@ void resamplesAndRemixesCanonicalPcm(const std::filesystem::path& input) {
     require(frames == 1'536, "resampled frame count changed");
 }
 
+void decodesPlayableAac(const std::filesystem::path& input) {
+    const PcmFormat stereo48k{
+        48'000,
+        2,
+        16,
+        16,
+        4,
+        0x3,
+        PcmSampleEncoding::integer,
+        true,
+    };
+    FfmpegAudioFrameReader reader(input, stereo48k);
+    std::uint64_t frames{};
+    std::int64_t nextSample{};
+    for (;;) {
+        const auto block = reader.nextBlock();
+        if (!block.has_value()) break;
+        require(block->format == stereo48k, "AAC PCM format changed");
+        require(block->startOutputSample == nextSample, "AAC sample cursor skipped");
+        require(block->frameCount != 0, "AAC returned an empty block");
+        require(
+            block->interleavedBytes.size()
+                == static_cast<std::size_t>(block->frameCount) * stereo48k.blockAlign,
+            "AAC block byte count changed"
+        );
+        frames += block->frameCount;
+        nextSample += block->frameCount;
+    }
+    require(frames == 24'576, "AAC decoded frame count changed");
+    require(!reader.nextBlock().has_value(), "AAC EOF is not stable");
+}
+
 void audioCursorCancellationIsTerminal(const std::filesystem::path& input) {
     const PcmFormat format{
         24'000,
@@ -559,6 +591,7 @@ int main() {
         );
         dependencyContract();
         probesH264AndAac(h264Aac);
+        decodesPlayableAac(h264Aac);
         decodesStraightAlphaAndRotation(qtrle);
         decodesPresentationOrderedFrames(opaqueThreeFrames);
         cancellationTerminatesCursor(opaqueThreeFrames);
