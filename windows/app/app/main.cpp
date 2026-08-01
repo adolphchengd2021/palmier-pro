@@ -60,6 +60,17 @@ int main(int argc, char* argv[]) {
             : palmier::render::D3d11PreviewDriver::hardware,
         nullptr
     );
+    QObject::connect(
+        &coordinator,
+        &palmier::windows::ProjectLoadCoordinator::projectCommitted,
+        &previewController,
+        [&coordinator, &previewController] {
+            previewController.replaceProjectPreview(
+                coordinator.committedGeneration(),
+                coordinator.committedPreview()
+            );
+        }
+    );
     bool shutdownDraining{};
     bool shutdownDrained{};
     bool shutdownSucceeded{true};

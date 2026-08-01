@@ -10,6 +10,7 @@ set(app_include_dir "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_library(palmier_qt_shell_core STATIC
     include/palmier/windows/project_load_coordinator.hpp
     include/palmier/windows/project_projection_loader.hpp
+    include/palmier/windows/preview_source.hpp
     include/palmier/windows/read_only_timeline_model.hpp
     src/project_load_coordinator.cpp
     src/project_projection_loader.cpp
@@ -160,6 +161,30 @@ if(BUILD_TESTING)
     add_palmier_qt_preview_test(
         resize_burst_coalesces
         resizeBurstKeepsOnlyLatestPhysicalSize
+    )
+    add_palmier_qt_preview_test(
+        project_candidate_ticks_to_completion
+        projectCandidateTicksOnceAndStopsAtCompletion
+    )
+    add_palmier_qt_preview_test(
+        project_candidate_waits_for_attach
+        projectCandidateWaitsForActiveSurfaceAttach
+    )
+    add_palmier_qt_preview_test(
+        resize_during_tick_resumes_cadence
+        resizeDuringGatedTickResumesBoundedCadence
+    )
+    add_palmier_qt_preview_test(
+        stale_tick_cancels_without_retry
+        staleTickCancelsWithoutRetryLoop
+    )
+    add_palmier_qt_preview_test(
+        replacement_cancels_gated_tick
+        replacementCancelsGatedTickBeforePublishingOffline
+    )
+    add_palmier_qt_preview_test(
+        shutdown_cancels_gated_tick
+        shutdownCancelsGatedTickBeforeSessionDestruction
     )
     add_palmier_qt_preview_test(
         warp_child_surface_lifecycle

@@ -18,8 +18,10 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -44,17 +46,43 @@ PreviewPresentationReceipt closedReceipt() {
     return receipt;
 }
 
+PreviewPresentationReceipt playingReceipt(std::uint64_t generation) {
+    PreviewPresentationReceipt receipt;
+    receipt.generation = generation;
+    receipt.state = PreviewPresentationState::playing;
+    receipt.outcome = PreviewPresentationOutcome::changed;
+    return receipt;
+}
+
+PreviewPresentationReceipt completedReceipt(std::uint64_t generation) {
+    PreviewPresentationReceipt receipt;
+    receipt.generation = generation;
+    receipt.state = PreviewPresentationState::completed;
+    receipt.outcome = PreviewPresentationOutcome::noOp;
+    return receipt;
+}
+
 struct FakeSessionState final {
     std::mutex mutex;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> sizes;
+    std::vector<palmier::windows::PreviewMediaCandidateProjection> candidates;
     std::vector<std::thread::id> threads;
     QSemaphore firstResizeEntered;
     QSemaphore releaseFirstResize;
+    QSemaphore tickEntered;
+    QSemaphore releaseTick;
     bool gateFirstResize{};
+    bool gateTick{};
+    bool staleTick{};
+    bool tickCancellationObserved{};
     bool failClose{};
     bool destroyed{};
     HWND window{};
     bool windowAliveAtDestruction{};
+    std::uint64_t generation{};
+    std::size_t tickCalls{};
+    std::size_t cancelCalls{};
+    std::size_t playingTicks{};
 };
 
 class FakeSession final : public palmier::windows::detail::QtPreviewSessionPort {
@@ -94,6 +122,75 @@ public:
             return receipt;
         }
         return resizedReceipt();
+    }
+
+    PreviewPresentationReceipt play(
+        const palmier::windows::PreviewMediaCandidateProjection& candidate,
+        std::stop_token cancellation
+    ) override {
+        const std::lock_guard lock(state_->mutex);
+        state_->candidates.push_back(candidate);
+        state_->threads.push_back(std::this_thread::get_id());
+        if (cancellation.stop_requested()) {
+            auto receipt = playingReceipt(state_->generation);
+            receipt.state = PreviewPresentationState::cancelled;
+            receipt.outcome = PreviewPresentationOutcome::cancelled;
+            return receipt;
+        }
+        ++state_->generation;
+        return playingReceipt(state_->generation);
+    }
+
+    PreviewPresentationReceipt tick(
+        std::uint64_t expectedGeneration,
+        std::stop_token cancellation
+    ) override {
+        bool gate;
+        {
+            const std::lock_guard lock(state_->mutex);
+            ++state_->tickCalls;
+            state_->threads.push_back(std::this_thread::get_id());
+            gate = state_->gateTick;
+            if (gate) state_->gateTick = false;
+        }
+        if (gate) {
+            state_->tickEntered.release();
+            std::stop_callback cancellationCallback(cancellation, [this] {
+                state_->releaseTick.release();
+            });
+            state_->releaseTick.acquire();
+            if (cancellation.stop_requested()) {
+                const std::lock_guard lock(state_->mutex);
+                state_->tickCancellationObserved = true;
+                auto receipt = completedReceipt(expectedGeneration);
+                receipt.state = PreviewPresentationState::cancelled;
+                receipt.outcome = PreviewPresentationOutcome::cancelled;
+                return receipt;
+            }
+        }
+        {
+            const std::lock_guard lock(state_->mutex);
+            if (state_->staleTick) {
+                auto receipt = playingReceipt(expectedGeneration + 1);
+                receipt.outcome = PreviewPresentationOutcome::stale;
+                return receipt;
+            }
+            if (state_->playingTicks > 0) {
+                --state_->playingTicks;
+                return playingReceipt(expectedGeneration);
+            }
+        }
+        return completedReceipt(expectedGeneration);
+    }
+
+    PreviewPresentationReceipt cancel(std::uint64_t expectedGeneration) override {
+        const std::lock_guard lock(state_->mutex);
+        ++state_->cancelCalls;
+        state_->threads.push_back(std::this_thread::get_id());
+        auto receipt = completedReceipt(expectedGeneration);
+        receipt.state = PreviewPresentationState::cancelled;
+        receipt.outcome = PreviewPresentationOutcome::cancelled;
+        return receipt;
     }
 
     PreviewPresentationReceipt close() override {
@@ -151,9 +248,50 @@ std::size_t resizeCount(const std::shared_ptr<FakeSessionState>& state) {
     return state->sizes.size();
 }
 
+std::size_t playCount(const std::shared_ptr<FakeSessionState>& state) {
+    const std::lock_guard lock(state->mutex);
+    return state->candidates.size();
+}
+
+std::size_t tickCount(const std::shared_ptr<FakeSessionState>& state) {
+    const std::lock_guard lock(state->mutex);
+    return state->tickCalls;
+}
+
+std::size_t cancelCount(const std::shared_ptr<FakeSessionState>& state) {
+    const std::lock_guard lock(state->mutex);
+    return state->cancelCalls;
+}
+
+palmier::windows::ProjectPreviewProjection availablePreview(std::string mediaId) {
+    return {
+        palmier::windows::PreviewCandidateAvailability::available,
+        {},
+        palmier::windows::PreviewMediaCandidateProjection{
+            "timeline",
+            "video-track",
+            "clip-" + mediaId,
+            std::move(mediaId),
+            std::filesystem::path(L"C:\\fixture.mp4"),
+            0,
+            30,
+            30,
+            1920,
+            1080,
+            1,
+            true,
+        },
+    };
+}
+
 bool sessionDestroyed(const std::shared_ptr<FakeSessionState>& state) {
     const std::lock_guard lock(state->mutex);
     return state->destroyed;
+}
+
+bool tickCancellationObserved(const std::shared_ptr<FakeSessionState>& state) {
+    const std::lock_guard lock(state->mutex);
+    return state->tickCancellationObserved;
 }
 
 class QtPreviewTests final : public QObject {
@@ -228,6 +366,178 @@ private slots:
         }
         static_cast<void>(controller.requestShutdown());
         QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);
+        root.reset();
+    }
+
+    void projectCandidateTicksOnceAndStopsAtCompletion() {
+        const auto uiThread = std::this_thread::get_id();
+        auto state = std::make_shared<FakeSessionState>();
+        palmier::windows::PreviewPresentationController controller(
+            [state](HWND) { return std::make_unique<FakeSession>(state); },
+            nullptr
+        );
+        QQmlEngine engine;
+        auto root = createPreviewWindow(engine, controller);
+        QVERIFY(root != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(controller.ready(), 5000);
+
+        controller.replaceProjectPreview(1, availablePreview("media-a"));
+        QTRY_COMPARE_WITH_TIMEOUT(playCount(state), std::size_t{1}, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(tickCount(state), std::size_t{1}, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.state(), QStringLiteral("completed"), 5000);
+        QCoreApplication::processEvents();
+        QCOMPARE(tickCount(state), std::size_t{1});
+        controller.replaceProjectPreview(1, availablePreview("media-duplicate"));
+        controller.replaceProjectPreview(0, availablePreview("media-invalid"));
+        QCoreApplication::processEvents();
+        QCOMPARE(playCount(state), std::size_t{1});
+        {
+            const std::lock_guard lock(state->mutex);
+            QCOMPARE(state->candidates.front().mediaId, std::string("media-a"));
+            for (const auto thread : state->threads) {
+                QVERIFY(thread != uiThread);
+                QVERIFY(thread == state->threads.front());
+            }
+        }
+
+        static_cast<void>(controller.requestShutdown());
+        QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);
+        root.reset();
+    }
+
+    void projectCandidateWaitsForActiveSurfaceAttach() {
+        auto state = std::make_shared<FakeSessionState>();
+        state->gateFirstResize = true;
+        palmier::windows::PreviewPresentationController controller(
+            [state](HWND) { return std::make_unique<FakeSession>(state); },
+            nullptr
+        );
+        QQmlEngine engine;
+        auto root = createPreviewWindow(engine, controller);
+        QVERIFY(root != nullptr);
+        QTRY_COMPARE_WITH_TIMEOUT(state->firstResizeEntered.available(), 1, 5000);
+
+        controller.replaceProjectPreview(1, availablePreview("media-during-attach"));
+        state->releaseFirstResize.release();
+        QTRY_COMPARE_WITH_TIMEOUT(playCount(state), std::size_t{1}, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.state(), QStringLiteral("completed"), 5000);
+        {
+            const std::lock_guard lock(state->mutex);
+            QCOMPARE(
+                state->candidates.front().mediaId,
+                std::string("media-during-attach")
+            );
+        }
+
+        static_cast<void>(controller.requestShutdown());
+        QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);
+        root.reset();
+    }
+
+    void resizeDuringGatedTickResumesBoundedCadence() {
+        auto state = std::make_shared<FakeSessionState>();
+        state->gateTick = true;
+        state->playingTicks = 1;
+        palmier::windows::PreviewPresentationController controller(
+            [state](HWND) { return std::make_unique<FakeSession>(state); },
+            nullptr
+        );
+        QQmlEngine engine;
+        auto root = createPreviewWindow(engine, controller);
+        QVERIFY(root != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(controller.ready(), 5000);
+
+        controller.replaceProjectPreview(1, availablePreview("media-resize"));
+        QTRY_COMPARE_WITH_TIMEOUT(state->tickEntered.available(), 1, 5000);
+        auto* rootWindow = qobject_cast<QQuickWindow*>(root.get());
+        QVERIFY(rootWindow != nullptr);
+        rootWindow->resize(QSize(640, 360));
+        QCoreApplication::processEvents();
+        state->releaseTick.release();
+        QTRY_COMPARE_WITH_TIMEOUT(resizeCount(state), std::size_t{2}, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(tickCount(state), std::size_t{2}, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.state(), QStringLiteral("completed"), 5000);
+
+        static_cast<void>(controller.requestShutdown());
+        QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);
+        root.reset();
+    }
+
+    void staleTickCancelsWithoutRetryLoop() {
+        auto state = std::make_shared<FakeSessionState>();
+        state->staleTick = true;
+        palmier::windows::PreviewPresentationController controller(
+            [state](HWND) { return std::make_unique<FakeSession>(state); },
+            nullptr
+        );
+        QQmlEngine engine;
+        auto root = createPreviewWindow(engine, controller);
+        QVERIFY(root != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(controller.ready(), 5000);
+
+        controller.replaceProjectPreview(1, availablePreview("media-stale"));
+        QTRY_COMPARE_WITH_TIMEOUT(controller.errorCode(), QStringLiteral("previewStale"), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(cancelCount(state), std::size_t{1}, 5000);
+        QCoreApplication::processEvents();
+        QCOMPARE(playCount(state), std::size_t{1});
+        QCOMPARE(tickCount(state), std::size_t{1});
+        QCOMPARE(controller.state(), QStringLiteral("failed"));
+
+        static_cast<void>(controller.requestShutdown());
+        QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);
+        root.reset();
+    }
+
+    void replacementCancelsGatedTickBeforePublishingOffline() {
+        auto state = std::make_shared<FakeSessionState>();
+        state->gateTick = true;
+        palmier::windows::PreviewPresentationController controller(
+            [state](HWND) { return std::make_unique<FakeSession>(state); },
+            nullptr
+        );
+        QQmlEngine engine;
+        auto root = createPreviewWindow(engine, controller);
+        QVERIFY(root != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(controller.ready(), 5000);
+
+        controller.replaceProjectPreview(1, availablePreview("media-old"));
+        QTRY_COMPARE_WITH_TIMEOUT(state->tickEntered.available(), 1, 5000);
+        QCOMPARE(tickCount(state), std::size_t{1});
+        controller.replaceProjectPreview(2, {
+            palmier::windows::PreviewCandidateAvailability::offline,
+            "mediaFileUnavailable",
+            std::nullopt,
+        });
+        QTRY_VERIFY_WITH_TIMEOUT(tickCancellationObserved(state), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(cancelCount(state), std::size_t{1}, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.state(), QStringLiteral("offline"), 5000);
+        QCOMPARE(controller.errorCode(), QStringLiteral("mediaFileUnavailable"));
+        QCOMPARE(playCount(state), std::size_t{1});
+
+        static_cast<void>(controller.requestShutdown());
+        QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);
+        root.reset();
+    }
+
+    void shutdownCancelsGatedTickBeforeSessionDestruction() {
+        auto state = std::make_shared<FakeSessionState>();
+        state->gateTick = true;
+        palmier::windows::PreviewPresentationController controller(
+            [state](HWND) { return std::make_unique<FakeSession>(state); },
+            nullptr
+        );
+        QQmlEngine engine;
+        auto root = createPreviewWindow(engine, controller);
+        QVERIFY(root != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(controller.ready(), 5000);
+
+        controller.replaceProjectPreview(1, availablePreview("media-closing"));
+        QTRY_COMPARE_WITH_TIMEOUT(state->tickEntered.available(), 1, 5000);
+        QVERIFY(!controller.requestShutdown());
+        QTRY_VERIFY_WITH_TIMEOUT(tickCancellationObserved(state), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(sessionDestroyed(state), 5000);
+        QCOMPARE(controller.state(), QStringLiteral("closed"));
         root.reset();
     }
 

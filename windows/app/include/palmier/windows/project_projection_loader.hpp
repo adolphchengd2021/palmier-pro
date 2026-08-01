@@ -2,6 +2,7 @@
 
 #include "palmier/project/project.hpp"
 #include "palmier/project/media_manifest_reader.hpp"
+#include "palmier/windows/preview_source.hpp"
 
 #include <QVariantList>
 
@@ -47,34 +48,6 @@ struct TimelineProjection final {
 struct DiagnosticProjection final {
     std::string code;
     std::string jsonPointer;
-};
-
-enum class PreviewCandidateAvailability {
-    available,
-    noCandidate,
-    offline,
-    unsupported,
-};
-
-struct PreviewMediaCandidateProjection final {
-    std::string timelineId;
-    std::string trackId;
-    std::string clipId;
-    std::string mediaId;
-    std::filesystem::path inputPath;
-    std::int64_t timelineFrame{};
-    std::int64_t durationFrames{};
-    std::int64_t framesPerSecond{};
-    std::int64_t canvasWidth{};
-    std::int64_t canvasHeight{};
-    double opacity{1};
-    std::optional<bool> hasAudio;
-};
-
-struct ProjectPreviewProjection final {
-    PreviewCandidateAvailability availability{PreviewCandidateAvailability::noCandidate};
-    std::string reasonCode{"noVideoCandidate"};
-    std::optional<PreviewMediaCandidateProjection> candidate;
 };
 
 struct ProjectProjection final {

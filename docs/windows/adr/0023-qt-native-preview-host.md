@@ -1,9 +1,9 @@
 # ADR 0023: Host one preview HWND behind a Qt background executor
 
-- Status: Accepted for M1 Qt preview lifecycle bootstrap
+- Status: Accepted for M1 Qt project preview bring-up
 - Date: 2026-08-01
 - Owner: Windows Qt shell and preview session
-- Applies to: one Qt-native child window and its preview-session lifetime
+- Applies to: one Qt-native child window, one stable project media candidate, and preview-session lifetime
 
 ## Decision
 
@@ -19,6 +19,13 @@ the only executor that can reach decoding, render, D3D11, DXGI, or surface
 operations. The initial attach performs one background resize so GPU and swap
 chain setup cannot block the Qt UI thread.
 
+A successful project load also publishes one immutable preview source directly
+from the project loader. The source carries persisted timeline, track, clip, and
+media IDs plus the background-resolved local path and bounded timeline settings.
+The timeline model is not queried to reconstruct playback. Missing, corrupt,
+offline, path-escaping, synthesized-ID, trimmed, retimed, video-only, and
+otherwise unsupported candidates remain explicit non-playing states.
+
 Only one synchronous operation is admitted at a time. Repeated exposure events
 with the same client size are ignored, and a resize burst keeps one latest
 distinct size while an operation is active. Zero-size, hidden, and unexposed
@@ -26,10 +33,24 @@ windows submit no resize. A changed HWND is terminal for the current surface;
 the controller requests cancellation and close instead of silently moving the
 swap chain to another window.
 
+Project replacement is latest-wins. The controller invalidates the prior source
+serial, requests cancellation of any admitted play or tick, clears the prior
+playback and surface, then starts only the latest candidate. Every asynchronous
+receipt is checked against the surface epoch, project/source serial, command
+serial, and playback generation before it can publish UI state. A completed
+playback preserves its last successfully presented frame and admits no further
+tick.
+
+Preview cadence uses completion-triggered single-shot admission. A tick is
+queued only after the previous tick has completed, or after a competing resize
+has drained, so the UI timer cannot build a queue of stale frames. The timer
+publishes a command only; decode, audio position, render, and present remain on
+the presentation thread.
+
 Application close remains asynchronous. QML asks both the project-load and
 preview controllers to shut down, vetoes the first close while either owner is
-active, and closes only after both receipts arrive. Preview shutdown requests
-the active stop source before serialized close. Qt destroys the embedded child
+active, and closes only after both receipts arrive. Preview shutdown invalidates
+scheduled ticks and requests the active stop source before serialized close. Qt destroys the embedded child
 window only after the session has closed and been destroyed on the background
 thread. If a controller is destroyed without the normal handshake, it retires
 the `QWindow`, closes and destroys the session on the background thread, and
@@ -49,7 +70,7 @@ runner-image-specific binary cache key with the media workflow.
 
 Deterministic injected tests embed the real Qt `QWindow` with
 `WindowContainer`, verify the native `WS_CHILD` relationship, prove factory,
-resize, close, and destruction stay on one non-UI thread, and hold the first
+resize, play, tick, cancel, close, and destruction stay on one non-UI thread, and hold the first
 resize while a burst confirms only the latest physical size is applied. A
 separate WARP smoke uses the real session, Qt child window, background resize,
 and close path. A second executable smoke requests guarded application exit
@@ -58,15 +79,20 @@ Controller regressions perform a nested drain from `readyChanged`, prove the
 final state remains `closed`, and reenter shutdown from a close-failure signal
 without losing the single terminal receipt. Existing QML tests cover read-only
 shell state and the combined project/preview shutdown barrier.
+Candidate regressions prove stable persisted IDs, deterministic earliest-clip
+selection, media path containment, one tick in flight, terminal completion,
+replacement cancellation, stale-result rejection, and shutdown during a gated
+tick.
 
 ## Evidence boundary
 
 A green MSVC `/W4 /WX` build and Windows-platform Qt tests prove native child
 ownership, serialized background setup and teardown, bounded resize, and the
-shutdown gate on the runner. They do not prove a project media candidate,
-playback cadence, visible pixels, overlays, physical GPU performance, DPI and
-multi-display behavior, device recreation, A/V synchronization, or Windows 10
-build 19045 compatibility.
+shutdown gate, stable project candidate publication, and bounded playback tick
+admission on the runner. They do not prove visible pixels, overlays, multi-layer
+timeline composition, trim/speed mapping, video-only playback, physical GPU
+performance, DPI and multi-display behavior, device recreation, A/V
+synchronization, or Windows 10 build 19045 compatibility.
 
 ## References
 

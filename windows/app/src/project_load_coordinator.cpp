@@ -61,6 +61,12 @@ QString ProjectLoadCoordinator::errorCode() const { return errorCode_; }
 QString ProjectLoadCoordinator::errorJsonPointer() const { return errorJsonPointer_; }
 QString ProjectLoadCoordinator::state() const { return state_; }
 QString ProjectLoadCoordinator::warningSummary() const { return warningSummary_; }
+std::uint64_t ProjectLoadCoordinator::committedGeneration() const noexcept {
+    return committedGeneration_;
+}
+ProjectPreviewProjection ProjectLoadCoordinator::committedPreview() const {
+    return committedPreview_;
+}
 
 void ProjectLoadCoordinator::openFolder(const QUrl& folder) {
     if (shutdownRequested_) return;
@@ -124,6 +130,7 @@ void ProjectLoadCoordinator::startLoad(PendingLoad request) {
                 const auto diagnosticCount = result.project->diagnosticCount;
                 const auto skippedUnsafeClipCount = result.project->skippedUnsafeClipCount;
                 const auto firstDiagnostic = result.project->firstDiagnostic;
+                const auto committedPreview = result.project->preview;
                 model_.replace(std::move(*result.project));
                 setErrorCode({});
                 setErrorJsonPointer({});
@@ -144,6 +151,9 @@ void ProjectLoadCoordinator::startLoad(PendingLoad request) {
                 }
                 setWarningSummary(committedWarningSummary_);
                 setState(committedState_);
+                committedGeneration_ = requestGeneration;
+                committedPreview_ = committedPreview;
+                emit projectCommitted();
             } else {
                 setErrorCode(result.errorCode);
                 setErrorJsonPointer(result.errorPointer);

@@ -4008,7 +4008,12 @@ def windows_qt_preview_host_contract() -> None:
         [
             "empty",
             "attaching",
+            "switching",
             "ready",
+            "playing",
+            "completed",
+            "offline",
+            "unsupported",
             "occluded",
             "cancelled",
             "unavailable",
@@ -4028,6 +4033,8 @@ def windows_qt_preview_host_contract() -> None:
                 "backgroundOwnership",
                 "boundedQueue",
                 "cancellation",
+                "projectCommit",
+                "replacement",
                 "surfaceEpoch",
                 "shutdown",
             ]
@@ -4037,8 +4044,8 @@ def windows_qt_preview_host_contract() -> None:
         "Qt preview host exclusions",
         contract.get("excluded"),
         [
-            "project media resolution and playback requests",
-            "preview tick timer and interactive cadence",
+            "multi-layer timeline composition and source-time mapping",
+            "video-only steady-clock playback",
             "visible pixel and overlay correctness",
             "physical GPU performance",
             "DPI transition and multi-display manual evidence",
@@ -4051,8 +4058,12 @@ def windows_qt_preview_host_contract() -> None:
         "QtPreviewSessionFactory",
         "std::shared_ptr<std::stop_source>",
         "std::optional<PendingResize>",
+        "std::optional<PendingPreview>",
         "surfaceEpoch_",
+        "sourceSerial_",
+        "playbackGeneration_",
         "operationActive_",
+        "replaceProjectPreview(",
         "requestShutdown()",
         "nativeSurfaceAboutToBeDestroyed",
     ]:
@@ -4067,6 +4078,12 @@ def windows_qt_preview_host_contract() -> None:
         "pixelWidth == requestedWidth_ && pixelHeight == requestedHeight_",
         "pendingResize_ = request",
         "activeCancellation_->request_stop()",
+        "scheduleNextTick(",
+        "QTimer::singleShot",
+        "sourceSerial != sourceSerial_",
+        "state->session->play",
+        "state->session->tick",
+        "state->session->cancel",
         "state->session.reset()",
         "window_.release()",
         "delete retiredWindow",
@@ -4080,6 +4097,12 @@ def windows_qt_preview_host_contract() -> None:
     for token in [
         "nativeChildUsesOneBackgroundSessionOwner",
         "resizeBurstKeepsOnlyLatestPhysicalSize",
+        "projectCandidateTicksOnceAndStopsAtCompletion",
+        "projectCandidateWaitsForActiveSurfaceAttach",
+        "resizeDuringGatedTickResumesBoundedCadence",
+        "staleTickCancelsWithoutRetryLoop",
+        "replacementCancelsGatedTickBeforePublishingOffline",
+        "shutdownCancelsGatedTickBeforeSessionDestruction",
         "warpChildSurfaceLifecycle",
         "qmlCloseWaitsForPreviewSessionRelease",
         "unexpectedTeardownRetiresWindowUntilSessionDestruction",
@@ -4100,6 +4123,12 @@ def windows_qt_preview_host_contract() -> None:
         "add_palmier_qt_preview_test(",
         "native_child_background_owner",
         "resize_burst_coalesces",
+        "project_candidate_ticks_to_completion",
+        "project_candidate_waits_for_attach",
+        "resize_during_tick_resumes_cadence",
+        "stale_tick_cancels_without_retry",
+        "replacement_cancels_gated_tick",
+        "shutdown_cancels_gated_tick",
         "warp_child_surface_lifecycle",
         "qml_close_waits_for_preview_release",
         "unexpected_teardown_retires_window",
@@ -4129,6 +4158,8 @@ def windows_qt_preview_host_contract() -> None:
         "drainOnce()",
         "shutdownSucceeded",
         "QEventLoop::ExcludeUserInputEvents",
+        "ProjectLoadCoordinator::projectCommitted",
+        "replaceProjectPreview(",
     ]:
         if token not in main_source:
             raise ContractError(f"Qt preview host executable missing token {token!r}")
@@ -4144,7 +4175,8 @@ def windows_qt_preview_host_contract() -> None:
         "one process-lifetime presentation thread",
         "only the latest physical size",
         "closes only after both receipts arrive",
-        "do not prove a project media candidate",
+        "completion-triggered single-shot admission",
+        "stable project candidate publication",
     ]:
         if token not in adr:
             raise ContractError(f"Qt preview host ADR missing token {token!r}")

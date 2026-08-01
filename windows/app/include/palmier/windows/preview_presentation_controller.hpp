@@ -1,6 +1,7 @@
 #pragma once
 
 #include "palmier/preview/preview_presentation_session.hpp"
+#include "palmier/windows/preview_source.hpp"
 
 #include <QObject>
 #include <QString>
@@ -23,6 +24,17 @@ public:
         std::uint32_t width,
         std::uint32_t height,
         std::stop_token cancellation
+    ) = 0;
+    virtual preview::PreviewPresentationReceipt play(
+        const PreviewMediaCandidateProjection& candidate,
+        std::stop_token cancellation
+    ) = 0;
+    virtual preview::PreviewPresentationReceipt tick(
+        std::uint64_t expectedGeneration,
+        std::stop_token cancellation
+    ) = 0;
+    virtual preview::PreviewPresentationReceipt cancel(
+        std::uint64_t expectedGeneration
     ) = 0;
     virtual preview::PreviewPresentationReceipt close() = 0;
 };
@@ -74,6 +86,10 @@ public:
     bool shutdownComplete() const noexcept;
     QString state() const;
     QString errorCode() const;
+    void replaceProjectPreview(
+        std::uint64_t projectGeneration,
+        ProjectPreviewProjection preview
+    );
     Q_INVOKABLE bool requestShutdown();
 
 signals:
@@ -84,7 +100,7 @@ signals:
     void shutdownReady();
 
 private:
-    enum class OperationKind { attach, resize, close };
+    enum class OperationKind { attach, resize, play, tick, cancel, close };
 
     struct PendingResize final {
         std::uint64_t surfaceEpoch{};
@@ -92,10 +108,18 @@ private:
         std::uint32_t height{};
     };
 
+    struct PendingPreview final {
+        std::uint64_t sourceSerial{};
+        std::uint64_t projectGeneration{};
+        ProjectPreviewProjection preview;
+    };
+
     struct OperationResult final {
         OperationKind kind{OperationKind::resize};
         std::uint64_t serial{};
         std::uint64_t surfaceEpoch{};
+        std::uint64_t sourceSerial{};
+        std::uint64_t playbackGeneration{};
         preview::PreviewPresentationReceipt receipt;
         bool sessionExists{};
     };
@@ -109,7 +133,23 @@ private:
         std::uint32_t height
     );
     void scheduleResize(PendingResize request);
+    void schedulePlay(PendingPreview request);
+    void scheduleTick(
+        std::uint64_t sourceSerial,
+        std::uint64_t playbackGeneration
+    );
+    void scheduleCancel(
+        std::uint64_t sourceSerial,
+        std::uint64_t playbackGeneration
+    );
     void scheduleClose();
+    void scheduleNextTick(
+        std::uint64_t sourceSerial,
+        std::uint64_t playbackGeneration,
+        std::int64_t framesPerSecond
+    );
+    void servicePendingWork();
+    void publishUnavailablePreview(const ProjectPreviewProjection& preview);
     void completeOperation(OperationResult result);
     void completeShutdown(bool notify = true, QString errorCode = {});
     void setReady(bool value);
@@ -122,13 +162,21 @@ private:
     std::unique_ptr<PreviewNativeWindow> window_;
     std::shared_ptr<std::stop_source> activeCancellation_;
     std::optional<PendingResize> pendingResize_;
+    std::optional<PendingPreview> desiredPreview_;
     HWND nativeWindow_{};
     std::uint64_t surfaceEpoch_{};
     std::uint64_t operationSerial_{};
+    std::uint64_t sourceSerial_{};
+    std::uint64_t activePreviewSerial_{};
+    std::uint64_t suppressedPreviewSerial_{};
+    std::uint64_t playbackGeneration_{};
     std::uint32_t requestedWidth_{};
     std::uint32_t requestedHeight_{};
     bool refreshingSurface_{};
     bool operationActive_{};
+    std::optional<OperationKind> activeOperationKind_;
+    bool tickScheduled_{};
+    bool tickPending_{};
     bool sessionExists_{};
     bool shutdownRequested_{};
     bool shutdownComplete_{};

@@ -43,6 +43,8 @@ public:
     QString errorCode() const;
     QString errorJsonPointer() const;
     QString errorMessage() const;
+    std::uint64_t committedGeneration() const noexcept;
+    ProjectPreviewProjection committedPreview() const;
 
     Q_INVOKABLE void openFolder(const QUrl& folder);
     Q_INVOKABLE void cancelLoading();
@@ -55,6 +57,7 @@ signals:
     void errorCodeChanged();
     void errorJsonPointerChanged();
     void errorMessageChanged();
+    void projectCommitted();
     void shutdownReady();
 
 private:
@@ -76,6 +79,8 @@ private:
     ResultDeliveryCheckpoint resultDeliveryCheckpoint_;
     ReadOnlyTimelineModel model_;
     std::uint64_t generation_{};
+    std::uint64_t committedGeneration_{};
+    ProjectPreviewProjection committedPreview_;
     std::stop_source stopSource_;
     std::optional<PendingLoad> pendingLoad_;
     bool workerActive_{};

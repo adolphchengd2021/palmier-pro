@@ -134,6 +134,10 @@ class QtShellTests final : public QObject {
 private slots:
     void readerMapsCurrentProject() {
         palmier::windows::ProjectLoadCoordinator coordinator;
+        QSignalSpy projectCommitted(
+            &coordinator,
+            &palmier::windows::ProjectLoadCoordinator::projectCommitted
+        );
         coordinator.openFolder(QUrl::fromLocalFile(QString::fromStdWString(
             fixture("current-multitimeline.palmier").wstring()
         )));
@@ -148,6 +152,12 @@ private slots:
         );
         QCOMPARE(project.preview.reasonCode, std::string("mediaFileUnavailable"));
         QVERIFY(!project.preview.candidate.has_value());
+        QCOMPARE(projectCommitted.count(), 1);
+        QCOMPARE(coordinator.committedGeneration(), std::uint64_t{1});
+        QCOMPARE(
+            coordinator.committedPreview().reasonCode,
+            std::string("mediaFileUnavailable")
+        );
     }
 
     void stablePreviewCandidateUsesPersistedIds() {
@@ -260,15 +270,25 @@ private slots:
             },
             nullptr
         );
+        QSignalSpy projectCommitted(
+            &coordinator,
+            &palmier::windows::ProjectLoadCoordinator::projectCommitted
+        );
         coordinator.openFolder(QUrl::fromLocalFile(QStringLiteral("C:/first.palmier")));
         QTRY_VERIFY_WITH_TIMEOUT(!coordinator.loading(), 5000);
+        QCOMPARE(projectCommitted.count(), 1);
+        QCOMPARE(coordinator.committedGeneration(), std::uint64_t{1});
         const auto initialCount = coordinator.model()->rowCount();
         coordinator.openFolder(QUrl::fromLocalFile(QStringLiteral("C:/second.palmier")));
         QTRY_VERIFY_WITH_TIMEOUT(!coordinator.loading(), 5000);
+        QCOMPARE(projectCommitted.count(), 1);
+        QCOMPARE(coordinator.committedGeneration(), std::uint64_t{1});
         QCOMPARE(coordinator.model()->rowCount(), initialCount);
         QVERIFY(!coordinator.errorMessage().isEmpty());
         coordinator.openFolder(QUrl::fromLocalFile(QStringLiteral("C:/third.palmier")));
         QTRY_COMPARE_WITH_TIMEOUT(coordinator.state(), QStringLiteral("loaded"), 5000);
+        QCOMPARE(projectCommitted.count(), 2);
+        QCOMPARE(coordinator.committedGeneration(), std::uint64_t{3});
         QCOMPARE(
             coordinator.model()->project().activeTimelineId,
             std::string("timeline-third")
