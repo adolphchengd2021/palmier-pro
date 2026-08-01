@@ -305,6 +305,7 @@ private:
         HRESULT result
     ) const {
         auto value = snapshot();
+        value.state = AudioPlaybackState::failed;
         value.outcome = AudioPlaybackOutcome::failed;
         value.stage = stage;
         value.failure = failure;
@@ -430,6 +431,106 @@ private:
         value.hresult = output.hresult;
         value.acceptedFrames = outputCursor_;
         return value;
+    }
+
+    bool collectPendingBlock(
+        PresentationAudioDecodePump& pump,
+        std::uint64_t generation,
+        std::uint32_t maximumFrames,
+        std::stop_token stopToken,
+        std::optional<DecodedAudioBlock>& destination,
+        AudioPlaybackReceipt& failure
+    ) {
+        if (destination.has_value()) {
+            failure = failureReceipt(
+                AudioPlaybackStage::pcmHandoff,
+                AudioPlaybackFailureCode::invariantFailure,
+                E_UNEXPECTED
+            );
+            return false;
+        }
+        try {
+            for (;;) {
+                if (stopToken.stop_requested()) {
+                    failure = snapshot();
+                    failure.generation = generation;
+                    failure.state = AudioPlaybackState::cancelled;
+                    failure.outcome = AudioPlaybackOutcome::cancelled;
+                    failure.stage = AudioPlaybackStage::pcmHandoff;
+                    failure.failure = AudioPlaybackFailureCode::none;
+                    failure.hresult = cancelledResult;
+                    return false;
+                }
+
+                auto take = pump.dequeue(generation);
+                if (take.outcome == PresentationAudioOutcome::noOp) {
+                    break;
+                }
+                if (take.outcome != PresentationAudioOutcome::changed
+                    || !take.block.has_value()) {
+                    failure = failureReceipt(
+                        AudioPlaybackStage::pcmHandoff,
+                        AudioPlaybackFailureCode::invariantFailure,
+                        E_UNEXPECTED
+                    );
+                    return false;
+                }
+
+                auto next = std::move(*take.block);
+                const std::size_t nextByteCount = static_cast<std::size_t>(
+                    next.frameCount
+                ) * next.format.blockAlign;
+                if (next.frameCount == 0
+                    || next.frameCount > maximumFrames
+                    || next.interleavedBytes.size() != nextByteCount) {
+                    failure = failureReceipt(
+                        AudioPlaybackStage::pcmHandoff,
+                        AudioPlaybackFailureCode::invariantFailure,
+                        E_UNEXPECTED
+                    );
+                    return false;
+                }
+                if (!destination.has_value()) {
+                    destination = std::move(next);
+                    continue;
+                }
+
+                if (destination->format != next.format
+                    || destination->frameCount
+                        > maximumFrames - next.frameCount
+                    || destination->startOutputSample
+                        > (std::numeric_limits<std::int64_t>::max)()
+                            - static_cast<std::int64_t>(
+                                destination->frameCount
+                            )
+                    || next.startOutputSample
+                        != destination->startOutputSample
+                            + static_cast<std::int64_t>(
+                                destination->frameCount
+                            )) {
+                    failure = failureReceipt(
+                        AudioPlaybackStage::pcmHandoff,
+                        AudioPlaybackFailureCode::invariantFailure,
+                        E_UNEXPECTED
+                    );
+                    return false;
+                }
+                destination->interleavedBytes.insert(
+                    destination->interleavedBytes.end(),
+                    next.interleavedBytes.begin(),
+                    next.interleavedBytes.end()
+                );
+                destination->frameCount += next.frameCount;
+            }
+        } catch (...) {
+            failure = failureReceipt(
+                AudioPlaybackStage::pcmHandoff,
+                AudioPlaybackFailureCode::invariantFailure,
+                E_UNEXPECTED
+            );
+            return false;
+        }
+        return true;
     }
 
     bool acceptBlock(
@@ -681,6 +782,33 @@ private:
             return value;
         }
 
+        std::optional<DecodedAudioBlock> candidateBlock;
+        AudioPlaybackReceipt handoffFailure;
+        if (!collectPendingBlock(
+                *candidate,
+                nextGeneration,
+                std::min(device.bufferFrames, maximumFillFrames),
+                commandToken,
+                candidateBlock,
+                handoffFailure
+            )) {
+            auto value = previous;
+            value.outcome = handoffFailure.outcome;
+            value.stage = handoffFailure.stage;
+            value.failure = handoffFailure.failure;
+            value.hresult = handoffFailure.hresult;
+            publish(value);
+            return value;
+        }
+        if (commandToken.stop_requested()) {
+            auto value = previous;
+            value.outcome = AudioPlaybackOutcome::cancelled;
+            value.stage = AudioPlaybackStage::pcmHandoff;
+            value.hresult = cancelledResult;
+            publish(value);
+            return value;
+        }
+
         if (generation_ != 0) {
             const auto installed = output_->installGeneration(
                 generation_,
@@ -710,7 +838,7 @@ private:
         }
 
         pump_ = std::move(candidate);
-        pendingBlock_.reset();
+        pendingBlock_ = std::move(candidateBlock);
         generation_ = nextGeneration;
         input_ = commandValue.input;
         timelineFrame_ = commandValue.timelineFrame;
@@ -719,26 +847,12 @@ private:
         eosSubmitted_ = false;
         clockAnchor_.reset();
 
-        for (;;) {
-            auto take = pump_->dequeue(generation_);
-            if (take.outcome != PresentationAudioOutcome::changed) {
-                break;
-            }
-            if (!take.block.has_value()) {
-                auto value = failureReceipt(
-                    AudioPlaybackStage::pcmHandoff,
-                    AudioPlaybackFailureCode::invariantFailure,
-                    E_UNEXPECTED
-                );
-                value.generation = generation_;
-                return terminateActiveFailure(value);
-            }
-            AudioPlaybackReceipt handoffFailure;
-            if (!acceptBlock(*take.block, commandToken, handoffFailure)) {
-                handoffFailure.generation = generation_;
-                return terminateActiveFailure(handoffFailure);
-            }
+        if (pendingBlock_.has_value()
+            && !acceptBlock(*pendingBlock_, commandToken, handoffFailure)) {
+            handoffFailure.generation = generation_;
+            return terminateActiveFailure(handoffFailure);
         }
+        pendingBlock_.reset();
 
         if (pump_->state() == PresentationAudioDecodeState::endOfStream) {
             const auto ended = output_->markEndOfStream(
@@ -951,18 +1065,24 @@ private:
             return;
         }
         if (!pendingBlock_.has_value()) {
-            auto take = pump_->dequeue(generation_);
-            if (take.outcome == PresentationAudioOutcome::changed) {
-                if (!take.block.has_value()) {
-                    failActive(
-                        AudioPlaybackStage::pcmHandoff,
-                        AudioPlaybackFailureCode::invariantFailure,
-                        E_UNEXPECTED
-                    );
-                    return;
+            const auto token = handoffToken();
+            AudioPlaybackReceipt collectionFailure;
+            if (!collectPendingBlock(
+                    *pump_,
+                    generation_,
+                    std::min(configuration_->bufferFrames, maximumFillFrames),
+                    token,
+                    pendingBlock_,
+                    collectionFailure
+                )) {
+                if (collectionFailure.outcome
+                    != AudioPlaybackOutcome::cancelled) {
+                    terminateActiveFailure(collectionFailure);
                 }
-                pendingBlock_ = std::move(*take.block);
-            } else if (pump_->state() != PresentationAudioDecodeState::endOfStream) {
+                return;
+            }
+            if (!pendingBlock_.has_value()
+                && pump_->state() != PresentationAudioDecodeState::endOfStream) {
                 try {
                     const auto filled = pump_->fill(generation_);
                     if (filled.outcome == PresentationAudioOutcome::noOp
@@ -973,6 +1093,23 @@ private:
                             AudioPlaybackFailureCode::invariantFailure,
                             E_UNEXPECTED
                         );
+                        return;
+                    }
+                    if (!collectPendingBlock(
+                            *pump_,
+                            generation_,
+                            std::min(
+                                configuration_->bufferFrames,
+                                maximumFillFrames
+                            ),
+                            token,
+                            pendingBlock_,
+                            collectionFailure
+                        )) {
+                        if (collectionFailure.outcome
+                            != AudioPlaybackOutcome::cancelled) {
+                            terminateActiveFailure(collectionFailure);
+                        }
                         return;
                     }
                 } catch (const MediaError& error) {
@@ -990,18 +1127,6 @@ private:
                         E_UNEXPECTED
                     );
                     return;
-                }
-                take = pump_->dequeue(generation_);
-                if (take.outcome == PresentationAudioOutcome::changed) {
-                    if (!take.block.has_value()) {
-                        failActive(
-                            AudioPlaybackStage::pcmHandoff,
-                            AudioPlaybackFailureCode::invariantFailure,
-                            E_UNEXPECTED
-                        );
-                        return;
-                    }
-                    pendingBlock_ = std::move(*take.block);
                 }
             }
         }
