@@ -1507,6 +1507,7 @@ def windows_bootstrap_contract() -> None:
     for token in [
         "VCPKG_DISABLE_METRICS=1",
         "VCPKG_BINARY_SOURCES=clear;files,$binaryCache,readwrite",
+        "windows-vcpkg-v2-x64-msvc-14.44-${{ hashFiles('vcpkg.json') }}",
         "cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3",
         "cmake --preset windows-msvc-x64-ffmpeg",
         "ctest --preset windows-msvc-x64-ffmpeg-release",
