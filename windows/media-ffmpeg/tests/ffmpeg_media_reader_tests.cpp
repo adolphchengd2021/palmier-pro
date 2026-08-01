@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -21,11 +22,14 @@ namespace {
 using palmier::media::AlphaMode;
 using palmier::media::DecodeLimits;
 using palmier::media::FfmpegMediaReader;
+using palmier::media::FfmpegAudioFrameReader;
 using palmier::media::FfmpegVideoFrameReader;
 using palmier::media::MediaError;
 using palmier::media::MediaFailureCode;
 using palmier::media::RenderSourceError;
 using palmier::media::StreamKind;
+using palmier::audio::PcmFormat;
+using palmier::audio::PcmSampleEncoding;
 
 void require(bool condition, const std::string& message) {
     if (!condition) {
@@ -274,6 +278,175 @@ void cancellationTerminatesCursor(const std::filesystem::path& input) {
     );
 }
 
+std::int16_t patternedSample(std::size_t index) {
+    constexpr std::array<std::array<std::int16_t, 8>, 3> patterns{{
+        {0, 4096, -4096, 8192, -8192, 16384, -16384, 32767},
+        {-32768, 24576, -24576, 12288, -12288, 2048, -2048, 1},
+        {30000, -30000, 20000, -20000, 10000, -10000, 12345, -12345},
+    }};
+    return patterns[index / 256][index % 8];
+}
+
+std::int16_t sampleAt(
+    const std::vector<std::byte>& bytes,
+    std::size_t sampleIndex
+) {
+    std::int16_t value{};
+    std::memcpy(
+        &value,
+        bytes.data() + sampleIndex * sizeof(value),
+        sizeof(value)
+    );
+    return value;
+}
+
+void decodesExactCanonicalPcm(const std::filesystem::path& input) {
+    const PcmFormat mono24k{
+        24'000,
+        1,
+        16,
+        16,
+        2,
+        0x4,
+        PcmSampleEncoding::integer,
+        true,
+    };
+    FfmpegAudioFrameReader reader(input, mono24k);
+    std::vector<std::byte> decoded;
+    std::int64_t nextSample = 0;
+    for (;;) {
+        const auto block = reader.nextBlock();
+        if (!block.has_value()) {
+            break;
+        }
+        require(block->format == mono24k, "canonical PCM format changed");
+        require(block->startOutputSample == nextSample, "PCM sample cursor skipped");
+        require(
+            block->interleavedBytes.size()
+                == static_cast<std::size_t>(block->frameCount) * mono24k.blockAlign,
+            "PCM block byte count changed"
+        );
+        nextSample += block->frameCount;
+        decoded.insert(
+            decoded.end(),
+            block->interleavedBytes.begin(),
+            block->interleavedBytes.end()
+        );
+    }
+    require(nextSample == 768, "canonical PCM frame count changed");
+    for (std::size_t index = 0; index < 768; ++index) {
+        require(sampleAt(decoded, index) == patternedSample(index), "PCM sample changed");
+    }
+    require(!reader.nextBlock().has_value(), "audio EOF is not stable");
+}
+
+void resamplesAndRemixesCanonicalPcm(const std::filesystem::path& input) {
+    const PcmFormat stereo48k{
+        48'000,
+        2,
+        16,
+        16,
+        4,
+        0x3,
+        PcmSampleEncoding::integer,
+        true,
+    };
+    FfmpegAudioFrameReader reader(input, stereo48k);
+    std::uint64_t frames = 0;
+    std::int64_t nextSample = 0;
+    for (;;) {
+        const auto block = reader.nextBlock();
+        if (!block.has_value()) {
+            break;
+        }
+        require(block->startOutputSample == nextSample, "resampled cursor skipped");
+        for (std::size_t frame = 0; frame < block->frameCount; ++frame) {
+            require(
+                sampleAt(block->interleavedBytes, frame * 2)
+                    == sampleAt(block->interleavedBytes, frame * 2 + 1),
+                "mono remix channels differ"
+            );
+        }
+        frames += block->frameCount;
+        nextSample += block->frameCount;
+    }
+    require(frames == 1'536, "resampled frame count changed");
+}
+
+void audioCursorCancellationIsTerminal(const std::filesystem::path& input) {
+    const PcmFormat format{
+        24'000,
+        1,
+        16,
+        16,
+        2,
+        0x4,
+        PcmSampleEncoding::integer,
+        true,
+    };
+    FfmpegAudioFrameReader reader(input, format);
+    require(reader.nextBlock().has_value(), "audio cursor produced no block");
+    std::stop_source source;
+    source.request_stop();
+    requireError(
+        [&] { static_cast<void>(reader.nextBlock(source.get_token())); },
+        MediaFailureCode::cancelled
+    );
+    requireError(
+        [&] { static_cast<void>(reader.nextBlock()); },
+        MediaFailureCode::cancelled
+    );
+}
+
+void validatesAudioFailureBoundaries(const std::filesystem::path& videoOnly) {
+    const PcmFormat valid{
+        48'000,
+        2,
+        16,
+        16,
+        4,
+        0x3,
+        PcmSampleEncoding::integer,
+        true,
+    };
+    requireError(
+        [&] { static_cast<void>(FfmpegAudioFrameReader(videoOnly, valid)); },
+        MediaFailureCode::noAudioStream
+    );
+    requireError(
+        [&] { static_cast<void>(FfmpegAudioFrameReader(videoOnly, {})); },
+        MediaFailureCode::unsupportedAudioFormat
+    );
+    auto unidentifiedMultichannel = valid;
+    unidentifiedMultichannel.channelCount = 6;
+    unidentifiedMultichannel.blockAlign = 12;
+    unidentifiedMultichannel.channelMask = 0;
+    requireError(
+        [&] {
+            static_cast<void>(FfmpegAudioFrameReader(
+                videoOnly,
+                unidentifiedMultichannel
+            ));
+        },
+        MediaFailureCode::unsupportedAudioFormat
+    );
+    DecodeLimits invalidLimits;
+    invalidLimits.maximumAudioFramesPerBlock = 0;
+    requireError(
+        [&] {
+            static_cast<void>(FfmpegAudioFrameReader(videoOnly, valid, invalidLimits));
+        },
+        MediaFailureCode::invalidLimits
+    );
+    invalidLimits.maximumAudioFramesPerBlock = 65'537;
+    requireError(
+        [&] {
+            static_cast<void>(FfmpegAudioFrameReader(videoOnly, valid, invalidLimits));
+        },
+        MediaFailureCode::invalidLimits
+    );
+}
+
 void validatesFailureBoundaries(
     const TemporaryDirectory& directory,
     const std::filesystem::path& qtrle,
@@ -380,11 +553,19 @@ int main() {
             "opaque-three-frames.mov",
             palmier::media::test_fixtures::qtrleOpaqueThreeFrames
         );
+        const auto patternedPcm = directory.write(
+            "patterned-pcm.wav",
+            palmier::media::test_fixtures::patternedPcmWav
+        );
         dependencyContract();
         probesH264AndAac(h264Aac);
         decodesStraightAlphaAndRotation(qtrle);
         decodesPresentationOrderedFrames(opaqueThreeFrames);
         cancellationTerminatesCursor(opaqueThreeFrames);
+        decodesExactCanonicalPcm(patternedPcm);
+        resamplesAndRemixesCanonicalPcm(patternedPcm);
+        audioCursorCancellationIsTerminal(patternedPcm);
+        validatesAudioFailureBoundaries(qtrle);
         validatesFailureBoundaries(directory, qtrle, audioOnly);
         std::cout << "FFmpeg media reader tests passed\n";
         return 0;

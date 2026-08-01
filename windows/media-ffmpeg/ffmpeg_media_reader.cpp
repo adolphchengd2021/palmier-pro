@@ -17,15 +17,21 @@ extern "C" {
 #include <libavutil/display.h>
 #include <libavutil/error.h>
 #include <libavutil/frame.h>
+#include <libavutil/mathematics.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/pixfmt.h>
+#include <libavutil/samplefmt.h>
 #include <libavutil/version.h>
+#include <libswresample/swresample.h>
+#include <libswresample/version.h>
 #include <libswscale/swscale.h>
 #include <libswscale/version.h>
 }
 
 namespace palmier::media {
 namespace {
+
+constexpr std::uint32_t maximumConfigurableAudioFramesPerBlock = 65'536;
 
 template<typename Value, void (*Release)(Value**)>
 class FfmpegOwner final {
@@ -111,6 +117,8 @@ public:
 private:
     SwsContext* value_{};
 };
+
+using ResampleOwner = FfmpegOwner<SwrContext, swr_free>;
 
 struct InterruptState final {
     std::stop_token cancellation;
@@ -331,7 +339,10 @@ FormatOwner openInput(
         )
         || limits.maximumPacketsBeforeFrame == 0
         || limits.maximumProbeBytes <= 0
-        || limits.maximumAnalyzeMicroseconds <= 0) {
+        || limits.maximumAnalyzeMicroseconds <= 0
+        || limits.maximumAudioFramesPerBlock == 0
+        || limits.maximumAudioFramesPerBlock
+            > maximumConfigurableAudioFramesPerBlock) {
         fail(MediaFailureCode::invalidLimits, "validate-limits");
     }
     requireNotCancelled(interrupt.cancellation, "before-open");
@@ -519,27 +530,31 @@ DecodedVideoFrame convertFrame(
 
 }
 
-class FfmpegVideoFrameReader::Impl final {
+namespace {
+
+class SoftwareFrameReader final {
 public:
-    Impl(
+    SoftwareFrameReader(
         const std::filesystem::path& input,
         DecodeLimits limits,
+        AVMediaType mediaType,
+        MediaFailureCode missingStreamCode,
         std::stop_token cancellation
     ) : limits_(limits), interrupt_{cancellation}, format_(nullptr) {
         format_ = openInput(input, limits_, interrupt_);
-        videoIndex_ = av_find_best_stream(
+        streamIndex_ = av_find_best_stream(
             format_.get(),
-            AVMEDIA_TYPE_VIDEO,
+            mediaType,
             -1,
             -1,
             nullptr,
             0
         );
-        if (videoIndex_ < 0) {
-            fail(MediaFailureCode::noVideoStream, "find-video", videoIndex_);
+        if (streamIndex_ < 0) {
+            fail(missingStreamCode, "find-stream", streamIndex_);
         }
 
-        stream_ = format_.get()->streams[videoIndex_];
+        stream_ = format_.get()->streams[streamIndex_];
         const AVCodec* decoder = avcodec_find_decoder(stream_->codecpar->codec_id);
         if (decoder == nullptr) {
             fail(MediaFailureCode::decoderUnavailable, "find-decoder");
@@ -552,13 +567,17 @@ public:
         if (result < 0) {
             fail(MediaFailureCode::corruptInput, "copy-codec-parameters", result);
         }
-        checkedFrameBytes(
-            stream_->codecpar->width,
-            stream_->codecpar->height,
-            limits_.maximumPixels
-        );
-        codec_.get()->max_pixels = static_cast<std::int64_t>(limits_.maximumPixels);
-        codec_.get()->get_format = chooseSoftwarePixelFormat;
+        if (mediaType == AVMEDIA_TYPE_VIDEO) {
+            checkedFrameBytes(
+                stream_->codecpar->width,
+                stream_->codecpar->height,
+                limits_.maximumPixels
+            );
+            codec_.get()->max_pixels = static_cast<std::int64_t>(
+                limits_.maximumPixels
+            );
+            codec_.get()->get_format = chooseSoftwarePixelFormat;
+        }
         codec_.get()->thread_count = 1;
         result = avcodec_open2(codec_.get(), decoder, nullptr);
         if (result < 0) {
@@ -573,14 +592,15 @@ public:
         requireNotCancelled(cancellation, "after-decoder-setup");
     }
 
-    std::optional<DecodedVideoFrame> nextFrame(std::stop_token cancellation) {
+    AVFrame* nextFrame(std::stop_token cancellation) {
         if (terminalError_ != nullptr) {
             std::rethrow_exception(terminalError_);
         }
         if (exhausted_) {
-            return std::nullopt;
+            return nullptr;
         }
         interrupt_.cancellation = cancellation;
+        av_frame_unref(frame_.get());
         try {
             return decodeNext(cancellation);
         } catch (...) {
@@ -589,8 +609,10 @@ public:
         }
     }
 
+    AVStream& stream() const noexcept { return *stream_; }
+
 private:
-    std::optional<DecodedVideoFrame> decodeNext(std::stop_token cancellation) {
+    AVFrame* decodeNext(std::stop_token cancellation) {
         for (;;) {
             requireNotCancelled(cancellation, "receive-frame");
             const int receiveResult = avcodec_receive_frame(codec_.get(), frame_.get());
@@ -600,20 +622,12 @@ private:
                     || frame_.get()->decode_error_flags != 0) {
                     fail(MediaFailureCode::corruptInput, "corrupt-frame");
                 }
-                auto decoded = convertFrame(
-                    *frame_.get(),
-                    *stream_,
-                    limits_,
-                    scale_,
-                    cancellation
-                );
-                av_frame_unref(frame_.get());
                 packetCount_ = 0;
-                return decoded;
+                return frame_.get();
             }
             if (receiveResult == AVERROR_EOF) {
                 exhausted_ = true;
-                return std::nullopt;
+                return nullptr;
             }
             if (receiveResult != AVERROR(EAGAIN)) {
                 fail(MediaFailureCode::corruptInput, "receive-frame", receiveResult);
@@ -624,17 +638,13 @@ private:
             if (drainSent_) {
                 fail(MediaFailureCode::corruptInput, "drain-stalled");
             }
-
             if (packetPending_) {
                 sendPendingPacket();
-                continue;
-            }
-            if (drainPending_) {
+            } else if (drainPending_) {
                 sendDrainPacket();
-                continue;
+            } else {
+                readNextPacket(cancellation);
             }
-
-            readNextVideoPacket(cancellation);
         }
     }
 
@@ -668,7 +678,7 @@ private:
         fail(MediaFailureCode::corruptInput, "drain-decoder", result);
     }
 
-    void readNextVideoPacket(std::stop_token cancellation) {
+    void readNextPacket(std::stop_token cancellation) {
         for (;;) {
             requireNotCancelled(cancellation, "read-packet");
             const int result = av_read_frame(format_.get(), packet_.get());
@@ -687,7 +697,7 @@ private:
                 fail(MediaFailureCode::resourceLimitExceeded, "packet-budget");
             }
             ++packetCount_;
-            if (packet_.get()->stream_index == videoIndex_) {
+            if (packet_.get()->stream_index == streamIndex_) {
                 packetPending_ = true;
                 return;
             }
@@ -702,14 +712,410 @@ private:
     CodecOwner codec_;
     PacketOwner packet_;
     FrameOwner frame_;
-    ScaleOwner scale_;
     std::exception_ptr terminalError_;
     std::uint32_t packetCount_{};
-    int videoIndex_{-1};
+    int streamIndex_{-1};
     bool packetPending_{};
     bool drainPending_{};
     bool drainSent_{};
     bool receiveMustProgress_{};
+    bool exhausted_{};
+};
+
+AVSampleFormat sampleFormat(const audio::PcmFormat& format) {
+    if (!audio::isValidPcmFormat(format) || !format.interleaved) {
+        fail(MediaFailureCode::unsupportedAudioFormat, "target-format");
+    }
+    if (format.encoding == audio::PcmSampleEncoding::integer
+        && format.containerBitsPerSample == 16
+        && format.validBitsPerSample == 16) {
+        return AV_SAMPLE_FMT_S16;
+    }
+    if (format.encoding == audio::PcmSampleEncoding::ieeeFloat
+        && format.containerBitsPerSample == 32
+        && format.validBitsPerSample == 32) {
+        return AV_SAMPLE_FMT_FLT;
+    }
+    fail(MediaFailureCode::unsupportedAudioFormat, "target-format");
+}
+
+AVChannelLayout channelLayout(const audio::PcmFormat& format) {
+    AVChannelLayout layout{};
+    int result = 0;
+    if (format.channelMask != 0) {
+        result = av_channel_layout_from_mask(&layout, format.channelMask);
+    } else {
+        av_channel_layout_default(&layout, format.channelCount);
+    }
+    if (result < 0 || layout.nb_channels != format.channelCount
+        || av_channel_layout_check(&layout) == 0) {
+        av_channel_layout_uninit(&layout);
+        fail(MediaFailureCode::unsupportedAudioFormat, "target-channel-layout", result);
+    }
+    return layout;
+}
+
+std::size_t checkedAudioBytes(
+    std::uint32_t frameCount,
+    const audio::PcmFormat& format,
+    const DecodeLimits& limits
+) {
+    if (frameCount == 0 || frameCount > limits.maximumAudioFramesPerBlock
+        || frameCount > std::numeric_limits<std::size_t>::max()
+            / format.blockAlign) {
+        fail(MediaFailureCode::resourceLimitExceeded, "audio-block-size");
+    }
+    return static_cast<std::size_t>(frameCount) * format.blockAlign;
+}
+
+std::int64_t checkedAddSamples(
+    std::int64_t value,
+    std::int64_t delta,
+    std::string_view stage
+) {
+    if (delta < 0 || value > std::numeric_limits<std::int64_t>::max() - delta) {
+        fail(MediaFailureCode::resourceLimitExceeded, std::string(stage));
+    }
+    return value + delta;
+}
+
+bool differsByMoreThanOne(std::int64_t lhs, std::int64_t rhs) noexcept {
+    if (lhs > rhs) {
+        return rhs < std::numeric_limits<std::int64_t>::max()
+            && lhs > rhs + 1;
+    }
+    return lhs < rhs
+        && lhs < std::numeric_limits<std::int64_t>::max()
+        && rhs > lhs + 1;
+}
+
+}
+
+class FfmpegVideoFrameReader::Impl final {
+public:
+    Impl(
+        const std::filesystem::path& input,
+        DecodeLimits limits,
+        std::stop_token cancellation
+    ) : limits_(limits), cursor_(
+        input,
+        limits,
+        AVMEDIA_TYPE_VIDEO,
+        MediaFailureCode::noVideoStream,
+        cancellation
+    ) {}
+
+    std::optional<DecodedVideoFrame> nextFrame(std::stop_token cancellation) {
+        if (terminalError_ != nullptr) {
+            std::rethrow_exception(terminalError_);
+        }
+        try {
+            AVFrame* frame = cursor_.nextFrame(cancellation);
+            if (frame == nullptr) {
+                return std::nullopt;
+            }
+            return convertFrame(
+                *frame,
+                cursor_.stream(),
+                limits_,
+                scale_,
+                cancellation
+            );
+        } catch (...) {
+            terminalError_ = std::current_exception();
+            throw;
+        }
+    }
+
+private:
+    DecodeLimits limits_;
+    SoftwareFrameReader cursor_;
+    ScaleOwner scale_;
+    std::exception_ptr terminalError_;
+};
+
+class FfmpegAudioFrameReader::Impl final {
+public:
+    Impl(
+        const std::filesystem::path& input,
+        audio::PcmFormat targetFormat,
+        DecodeLimits limits,
+        std::stop_token cancellation
+    ) : targetFormat_(targetFormat),
+        targetSampleFormat_(sampleFormat(targetFormat_)),
+        limits_(limits),
+        cursor_(
+            input,
+            limits,
+            AVMEDIA_TYPE_AUDIO,
+            MediaFailureCode::noAudioStream,
+            cancellation
+        ) {}
+
+    ~Impl() { av_channel_layout_uninit(&sourceLayout_); }
+
+    std::optional<DecodedAudioBlock> nextBlock(std::stop_token cancellation) {
+        if (terminalError_ != nullptr) {
+            std::rethrow_exception(terminalError_);
+        }
+        if (exhausted_) {
+            return std::nullopt;
+        }
+        try {
+            for (;;) {
+                requireNotCancelled(cancellation, "before-audio-decode");
+                AVFrame* frame = cursor_.nextFrame(cancellation);
+                if (frame == nullptr) {
+                    return drain(cancellation);
+                }
+                auto converted = convert(*frame, cancellation);
+                if (converted.frameCount != 0) {
+                    return converted;
+                }
+            }
+        } catch (...) {
+            terminalError_ = std::current_exception();
+            throw;
+        }
+    }
+
+private:
+    void configure(const AVFrame& frame) {
+        if (frame.sample_rate <= 0 || frame.nb_samples <= 0
+            || frame.format < 0 || frame.ch_layout.nb_channels > 32
+            || av_channel_layout_check(&frame.ch_layout) == 0) {
+            fail(MediaFailureCode::corruptInput, "audio-frame-format");
+        }
+        if (sourceConfigured_) {
+            if (frame.sample_rate != sourceSampleRate_
+                || frame.format != sourceSampleFormat_
+                || av_channel_layout_compare(&frame.ch_layout, &sourceLayout_) != 0) {
+                fail(MediaFailureCode::unsupportedAudioFormat, "changed-source-format");
+            }
+            return;
+        }
+
+        AVChannelLayout outputLayout = channelLayout(targetFormat_);
+        SwrContext* raw = nullptr;
+        int result = swr_alloc_set_opts2(
+            &raw,
+            &outputLayout,
+            targetSampleFormat_,
+            static_cast<int>(targetFormat_.sampleRate),
+            &frame.ch_layout,
+            static_cast<AVSampleFormat>(frame.format),
+            frame.sample_rate,
+            0,
+            nullptr
+        );
+        av_channel_layout_uninit(&outputLayout);
+        resampler_.reset(raw);
+        if (result < 0 || resampler_.get() == nullptr) {
+            fail(MediaFailureCode::conversionFailed, "create-resampler", result);
+        }
+        result = swr_init(resampler_.get());
+        if (result < 0) {
+            fail(MediaFailureCode::conversionFailed, "initialize-resampler", result);
+        }
+        result = av_channel_layout_copy(&sourceLayout_, &frame.ch_layout);
+        if (result < 0) {
+            fail(MediaFailureCode::resourceLimitExceeded, "copy-source-layout", result);
+        }
+        sourceSampleRate_ = frame.sample_rate;
+        sourceSampleFormat_ = frame.format;
+        sourceConfigured_ = true;
+    }
+
+    DecodedAudioBlock convert(const AVFrame& frame, std::stop_token cancellation) {
+        requireNotCancelled(cancellation, "before-audio-convert");
+        configure(frame);
+        if (frame.best_effort_timestamp == AV_NOPTS_VALUE) {
+            fail(MediaFailureCode::discontinuousAudioTimestamp, "missing-audio-pts");
+        }
+        if (cursor_.stream().time_base.num <= 0
+            || cursor_.stream().time_base.den <= 0) {
+            fail(MediaFailureCode::corruptInput, "audio-time-base");
+        }
+        if (!sourceAnchorTimestamp_.has_value()) {
+            sourceAnchorTimestamp_ = frame.best_effort_timestamp;
+            nextOutputSample_ = av_rescale_q_rnd(
+                frame.best_effort_timestamp,
+                cursor_.stream().time_base,
+                AVRational{1, static_cast<int>(targetFormat_.sampleRate)},
+                static_cast<AVRounding>(AV_ROUND_DOWN | AV_ROUND_PASS_MINMAX)
+            );
+        } else {
+            const auto expectedOffset = av_rescale_q_rnd(
+                sourceFramesRead_,
+                AVRational{1, sourceSampleRate_},
+                cursor_.stream().time_base,
+                AV_ROUND_NEAR_INF
+            );
+            const auto expectedTimestamp = checkedAddSamples(
+                *sourceAnchorTimestamp_,
+                expectedOffset,
+                "source-timestamp-overflow"
+            );
+            if (differsByMoreThanOne(
+                    frame.best_effort_timestamp,
+                    expectedTimestamp
+                )) {
+                fail(
+                    MediaFailureCode::discontinuousAudioTimestamp,
+                    "audio-pts-discontinuity"
+                );
+            }
+        }
+        sourceFramesRead_ = checkedAddSamples(
+            sourceFramesRead_,
+            frame.nb_samples,
+            "source-sample-overflow"
+        );
+
+        const int outputCapacity = swr_get_out_samples(
+            resampler_.get(),
+            frame.nb_samples
+        );
+        if (outputCapacity <= 0
+            || static_cast<std::uint64_t>(outputCapacity)
+                > limits_.maximumAudioFramesPerBlock) {
+            fail(
+                outputCapacity < 0
+                    ? MediaFailureCode::conversionFailed
+                    : MediaFailureCode::resourceLimitExceeded,
+                "audio-output-capacity",
+                outputCapacity
+            );
+        }
+        std::vector<std::byte> bytes(checkedAudioBytes(
+            static_cast<std::uint32_t>(outputCapacity),
+            targetFormat_,
+            limits_
+        ));
+        std::uint8_t* output[] = {
+            reinterpret_cast<std::uint8_t*>(bytes.data()),
+        };
+        std::array<const std::uint8_t*, 32> input{};
+        const int pointerCount = av_sample_fmt_is_planar(
+            static_cast<AVSampleFormat>(frame.format)
+        ) != 0 ? frame.ch_layout.nb_channels : 1;
+        for (int index = 0; index < pointerCount; ++index) {
+            input[static_cast<std::size_t>(index)] = frame.extended_data[index];
+        }
+        const int converted = swr_convert(
+            resampler_.get(),
+            output,
+            outputCapacity,
+            input.data(),
+            frame.nb_samples
+        );
+        if (converted < 0) {
+            fail(MediaFailureCode::conversionFailed, "convert-audio", converted);
+        }
+        requireNotCancelled(cancellation, "after-audio-convert");
+        bytes.resize(static_cast<std::size_t>(converted) * targetFormat_.blockAlign);
+        DecodedAudioBlock block{
+            frame.best_effort_timestamp,
+            rational(cursor_.stream().time_base),
+            *nextOutputSample_,
+            static_cast<std::uint32_t>(converted),
+            targetFormat_,
+            std::move(bytes),
+        };
+        *nextOutputSample_ = checkedAddSamples(
+            *nextOutputSample_,
+            converted,
+            "output-sample-overflow"
+        );
+        return block;
+    }
+
+    std::optional<DecodedAudioBlock> drain(std::stop_token cancellation) {
+        if (!sourceConfigured_) {
+            exhausted_ = true;
+            return std::nullopt;
+        }
+        for (;;) {
+            requireNotCancelled(cancellation, "before-resampler-drain");
+            const int outputCapacity = swr_get_out_samples(resampler_.get(), 0);
+            if (outputCapacity < 0) {
+                fail(
+                    MediaFailureCode::conversionFailed,
+                    "drain-audio-capacity",
+                    outputCapacity
+                );
+            }
+            if (outputCapacity == 0) {
+                exhausted_ = true;
+                return std::nullopt;
+            }
+            if (static_cast<std::uint64_t>(outputCapacity)
+                > limits_.maximumAudioFramesPerBlock) {
+                fail(MediaFailureCode::resourceLimitExceeded, "drain-audio-capacity");
+            }
+            std::vector<std::byte> bytes(checkedAudioBytes(
+                static_cast<std::uint32_t>(outputCapacity),
+                targetFormat_,
+                limits_
+            ));
+            std::uint8_t* output[] = {
+                reinterpret_cast<std::uint8_t*>(bytes.data()),
+            };
+            const int converted = swr_convert(
+                resampler_.get(),
+                output,
+                outputCapacity,
+                nullptr,
+                0
+            );
+            if (converted < 0) {
+                fail(MediaFailureCode::conversionFailed, "drain-audio", converted);
+            }
+            if (converted == 0) {
+                exhausted_ = true;
+                return std::nullopt;
+            }
+            requireNotCancelled(cancellation, "after-resampler-drain");
+            bytes.resize(static_cast<std::size_t>(converted) * targetFormat_.blockAlign);
+            DecodedAudioBlock block{
+                checkedAddSamples(
+                    *sourceAnchorTimestamp_,
+                    av_rescale_q_rnd(
+                        sourceFramesRead_,
+                        AVRational{1, sourceSampleRate_},
+                        cursor_.stream().time_base,
+                        AV_ROUND_NEAR_INF
+                    ),
+                    "drain-source-timestamp-overflow"
+                ),
+                rational(cursor_.stream().time_base),
+                *nextOutputSample_,
+                static_cast<std::uint32_t>(converted),
+                targetFormat_,
+                std::move(bytes),
+            };
+            *nextOutputSample_ = checkedAddSamples(
+                *nextOutputSample_,
+                converted,
+                "drain-output-sample-overflow"
+            );
+            return block;
+        }
+    }
+
+    audio::PcmFormat targetFormat_;
+    AVSampleFormat targetSampleFormat_{AV_SAMPLE_FMT_NONE};
+    DecodeLimits limits_;
+    SoftwareFrameReader cursor_;
+    ResampleOwner resampler_;
+    AVChannelLayout sourceLayout_{};
+    std::exception_ptr terminalError_;
+    std::optional<std::int64_t> sourceAnchorTimestamp_;
+    std::optional<std::int64_t> nextOutputSample_;
+    std::int64_t sourceFramesRead_{};
+    int sourceSampleRate_{};
+    int sourceSampleFormat_{-1};
+    bool sourceConfigured_{};
     bool exhausted_{};
 };
 
@@ -738,6 +1144,7 @@ FfmpegRuntimeInfo FfmpegMediaReader::runtimeInfo() {
     const bool headersMatch = avutil_version() == LIBAVUTIL_VERSION_INT
         && avcodec_version() == LIBAVCODEC_VERSION_INT
         && avformat_version() == LIBAVFORMAT_VERSION_INT
+        && swresample_version() == LIBSWRESAMPLE_VERSION_INT
         && swscale_version() == LIBSWSCALE_VERSION_INT;
     return {
         av_version_info(),
@@ -759,6 +1166,26 @@ std::optional<DecodedVideoFrame> FfmpegVideoFrameReader::nextFrame(
     std::stop_token cancellation
 ) {
     return impl_->nextFrame(cancellation);
+}
+
+FfmpegAudioFrameReader::FfmpegAudioFrameReader(
+    const std::filesystem::path& input,
+    audio::PcmFormat targetFormat,
+    const DecodeLimits& limits,
+    std::stop_token cancellation
+) : impl_(std::make_unique<Impl>(
+    input,
+    targetFormat,
+    limits,
+    cancellation
+)) {}
+
+FfmpegAudioFrameReader::~FfmpegAudioFrameReader() = default;
+
+std::optional<DecodedAudioBlock> FfmpegAudioFrameReader::nextBlock(
+    std::stop_token cancellation
+) {
+    return impl_->nextBlock(cancellation);
 }
 
 MediaProbe FfmpegMediaReader::probe(

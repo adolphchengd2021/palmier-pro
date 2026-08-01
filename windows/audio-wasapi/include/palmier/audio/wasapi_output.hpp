@@ -1,6 +1,7 @@
 #pragma once
 
 #include "palmier/audio/audio_clock.hpp"
+#include "palmier/audio/pcm_format.hpp"
 
 #include <Windows.h>
 
@@ -16,6 +17,7 @@ enum class WasapiOutputState {
     stopped,
     invalidated,
     failed,
+    completed,
     closed,
 };
 
@@ -53,7 +55,7 @@ enum class WasapiOutputStage {
 
 struct WasapiOutputConfig final {
     std::uint32_t bufferFrames{};
-    std::uint16_t blockAlign{};
+    PcmFormat pcmFormat;
     std::uint64_t clockFrequency{};
     std::uint64_t generation{1};
 };

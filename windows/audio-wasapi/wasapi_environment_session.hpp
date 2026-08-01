@@ -16,12 +16,7 @@ struct WasapiSharedModePeriods final {
     std::uint32_t maximumPeriod{};
 };
 
-struct WasapiMixFormat final {
-    std::uint32_t sampleRate{};
-    std::uint16_t channelCount{};
-    std::uint16_t bitsPerSample{};
-    std::uint16_t blockAlign{};
-};
+using WasapiMixFormat = PcmFormat;
 
 class WasapiEnvironmentSession {
 public:

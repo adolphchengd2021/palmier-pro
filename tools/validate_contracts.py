@@ -1318,7 +1318,7 @@ def windows_bootstrap_contract() -> None:
             {
                 "name": "ffmpeg",
                 "default-features": False,
-                "features": ["avcodec", "avformat", "swscale"],
+                "features": ["avcodec", "avformat", "swresample", "swscale"],
             }
         ],
     )
@@ -1478,6 +1478,9 @@ def windows_bootstrap_contract() -> None:
         "std::stop_token cancellation",
         "rgba8",
         "AlphaMode",
+        "DecodedAudioBlock",
+        "FfmpegAudioFrameReader",
+        "maximumAudioFramesPerBlock",
         "unsupportedInputProtocol",
         "unsupportedColorMetadata",
         "unsupportedDisplayTransform",
@@ -1494,6 +1497,10 @@ def windows_bootstrap_contract() -> None:
         "av_display_rotation_get",
         "max_pixels",
         "sws_scale",
+        "swr_alloc_set_opts2",
+        "swr_get_out_samples",
+        "swr_convert",
+        "swresample_version",
     ]:
         if token not in media_source:
             raise ContractError(f"FFmpeg source missing token {token!r}")
@@ -2524,6 +2531,203 @@ def windows_ffmpeg_presentation_pipeline_contract() -> None:
             raise ContractError(f"FFmpeg pipeline ADR missing token {token!r}")
 
 
+def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
+    contract = load_json("contracts/audio/v1/ffmpeg-wasapi-pipeline.json")
+    pcm_header = read_text("core/audio/include/palmier/audio/pcm_format.hpp")
+    ffmpeg_header = read_text(
+        "windows/media-ffmpeg/include/palmier/media/ffmpeg_media_reader.hpp"
+    )
+    ffmpeg_source = read_text("windows/media-ffmpeg/ffmpeg_media_reader.cpp")
+    ffmpeg_tests = read_text(
+        "windows/media-ffmpeg/tests/ffmpeg_media_reader_tests.cpp"
+    )
+    fixtures = read_text("windows/media-ffmpeg/tests/media_test_fixtures.hpp")
+    pump_header = read_text(
+        "windows/media-session/include/palmier/media/presentation_audio_decode_pump.hpp"
+    )
+    pump_source = read_text(
+        "windows/media-session/presentation_audio_decode_pump.cpp"
+    )
+    pipeline_tests = read_text(
+        "windows/media-session/tests/ffmpeg_wasapi_audio_pipeline_tests.cpp"
+    )
+    cmake = read_text("windows/media-session/CMakeLists.txt")
+
+    require_equal("audio pipeline version", contract.get("version"), CONTRACT_VERSION)
+    require_equal(
+        "audio pipeline states",
+        contract.get("states"),
+        ["idle", "ready", "blocked", "endOfStream", "cancelled", "failed"],
+    )
+    require_equal(
+        "audio pipeline outcomes",
+        contract.get("outcomes"),
+        ["changed", "noOp", "stale", "refused"],
+    )
+    require_equal(
+        "audio pipeline canonical format",
+        contract.get("canonicalFormat"),
+        {
+            "sampleRate": 48000,
+            "encoding": "integer",
+            "channelCount": 2,
+            "containerBitsPerSample": 16,
+            "validBitsPerSample": 16,
+            "blockAlign": 4,
+            "channelMask": 3,
+            "interleaved": True,
+        },
+    )
+    require_equal(
+        "audio pipeline limits",
+        contract.get("limits"),
+        {
+            "maximumAudioFramesPerDecodedBlock": 65536,
+            "maximumPumpCapacityFrames": 4194304,
+            "maximumFramesPerFill": 65536,
+            "maximumQueuedAudioBytes": 268435456,
+            "testPumpCapacityFrames": 150,
+            "testMaximumFramesPerFill": 50,
+            "testWasapiQueueCapacityFrames": 250,
+            "testEndpointPacketFrames": 100,
+        },
+    )
+
+    for token in [
+        "enum class PcmSampleEncoding",
+        "containerBitsPerSample",
+        "validBitsPerSample",
+        "channelMask",
+        "interleaved",
+        "isValidPcmFormat",
+        "format.channelCount > 2 && format.channelMask == 0",
+    ]:
+        if token not in pcm_header:
+            raise ContractError(f"PCM format contract missing token {token!r}")
+    for token in [
+        "struct DecodedAudioBlock final",
+        "class FfmpegAudioFrameReader final",
+        "std::optional<DecodedAudioBlock> nextBlock(",
+        "maximumAudioFramesPerBlock{65'536}",
+        "discontinuousAudioTimestamp",
+    ]:
+        if token not in ffmpeg_header:
+            raise ContractError(f"FFmpeg audio API missing token {token!r}")
+    for token in [
+        "class SoftwareFrameReader final",
+        "class FfmpegAudioFrameReader::Impl final",
+        "swr_alloc_set_opts2(",
+        "swr_get_out_samples(",
+        "swr_convert(",
+        "nullptr,\n                0",
+        "changed-source-format",
+        "audio-pts-discontinuity",
+        "sourceAnchorTimestamp_",
+        "sourceFramesRead_",
+        "maximumConfigurableAudioFramesPerBlock",
+        "swresample_version() == LIBSWRESAMPLE_VERSION_INT",
+    ]:
+        if token not in ffmpeg_source:
+            raise ContractError(f"FFmpeg audio source missing token {token!r}")
+    for token in [
+        "decodesExactCanonicalPcm",
+        "resamplesAndRemixesCanonicalPcm",
+        "audioCursorCancellationIsTerminal",
+        "validatesAudioFailureBoundaries",
+        "frames == 1'536",
+        "audio EOF is not stable",
+    ]:
+        if token not in ffmpeg_tests:
+            raise ContractError(f"FFmpeg audio tests missing token {token!r}")
+
+    fixture_match = re.search(
+        r"patternedPcmWav\s*=((?:\s*\"[^\"]*\")+)\s*;",
+        fixtures,
+    )
+    if fixture_match is None:
+        raise ContractError("patterned PCM fixture is missing")
+    fixture_base64 = "".join(re.findall(r'\"([^\"]*)\"', fixture_match.group(1)))
+    try:
+        fixture_bytes = base64.b64decode(fixture_base64, validate=True)
+    except ValueError as error:
+        raise ContractError(f"patterned PCM fixture is invalid: {error}") from error
+    require_equal(
+        "patterned PCM fixture SHA-256",
+        hashlib.sha256(fixture_bytes).hexdigest(),
+        contract["fixture"]["sha256"],
+    )
+    require_equal("patterned PCM fixture bytes", len(fixture_bytes), 1580)
+
+    require_equal(
+        "audio pump C++ states",
+        cpp_enum_cases(pump_header, "PresentationAudioDecodeState"),
+        contract["states"],
+    )
+    require_equal(
+        "audio pump C++ outcomes",
+        cpp_enum_cases(pump_header, "PresentationAudioOutcome"),
+        contract["outcomes"],
+    )
+    for token in [
+        "class PresentationAudioDecodePump final",
+        "std::unique_ptr<FfmpegAudioFrameReader> reader_",
+        "std::optional<DecodedAudioBlock> pendingBlock_",
+        "std::deque<DecodedAudioBlock> queue_",
+        "pendingFrameOffset_",
+        "queuedFrames_",
+    ]:
+        if token not in pump_header:
+            raise ContractError(f"audio pump API missing token {token!r}")
+    for token in [
+        "auto nextReader = std::make_unique<FfmpegAudioFrameReader>(",
+        "before-audio-generation-commit",
+        "before-audio-block-admission",
+        "PresentationAudioDecodeState::blocked",
+        "pendingBlock_->startOutputSample",
+        "maximumQueuedAudioBytes",
+        "maximumConfigurableAudioCapacityFrames",
+        "maximumConfigurableAudioFramesPerFill",
+        "limits_.decode.maximumAudioFramesPerBlock",
+        "terminate(PresentationAudioDecodeState::failed)",
+    ]:
+        if token not in pump_source:
+            raise ContractError(f"audio pump source missing token {token!r}")
+    for token in [
+        "boundedPipelinePreservesEveryMediaSample",
+        "pumpBackpressureCancellationAndReplacement",
+        "backend.captured == expected",
+        "backend.acquiredFrames.back() == 36",
+        "pump.generation() == 7",
+        "PresentationAudioDecodeState::cancelled",
+        "rejectsUnboundedPumpLimits",
+    ]:
+        if token not in pipeline_tests:
+            raise ContractError(f"audio pipeline tests missing token {token!r}")
+    for token in [
+        "presentation_audio_decode_pump.cpp",
+        "palmier_ffmpeg_wasapi_audio_pipeline_tests",
+        "PRIVATE palmier_media_session palmier_audio_wasapi",
+        "media_session.ffmpeg_wasapi_audio_pipeline",
+        "PROPERTIES TIMEOUT 60",
+    ]:
+        if token not in cmake:
+            raise ContractError(f"audio pipeline CMake missing token {token!r}")
+
+    adr = read_text("docs/windows/adr/0017-ffmpeg-canonical-pcm-to-wasapi.md")
+    for token in [
+        "one immutable identity",
+        "receive-before-supply codec driver",
+        "drains the resampler with null input",
+        "replacement reader must open before",
+        "does not create threads",
+        "final exact 36-frame lease",
+        contract["fixture"]["sha256"],
+        "does not prove audible playback",
+    ]:
+        if token not in adr:
+            raise ContractError(f"audio pipeline ADR missing token {token!r}")
+
+
 def windows_audio_wasapi_contract() -> None:
     root_cmake = read_text("CMakeLists.txt")
     audio_cmake = read_text("windows/audio-wasapi/CMakeLists.txt")
@@ -2599,6 +2803,10 @@ def windows_audio_wasapi_contract() -> None:
         "IAudioRenderClient",
         "IAudioClock",
         "GetFrequency",
+        "parseWasapiMixFormat",
+        "KSDATAFORMAT_SUBTYPE_IEEE_FLOAT",
+        "wValidBitsPerSample",
+        "dwChannelMask",
     ]:
         if token not in probe_source and token not in native_source:
             raise ContractError(f"WASAPI native setup missing token {token!r}")
@@ -2635,6 +2843,7 @@ def windows_audio_wasapi_contract() -> None:
         "ScriptedWasapiSession",
         "executesTheNoStartSetupInOrder",
         "preservesExternalAndImplementationFailures",
+        "parsesExactPcmAndExtensibleMixFormats",
         '"initialize-stream",',
         '"clock-frequency",',
         "session.initializedPeriod == 480",
@@ -2678,6 +2887,7 @@ def windows_wasapi_output_contract() -> None:
         "stopped",
         "invalidated",
         "failed",
+        "completed",
         "closed",
     ]
     if contract.get("states") != expected_states:
@@ -2711,6 +2921,8 @@ def windows_wasapi_output_contract() -> None:
         "backend_.releaseBuffer(0, 0)",
         "AUDCLNT_BUFFERFLAGS_SILENT",
         "queue_.commitFrames(value.mediaFrames)",
+        "value.requestedFrames = sourceEnded",
+        "WasapiOutputState::completed",
         "value.lateCancellation = stopToken.stop_requested()",
         "++config_.generation",
         "isWasapiOutputInvalidation",
@@ -2744,6 +2956,8 @@ def windows_wasapi_output_contract() -> None:
     for token in [
         "primesBeforeStartAndCommitsOnlyReleasedPcm",
         "rendersOnlyAfterAnEventAndCountsUnderrun",
+        "endOfStreamWithoutMediaCompletesBeforeStart",
+        "endOfStreamReleasesTheExactTailThenCompletes",
         "cancellationInsideLeaseAbandonsAndRollsBack",
         "cancellationAfterReleaseReportsCommittedEffect",
         "cancellationInterruptsTheNativeEventWait",
@@ -3018,6 +3232,7 @@ def main() -> int:
         ("Windows decoded-frame render adapter", windows_media_render_adapter_contract),
         ("Windows presentation video buffer", windows_presentation_video_buffer_contract),
         ("Windows FFmpeg presentation pipeline", windows_ffmpeg_presentation_pipeline_contract),
+        ("Windows FFmpeg to WASAPI audio pipeline", windows_ffmpeg_wasapi_audio_pipeline_contract),
         ("Windows WASAPI clock and environment probe", windows_audio_wasapi_contract),
         ("Windows bounded WASAPI output", windows_wasapi_output_contract),
         ("Windows Qt read-only project shell", windows_qt_read_only_shell_contract),

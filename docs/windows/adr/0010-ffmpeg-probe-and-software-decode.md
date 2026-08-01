@@ -9,11 +9,11 @@
 
 Activate vcpkg manifest mode at the locked `2026.06.24` baseline and build
 FFmpeg 8.1.2 as dynamic LGPL libraries. Disable default features and request
-only `avcodec`, `avformat`, and `swscale`. GPL and nonfree feature groups remain
+only `avcodec`, `avformat`, `swresample`, and `swscale`. GPL and nonfree feature groups remain
 outside the prototype contract.
 
 `windows/media-ffmpeg` owns local-file container probe and a stateful cursor for
-frames emitted by the software decoder. It preserves integer stream time bases,
+frames and canonical PCM blocks emitted by software decoders. It preserves integer stream time bases,
 rotation metadata, color metadata, alpha, audio stream shape, and explicit
 failure codes. It owns no project state, timeline decisions, UI state, audio
 output, playback clock, hardware decode, export, or cache.
@@ -21,7 +21,8 @@ output, playback clock, hardware decode, export, or cache.
 The API is synchronous by design and must be called from a dedicated media
 executor. Its `AVIOInterruptCB` observes a `std::stop_token`; cancellation is
 also checked between probe, packet, decoder, conversion, and return boundaries.
-Each cursor owns its FFmpeg contexts and reusable swscale context.
+The audio and video cursors share one receive-before-supply decoder driver.
+Each cursor owns its FFmpeg contexts and reusable swscale or swresample context.
 `decodeFirstVideoFrame` is a compatibility wrapper over that cursor. No
 process-global log callback or shared codec context is installed.
 
@@ -49,6 +50,10 @@ directory at runtime. They do not download or generate media in CI.
   `d7eb5181b706b60b3f3f4e572a72e275f69ad42815c77d76b909f2b17ff77c82`.
 - A mono 8 kHz PCM WAV verifies that video decode reports `noVideoStream`.
   SHA-256: `207503465701ec21fedf076c87748252e66de71d2c8fc8ab5a4c5dffffc05457`.
+- A mono 24 kHz PCM WAV contains 768 deterministic non-silent signed 16-bit
+  samples. It verifies exact canonical PCM decode plus 48 kHz stereo resample,
+  remix, drain, and stable EOF. SHA-256:
+  `0e153aa9a380f0702c7b701a0c3bf8ad095869c4c78b774cbaa3adcd0eb9d241`.
 - A three-frame 3×2 opaque RGB24 QTRLE MOV verifies exact sequential pixels,
   time base, PTS order, stable EOF, and cursor cancellation. SHA-256:
   `14290e9b2efb26f4ca1e2680b9a7589e141577cea53ceab4b5adf583a98a79e8`.
@@ -67,7 +72,7 @@ packaging, or distribution approval.
 
 Before distribution, archive matching FFmpeg source, build flags, DLL hashes,
 license notices, and SBOM data; complete codec patent review. WASAPI transport,
-hardware decode, project integration, and performance measurements remain
+production audio-worker scheduling, hardware decode, project integration, and performance measurements remain
 separate gates.
 
 ## Primary references
@@ -76,4 +81,5 @@ separate gates.
 - [Locked FFmpeg port manifest](https://raw.githubusercontent.com/microsoft/vcpkg/cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3/ports/ffmpeg/vcpkg.json)
 - [FFmpeg demuxing API](https://ffmpeg.org/doxygen/8.0/group__lavf__decoding.html)
 - [FFmpeg send and receive API](https://ffmpeg.org/doxygen/trunk/group__lavc__encdec.html)
+- [FFmpeg libswresample](https://ffmpeg.org/doxygen/trunk/group__lswr.html)
 - [FFmpeg legal considerations](https://ffmpeg.org/legal.html)

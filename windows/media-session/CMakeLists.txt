@@ -4,6 +4,7 @@ add_library(
     palmier_media_session STATIC
     presentation_video_buffer.cpp
     presentation_video_decode_pump.cpp
+    presentation_audio_decode_pump.cpp
 )
 target_include_directories(
     palmier_media_session
@@ -72,5 +73,32 @@ if(BUILD_TESTING)
     set_tests_properties(
         media_session.ffmpeg_presentation_pipeline
         PROPERTIES RUN_SERIAL TRUE TIMEOUT 60
+    )
+
+    add_executable(
+        palmier_ffmpeg_wasapi_audio_pipeline_tests
+        tests/ffmpeg_wasapi_audio_pipeline_tests.cpp
+    )
+    target_link_libraries(
+        palmier_ffmpeg_wasapi_audio_pipeline_tests
+        PRIVATE palmier_media_session palmier_audio_wasapi
+    )
+    target_include_directories(
+        palmier_ffmpeg_wasapi_audio_pipeline_tests
+        PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/../audio-wasapi"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../media-ffmpeg/tests"
+    )
+    target_compile_options(
+        palmier_ffmpeg_wasapi_audio_pipeline_tests
+        PRIVATE /W4 /WX /permissive- /Zc:__cplusplus /utf-8
+    )
+    add_test(
+        NAME media_session.ffmpeg_wasapi_audio_pipeline
+        COMMAND palmier_ffmpeg_wasapi_audio_pipeline_tests
+    )
+    set_tests_properties(
+        media_session.ffmpeg_wasapi_audio_pipeline
+        PROPERTIES TIMEOUT 60
     )
 endif()

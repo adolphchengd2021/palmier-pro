@@ -30,6 +30,8 @@ using palmier::audio::WasapiOutputState;
 using palmier::audio::WasapiOutputStateMachine;
 using palmier::audio::WasapiPcmQueue;
 using palmier::audio::waitForWasapiRenderEvent;
+using palmier::audio::PcmFormat;
+using palmier::audio::PcmSampleEncoding;
 
 class HandleOwner final {
 public:
@@ -158,8 +160,12 @@ private:
     std::stop_source& source_;
 };
 
+PcmFormat pcmFormat() {
+    return {48'000, 2, 16, 16, 4, 0x3, PcmSampleEncoding::integer, true};
+}
+
 WasapiOutputConfig config() {
-    return {4, 4, 48'000, 7};
+    return {4, pcmFormat(), 48'000, 7};
 }
 
 std::vector<std::byte> frames(std::initializer_list<std::uint32_t> values) {
@@ -170,7 +176,7 @@ std::vector<std::byte> frames(std::initializer_list<std::uint32_t> values) {
 
 void primesBeforeStartAndCommitsOnlyReleasedPcm() {
     ScriptedBackend backend;
-    WasapiPcmQueue queue(8, 4);
+    WasapiPcmQueue queue(8, pcmFormat());
     const auto input = frames({0x01020304, 0x11121314});
     require(queue.enqueue(input), "PCM enqueue failed");
     WasapiOutputStateMachine machine(config(), backend, queue);
@@ -208,7 +214,7 @@ void primesBeforeStartAndCommitsOnlyReleasedPcm() {
 
 void rendersOnlyAfterAnEventAndCountsUnderrun() {
     ScriptedBackend backend;
-    WasapiPcmQueue queue(8, 4);
+    WasapiPcmQueue queue(8, pcmFormat());
     WasapiOutputStateMachine machine(config(), backend, queue);
     require(machine.start().outcome == WasapiOutputOutcome::changed, "start failed");
     backend.calls.clear();
@@ -226,19 +232,52 @@ void rendersOnlyAfterAnEventAndCountsUnderrun() {
     require(backend.calls.back() == "clock", "clock was not sampled after render");
 }
 
-void endOfStreamSilenceIsNotAnUnderrun() {
+void endOfStreamWithoutMediaCompletesBeforeStart() {
     ScriptedBackend backend;
-    WasapiPcmQueue queue(8, 4);
+    WasapiPcmQueue queue(8, pcmFormat());
     queue.markEndOfStream();
     WasapiOutputStateMachine machine(config(), backend, queue);
-    require(machine.start().outcome == WasapiOutputOutcome::changed, "EOS start failed");
-    backend.padding = 0;
-    const auto result = machine.renderOnce(125);
-    require(result.underrunEventsDelta == 0, "EOS was counted as underrun");
+    const auto result = machine.start();
+    require(result.outcome == WasapiOutputOutcome::changed, "EOS start failed");
     require(
-        backend.releasedFlags == AUDCLNT_BUFFERFLAGS_SILENT,
-        "empty packet did not use the silent flag"
+        machine.state() == WasapiOutputState::completed,
+        "empty EOS did not complete"
     );
+    require(
+        backend.calls == std::vector<std::string>{"padding"},
+        "empty EOS acquired or started the endpoint"
+    );
+}
+
+void endOfStreamReleasesTheExactTailThenCompletes() {
+    ScriptedBackend backend;
+    WasapiPcmQueue queue(8, pcmFormat());
+    const auto input = frames({1, 2, 3});
+    require(queue.enqueue(input), "EOS tail enqueue failed");
+    queue.markEndOfStream();
+    WasapiOutputStateMachine machine(config(), backend, queue);
+
+    const auto started = machine.start();
+    require(started.requestedFrames == 3, "EOS tail requested a full packet");
+    require(started.mediaFrames == 3 && started.silenceFrames == 0, "EOS tail changed");
+    require(started.releasedFrames == 3, "EOS tail release size changed");
+    require(backend.acquiredFrames == 3 && backend.releasedFrames == 3, "EOS lease mismatched");
+    require(machine.state() == WasapiOutputState::running, "tail did not start output");
+
+    backend.padding = 3;
+    const auto draining = machine.renderOnce(125);
+    require(draining.outcome == WasapiOutputOutcome::noOp, "padding drain changed state");
+    require(machine.state() == WasapiOutputState::running, "padding drain stopped early");
+
+    backend.padding = 0;
+    const auto completed = machine.renderOnce(125);
+    require(completed.outcome == WasapiOutputOutcome::changed, "EOS did not complete");
+    require(completed.currentState == WasapiOutputState::completed, "wrong EOS state");
+    require(backend.calls.back() == "stop", "EOS completion did not stop client");
+    const auto reset = machine.reset();
+    require(reset.outcome == WasapiOutputOutcome::changed, "completed reset failed");
+    require(reset.generation == 8, "completed reset generation changed");
+    require(machine.state() == WasapiOutputState::ready, "completed reset state changed");
 }
 
 void cancellationInsideLeaseAbandonsAndRollsBack() {
@@ -247,7 +286,7 @@ void cancellationInsideLeaseAbandonsAndRollsBack() {
         WasapiOutputCheckpoint::afterCopy,
     }) {
         ScriptedBackend backend;
-        WasapiPcmQueue queue(8, 4);
+        WasapiPcmQueue queue(8, pcmFormat());
         const auto input = frames({1, 2, 3, 4});
         require(queue.enqueue(input), "cancel PCM enqueue failed");
         std::stop_source source;
@@ -275,7 +314,7 @@ void cancellationInsideLeaseAbandonsAndRollsBack() {
 
 void cancellationBeforeWorkMakesNoBackendCall() {
     ScriptedBackend backend;
-    WasapiPcmQueue queue(8, 4);
+    WasapiPcmQueue queue(8, pcmFormat());
     WasapiOutputStateMachine machine(config(), backend, queue);
     std::stop_source source;
     source.request_stop();
@@ -316,7 +355,7 @@ void cancellationInterruptsTheNativeEventWait() {
 
 void cancellationAfterReleaseReportsCommittedEffect() {
     ScriptedBackend backend;
-    WasapiPcmQueue queue(8, 4);
+    WasapiPcmQueue queue(8, pcmFormat());
     const auto input = frames({1, 2, 3, 4});
     require(queue.enqueue(input), "late cancel PCM enqueue failed");
     std::stop_source source;
@@ -337,7 +376,7 @@ void cancellationAfterReleaseReportsCommittedEffect() {
 
 void cancellationAfterNativeStartKeepsRunningState() {
     ScriptedBackend backend;
-    WasapiPcmQueue queue(8, 4);
+    WasapiPcmQueue queue(8, pcmFormat());
     std::stop_source source;
     CancellingCheckpoint checkpoint(WasapiOutputCheckpoint::afterStart, source);
     WasapiOutputStateMachine machine(config(), backend, queue, &checkpoint);
@@ -353,7 +392,7 @@ void cancellationAfterNativeStartKeepsRunningState() {
 void validatesPaddingBeforeSubtraction() {
     ScriptedBackend backend;
     backend.padding = 5;
-    WasapiPcmQueue queue(8, 4);
+    WasapiPcmQueue queue(8, pcmFormat());
     WasapiOutputStateMachine machine(config(), backend, queue);
 
     const auto result = machine.start();
@@ -368,7 +407,7 @@ void validatesPaddingBeforeSubtraction() {
 
 void invalidationRejectsTheOldGeneration() {
     ScriptedBackend backend;
-    WasapiPcmQueue queue(8, 4);
+    WasapiPcmQueue queue(8, pcmFormat());
     WasapiOutputStateMachine machine(config(), backend, queue);
     require(machine.start().outcome == WasapiOutputOutcome::changed, "start failed");
     backend.paddingResult = AUDCLNT_E_DEVICE_INVALIDATED;
@@ -382,7 +421,7 @@ void invalidationRejectsTheOldGeneration() {
 
 void pauseResumeResetAndRepeatedCommandsAreExact() {
     ScriptedBackend backend;
-    WasapiPcmQueue queue(8, 4);
+    WasapiPcmQueue queue(8, pcmFormat());
     WasapiOutputStateMachine machine(config(), backend, queue);
     const auto readyCalls = backend.calls.size();
     require(machine.reset().outcome == WasapiOutputOutcome::noOp, "ready reset changed");
@@ -407,7 +446,7 @@ void pauseResumeResetAndRepeatedCommandsAreExact() {
 void preservesPrecisionAndFailureReceipts() {
     ScriptedBackend degraded;
     degraded.clockResult = S_FALSE;
-    WasapiPcmQueue degradedQueue(8, 4);
+    WasapiPcmQueue degradedQueue(8, pcmFormat());
     WasapiOutputStateMachine degradedMachine(config(), degraded, degradedQueue);
     const auto sample = degradedMachine.start();
     require(sample.hasClockSample, "S_FALSE clock sample was dropped");
@@ -416,7 +455,7 @@ void preservesPrecisionAndFailureReceipts() {
 
     ScriptedBackend releaseFailure;
     releaseFailure.releaseResult = E_ACCESSDENIED;
-    WasapiPcmQueue failedQueue(8, 4);
+    WasapiPcmQueue failedQueue(8, pcmFormat());
     const auto input = frames({1, 2, 3, 4});
     require(failedQueue.enqueue(input), "failure PCM enqueue failed");
     WasapiOutputStateMachine failedMachine(config(), releaseFailure, failedQueue);
@@ -433,7 +472,7 @@ void preservesPrecisionAndFailureReceipts() {
 
 void closeStopsRunningStreamAndReleasesBackend() {
     ScriptedBackend backend;
-    WasapiPcmQueue queue(8, 4);
+    WasapiPcmQueue queue(8, pcmFormat());
     WasapiOutputStateMachine machine(config(), backend, queue);
     require(machine.start().outcome == WasapiOutputOutcome::changed, "start failed");
     backend.calls.clear();
@@ -450,7 +489,7 @@ void closeStopsRunningStreamAndReleasesBackend() {
 void clockFailureStillStopsTheStartedClientOnClose() {
     ScriptedBackend backend;
     backend.clockResult = E_ACCESSDENIED;
-    WasapiPcmQueue queue(8, 4);
+    WasapiPcmQueue queue(8, pcmFormat());
     WasapiOutputStateMachine machine(config(), backend, queue);
     const auto started = machine.start();
     require(started.outcome == WasapiOutputOutcome::failed, "clock failure hidden");
@@ -472,7 +511,8 @@ int main() {
     try {
         primesBeforeStartAndCommitsOnlyReleasedPcm();
         rendersOnlyAfterAnEventAndCountsUnderrun();
-        endOfStreamSilenceIsNotAnUnderrun();
+        endOfStreamWithoutMediaCompletesBeforeStart();
+        endOfStreamReleasesTheExactTailThenCompletes();
         cancellationInsideLeaseAbandonsAndRollsBack();
         cancellationBeforeWorkMakesNoBackendCall();
         cancellationInterruptsTheNativeEventWait();

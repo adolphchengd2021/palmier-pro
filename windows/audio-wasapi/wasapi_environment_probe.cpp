@@ -66,6 +66,15 @@ std::string statusName(WasapiProbeStatus status) {
     return "failed";
 }
 
+std::string_view encodingName(PcmSampleEncoding encoding) {
+    switch (encoding) {
+    case PcmSampleEncoding::unknown: return "unknown";
+    case PcmSampleEncoding::integer: return "integer";
+    case PcmSampleEncoding::ieeeFloat: return "ieee-float";
+    }
+    return "unknown";
+}
+
 std::string jsonEscape(std::string_view value) {
     std::ostringstream output;
     for (const unsigned char character : value) {
@@ -173,8 +182,7 @@ WasapiEnvironmentProbeResult runWasapiEnvironmentProbe(
     if (FAILED(result)) {
         return terminalResult(WasapiProbeStage::mixFormat, result);
     }
-    if (format.sampleRate == 0 || format.channelCount == 0
-        || format.bitsPerSample == 0 || format.blockAlign == 0) {
+    if (!isValidPcmFormat(format)) {
         return terminalResult(WasapiProbeStage::mixFormatInvariant, E_UNEXPECTED);
     }
     result = session.setClientProperties();
@@ -230,10 +238,7 @@ WasapiEnvironmentProbeResult runWasapiEnvironmentProbe(
     probe.status = WasapiProbeStatus::available;
     probe.stage = "ready-without-start";
     probe.hresult = S_OK;
-    probe.sampleRate = format.sampleRate;
-    probe.channelCount = format.channelCount;
-    probe.bitsPerSample = format.bitsPerSample;
-    probe.blockAlign = format.blockAlign;
+    probe.pcmFormat = format;
     probe.defaultPeriodFrames = periods.defaultPeriod;
     return probe;
 }
@@ -277,10 +282,18 @@ std::string wasapiProbeJson(const WasapiEnvironmentProbeResult& result) {
            << static_cast<std::uint32_t>(result.hresult)
            << std::dec << "\",\"endpointId\":\""
            << jsonEscape(result.endpointId)
-           << "\",\"sampleRate\":" << result.sampleRate
-           << ",\"channelCount\":" << result.channelCount
-           << ",\"bitsPerSample\":" << result.bitsPerSample
-           << ",\"blockAlign\":" << result.blockAlign
+           << "\",\"sampleRate\":" << result.pcmFormat.sampleRate
+           << ",\"channelCount\":" << result.pcmFormat.channelCount
+           << ",\"containerBitsPerSample\":"
+           << result.pcmFormat.containerBitsPerSample
+           << ",\"validBitsPerSample\":"
+           << result.pcmFormat.validBitsPerSample
+           << ",\"blockAlign\":" << result.pcmFormat.blockAlign
+           << ",\"channelMask\":" << result.pcmFormat.channelMask
+           << ",\"sampleEncoding\":\""
+           << encodingName(result.pcmFormat.encoding) << "\""
+           << ",\"interleaved\":"
+           << (result.pcmFormat.interleaved ? "true" : "false")
            << ",\"defaultPeriodFrames\":" << result.defaultPeriodFrames
            << ",\"bufferFrames\":" << result.bufferFrames
            << ",\"clockFrequency\":" << result.clockFrequency << '}';

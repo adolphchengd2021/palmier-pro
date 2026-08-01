@@ -1,8 +1,12 @@
 #include "palmier/audio/wasapi_environment_probe.hpp"
 
 #include "wasapi_environment_session.hpp"
+#include "wasapi_native_stream.hpp"
 
 #include <audioclient.h>
+#include <initguid.h>
+#include <ksmedia.h>
+#include <mmreg.h>
 #include <mmdeviceapi.h>
 
 #include <iostream>
@@ -19,10 +23,12 @@ using palmier::audio::WasapiMixFormat;
 using palmier::audio::WasapiProbeStatus;
 using palmier::audio::WasapiProbeStage;
 using palmier::audio::WasapiSharedModePeriods;
+using palmier::audio::PcmSampleEncoding;
 using palmier::audio::hasValidSharedModePeriods;
 using palmier::audio::isUnavailableWasapiResult;
 using palmier::audio::runWasapiEnvironmentProbe;
 using palmier::audio::wasapiProbeJson;
+using palmier::audio::parseWasapiMixFormat;
 
 class ScriptedWasapiSession final : public WasapiEnvironmentSession {
 public:
@@ -47,7 +53,16 @@ public:
     HRESULT loadMixFormat(WasapiMixFormat& format) override {
         const HRESULT result = record("mix-format");
         if (SUCCEEDED(result)) {
-            format = {48'000, 2, 32, 8};
+            format = {
+                48'000,
+                2,
+                32,
+                32,
+                8,
+                0x3,
+                PcmSampleEncoding::ieeeFloat,
+                true,
+            };
         }
         return result;
     }
@@ -182,8 +197,12 @@ void executesTheNoStartSetupInOrder() {
     require(result.status == WasapiProbeStatus::available, "success was not available");
     require(result.stage == "ready-without-start", "wrong success stage");
     require(result.endpointId == "test-endpoint", "endpoint ID missing");
-    require(result.sampleRate == 48'000, "sample rate missing");
-    require(result.blockAlign == 8, "block align missing");
+    require(result.pcmFormat.sampleRate == 48'000, "sample rate missing");
+    require(result.pcmFormat.blockAlign == 8, "block align missing");
+    require(
+        result.pcmFormat.encoding == PcmSampleEncoding::ieeeFloat,
+        "sample encoding missing"
+    );
     require(result.bufferFrames == 960, "buffer size missing");
     require(result.clockFrequency == 48'000, "clock frequency missing");
     require(session.initializedPeriod == 480, "default period was not selected");
@@ -239,6 +258,62 @@ void validatesSharedModePeriodInvariants() {
     require(!hasValidSharedModePeriods(480, 48, 96, 961), "nonmultiple maximum accepted");
 }
 
+void parsesExactPcmAndExtensibleMixFormats() {
+    WAVEFORMATEX pcm{};
+    pcm.wFormatTag = WAVE_FORMAT_PCM;
+    pcm.nChannels = 1;
+    pcm.nSamplesPerSec = 24'000;
+    pcm.nAvgBytesPerSec = 48'000;
+    pcm.nBlockAlign = 2;
+    pcm.wBitsPerSample = 16;
+    WasapiMixFormat parsed;
+    require(SUCCEEDED(parseWasapiMixFormat(pcm, parsed)), "PCM16 was rejected");
+    require(parsed.encoding == PcmSampleEncoding::integer, "PCM encoding changed");
+    require(parsed.validBitsPerSample == 16, "PCM valid bits changed");
+    require(parsed.channelMask == 0, "legacy PCM invented a channel mask");
+
+    pcm.nChannels = 6;
+    pcm.nAvgBytesPerSec = 288'000;
+    pcm.nBlockAlign = 12;
+    require(
+        parseWasapiMixFormat(pcm, parsed) == E_UNEXPECTED,
+        "unidentified legacy multichannel layout was accepted"
+    );
+
+    WAVEFORMATEXTENSIBLE extensible{};
+    extensible.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+    extensible.Format.nChannels = 2;
+    extensible.Format.nSamplesPerSec = 48'000;
+    extensible.Format.nAvgBytesPerSec = 384'000;
+    extensible.Format.nBlockAlign = 8;
+    extensible.Format.wBitsPerSample = 32;
+    extensible.Format.cbSize = static_cast<WORD>(
+        sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+    );
+    extensible.Samples.wValidBitsPerSample = 32;
+    extensible.dwChannelMask = 0x3;
+    extensible.SubFormat = KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+    require(
+        SUCCEEDED(parseWasapiMixFormat(extensible.Format, parsed)),
+        "extensible float32 was rejected"
+    );
+    require(parsed.encoding == PcmSampleEncoding::ieeeFloat, "float encoding changed");
+    require(parsed.channelMask == 0x3, "channel mask changed");
+
+    extensible.dwChannelMask = 0x4;
+    require(
+        parseWasapiMixFormat(extensible.Format, parsed) == E_UNEXPECTED,
+        "inconsistent channel mask was accepted"
+    );
+    extensible.dwChannelMask = 0x3;
+    extensible.SubFormat = GUID_NULL;
+    require(
+        parseWasapiMixFormat(extensible.Format, parsed)
+            == AUDCLNT_E_UNSUPPORTED_FORMAT,
+        "unknown extensible subformat was guessed"
+    );
+}
+
 void emitsMachineReadableTerminalState() {
     WasapiEnvironmentProbeResult result;
     result.status = WasapiProbeStatus::unavailable;
@@ -248,8 +323,10 @@ void emitsMachineReadableTerminalState() {
         wasapiProbeJson(result)
             == "{\"status\":\"unavailable\",\"stage\":\"default-endpoint\","
                "\"hresult\":\"0x80070490\",\"endpointId\":\"\","
-               "\"sampleRate\":0,\"channelCount\":0,\"bitsPerSample\":0,"
-               "\"blockAlign\":0,"
+               "\"sampleRate\":0,\"channelCount\":0,"
+               "\"containerBitsPerSample\":0,\"validBitsPerSample\":0,"
+               "\"blockAlign\":0,\"channelMask\":0,"
+               "\"sampleEncoding\":\"unknown\",\"interleaved\":true,"
                "\"defaultPeriodFrames\":0,\"bufferFrames\":0,"
                "\"clockFrequency\":0}",
         "unavailable JSON changed"
@@ -259,10 +336,16 @@ void emitsMachineReadableTerminalState() {
     result.stage = "ready-without-start";
     result.hresult = S_OK;
     result.endpointId = "speaker\\\"id";
-    result.sampleRate = 48'000;
-    result.channelCount = 2;
-    result.bitsPerSample = 32;
-    result.blockAlign = 8;
+    result.pcmFormat = {
+        48'000,
+        2,
+        32,
+        32,
+        8,
+        0x3,
+        PcmSampleEncoding::ieeeFloat,
+        true,
+    };
     result.defaultPeriodFrames = 480;
     result.bufferFrames = 960;
     result.clockFrequency = 48'000;
@@ -270,8 +353,10 @@ void emitsMachineReadableTerminalState() {
         wasapiProbeJson(result)
             == "{\"status\":\"available\",\"stage\":\"ready-without-start\","
                "\"hresult\":\"0x00000000\",\"endpointId\":\"speaker\\\\\\\"id\","
-               "\"sampleRate\":48000,\"channelCount\":2,\"bitsPerSample\":32,"
-               "\"blockAlign\":8,"
+               "\"sampleRate\":48000,\"channelCount\":2,"
+               "\"containerBitsPerSample\":32,\"validBitsPerSample\":32,"
+               "\"blockAlign\":8,\"channelMask\":3,"
+               "\"sampleEncoding\":\"ieee-float\",\"interleaved\":true,"
                "\"defaultPeriodFrames\":480,\"bufferFrames\":960,"
                "\"clockFrequency\":48000}",
         "available JSON changed"
@@ -284,6 +369,7 @@ int main() {
     try {
         classifiesOnlyKnownEnvironmentFailures();
         validatesSharedModePeriodInvariants();
+        parsesExactPcmAndExtensibleMixFormats();
         executesTheNoStartSetupInOrder();
         preservesExternalAndImplementationFailures();
         emitsMachineReadableTerminalState();

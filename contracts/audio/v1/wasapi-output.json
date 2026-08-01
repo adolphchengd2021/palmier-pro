@@ -9,6 +9,7 @@
     "stopped",
     "invalidated",
     "failed",
+    "completed",
     "closed"
   ],
   "outcomes": [
@@ -47,6 +48,8 @@
     "cancellationInsideLease": "ReleaseBuffer(0, 0) and preserve PCM",
     "partialUnderrun": "zero the tail and release the complete packet",
     "emptyPacket": "AUDCLNT_BUFFERFLAGS_SILENT",
+    "endOfStream": "request and release only the remaining media frames; wait for endpoint padding to reach zero, then stop and complete",
+    "pcmIdentity": "sample rate, encoding, channel count, container bits, valid bits, block align, channel mask, and interleaving must match before a lease",
     "reset": "only while stopped or primed; increment generation",
     "invalidation": "increment generation and reject the old stream"
   },
@@ -66,8 +69,7 @@
     ]
   },
   "excluded": [
-    "audible PCM",
-    "decode or resampling",
+    "physical-device audible PCM",
     "default-device notifications",
     "automatic recovery",
     "A/V synchronization",

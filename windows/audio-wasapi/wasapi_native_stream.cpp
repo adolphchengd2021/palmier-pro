@@ -1,6 +1,9 @@
 #include "wasapi_native_stream.hpp"
 
 #include <audioclient.h>
+#include <initguid.h>
+#include <ksmedia.h>
+#include <mmreg.h>
 #include <mmdeviceapi.h>
 #include <wrl/client.h>
 
@@ -83,6 +86,58 @@ std::optional<std::string> utf8(std::wstring_view value) {
     return output;
 }
 
+}
+
+HRESULT parseWasapiMixFormat(
+    const WAVEFORMATEX& source,
+    PcmFormat& destination
+) noexcept {
+    PcmSampleEncoding encoding{PcmSampleEncoding::unknown};
+    std::uint16_t validBits = source.wBitsPerSample;
+    std::uint32_t channelMask = 0;
+    if (source.wFormatTag == WAVE_FORMAT_PCM) {
+        encoding = PcmSampleEncoding::integer;
+    } else if (source.wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
+        encoding = PcmSampleEncoding::ieeeFloat;
+    } else if (source.wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
+        constexpr auto extensionBytes = static_cast<WORD>(
+            sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
+        );
+        if (source.cbSize < extensionBytes) {
+            return E_UNEXPECTED;
+        }
+        const auto& extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE&>(source);
+        validBits = extensible.Samples.wValidBitsPerSample;
+        channelMask = extensible.dwChannelMask;
+        if (IsEqualGUID(extensible.SubFormat, KSDATAFORMAT_SUBTYPE_PCM)) {
+            encoding = PcmSampleEncoding::integer;
+        } else if (IsEqualGUID(
+                       extensible.SubFormat,
+                       KSDATAFORMAT_SUBTYPE_IEEE_FLOAT
+                   )) {
+            encoding = PcmSampleEncoding::ieeeFloat;
+        } else {
+            return AUDCLNT_E_UNSUPPORTED_FORMAT;
+        }
+    } else {
+        return AUDCLNT_E_UNSUPPORTED_FORMAT;
+    }
+
+    PcmFormat parsed{
+        source.nSamplesPerSec,
+        source.nChannels,
+        source.wBitsPerSample,
+        validBits,
+        source.nBlockAlign,
+        channelMask,
+        encoding,
+        true,
+    };
+    if (!isValidPcmFormat(parsed)) {
+        return E_UNEXPECTED;
+    }
+    destination = parsed;
+    return S_OK;
 }
 
 class WasapiNativeStream::Impl final {
@@ -198,11 +253,7 @@ HRESULT WasapiNativeStream::loadMixFormat(WasapiMixFormat& format) {
     if (!impl_->format) {
         return E_UNEXPECTED;
     }
-    format.sampleRate = impl_->format->nSamplesPerSec;
-    format.channelCount = impl_->format->nChannels;
-    format.bitsPerSample = impl_->format->wBitsPerSample;
-    format.blockAlign = impl_->format->nBlockAlign;
-    return S_OK;
+    return parseWasapiMixFormat(*impl_->format, format);
 }
 
 HRESULT WasapiNativeStream::setClientProperties() {

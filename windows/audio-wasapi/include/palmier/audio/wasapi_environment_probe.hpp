@@ -1,5 +1,7 @@
 #pragma once
 
+#include "palmier/audio/pcm_format.hpp"
+
 #include <Windows.h>
 
 #include <cstdint>
@@ -38,10 +40,7 @@ struct WasapiEnvironmentProbeResult final {
     std::string stage;
     HRESULT hresult{S_OK};
     std::string endpointId;
-    std::uint32_t sampleRate{};
-    std::uint16_t channelCount{};
-    std::uint16_t bitsPerSample{};
-    std::uint16_t blockAlign{};
+    PcmFormat pcmFormat;
     std::uint32_t defaultPeriodFrames{};
     std::uint32_t bufferFrames{};
     std::uint64_t clockFrequency{};

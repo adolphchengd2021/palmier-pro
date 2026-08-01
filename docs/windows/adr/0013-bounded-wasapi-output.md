@@ -9,11 +9,14 @@
 
 Keep the existing environment probe as a no-start diagnostic. Add a separate
 output seam whose mutable state is owned by one serial audio worker. The state
-machine exposes ready, primed, running, stopped, invalidated, failed, and closed
+machine exposes ready, primed, running, stopped, invalidated, failed, completed,
+and closed
 states. It owns generation changes, bounded PCM consumption, underrun counts,
 buffer leases, control ordering, and structured receipts. Callers may enqueue
-precomputed mix-format PCM only through the future serial worker façade; the
-prototype queue remains private and may not be called across threads.
+precomputed mix-format PCM only through the future serial worker façade. The
+shared `PcmFormat` validates encoding, container and valid bits, channel mask,
+block align, sample rate, channel count, and interleaving before construction;
+the prototype queue remains private and may not be called across threads.
 
 Every successful nonzero `GetBuffer` has exactly one same-thread
 `ReleaseBuffer`. PCM is copied from a preallocated bounded queue and committed
@@ -26,11 +29,14 @@ does not return a false cancelled outcome.
 The first start validates padding, fills all available frames, then calls
 `Start`. A partial packet zeroes its tail, while a fully empty packet uses
 `AUDCLNT_BUFFERFLAGS_SILENT`. Runtime shortage increments an underrun counter
-unless the queue has reached end of stream. Padding greater than the engine
-buffer is an invariant failure and is never clamped or subtracted.
+unless the queue has reached end of stream. At end of stream, the last lease is
+exactly the remaining media-frame count. Once the queue is empty, the worker
+waits for endpoint padding to reach zero, stops the client, and enters
+completed. Padding greater than the engine buffer is an invariant failure and
+is never clamped or subtracted.
 
 Pause calls `Stop` without reset, preserving the stream generation and native
-clock position. Reset is accepted only from stopped or primed, calls the native
+clock position. Reset is accepted only from stopped, primed, or completed, calls the native
 reset while no lease exists, clears queued PCM, increments the generation, and
 returns to ready. Device, resource, and audio-service invalidation also advance
 the generation, clear old PCM, and make the old stream unusable. Reopening and
@@ -47,7 +53,7 @@ sleeping.
 Injected tests prove prime-before-start order, checked padding subtraction,
 same-thread acquire/release, full and partial silence behavior, transactional
 PCM commit, cancellation inside and after a lease, event-before-render order,
-underrun versus end-of-stream accounting, invalidation generation changes,
+underrun versus exact-tail end-of-stream completion, invalidation generation changes,
 pause/resume/reset/no-op transitions, degraded clock receipts, stage/HRESULT
 preservation, and stop-before-close teardown.
 
@@ -58,15 +64,15 @@ an unavailable environment result. Other failures fail the test.
 
 ## Evidence boundary
 
-A green injected test proves only the state and lease contract. A successful
+A green injected test proves the state, exact PCM format, and lease contract. A successful
 native silent smoke proves that those APIs cooperated on that CI host; an
 unavailable result proves only classification. Neither result proves audible
-PCM, channel mapping, resampling, media playback, device-change recovery,
+PCM, physical channel mapping, media playback, device-change recovery,
 default-device migration, long-run underrun behavior, A/V synchronization,
 physical hardware compatibility, or Windows 10 build 19045 behavior.
 
-Before media integration, add a bounded audio-plan producer, explicit format
-conversion, automatic generation-checked reopen, default-device notifications,
+Before production playback, add the bounded decode-executor to STA-worker
+handoff, automatic generation-checked reopen, default-device notifications,
 and a queryable asynchronous terminal status. Measure drift and underruns on a
 physical Windows 10 fixture rather than inferring them from this silent smoke.
 

@@ -20,7 +20,7 @@ struct WasapiClockReading final {
 
 class WasapiPcmQueue final {
 public:
-    explicit WasapiPcmQueue(std::uint32_t capacityFrames, std::uint16_t blockAlign);
+    explicit WasapiPcmQueue(std::uint32_t capacityFrames, PcmFormat format);
 
     bool enqueue(std::span<const std::byte> bytes);
     void markEndOfStream();
@@ -38,7 +38,7 @@ private:
 
     std::vector<std::byte> storage_;
     std::uint32_t capacityFrames_{};
-    std::uint16_t blockAlign_{};
+    PcmFormat format_;
     std::uint32_t headFrame_{};
     std::uint32_t sizeFrames_{};
     bool endOfStream_{};

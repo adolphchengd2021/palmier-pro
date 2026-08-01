@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "owner": "windows/media-session",
+  "stateOwner": "one serial media executor; production device-worker scheduling is excluded",
+  "states": [
+    "idle",
+    "ready",
+    "blocked",
+    "endOfStream",
+    "cancelled",
+    "failed"
+  ],
+  "outcomes": [
+    "changed",
+    "noOp",
+    "stale",
+    "refused"
+  ],
+  "canonicalFormat": {
+    "sampleRate": 48000,
+    "encoding": "integer",
+    "channelCount": 2,
+    "containerBitsPerSample": 16,
+    "validBitsPerSample": 16,
+    "blockAlign": 4,
+    "channelMask": 3,
+    "interleaved": true
+  },
+  "limits": {
+    "maximumAudioFramesPerDecodedBlock": 65536,
+    "maximumPumpCapacityFrames": 4194304,
+    "maximumFramesPerFill": 65536,
+    "maximumQueuedAudioBytes": 268435456,
+    "testPumpCapacityFrames": 150,
+    "testMaximumFramesPerFill": 50,
+    "testWasapiQueueCapacityFrames": 250,
+    "testEndpointPacketFrames": 100
+  },
+  "fixture": {
+    "name": "patternedPcmWav",
+    "sha256": "0e153aa9a380f0702c7b701a0c3bf8ad095869c4c78b774cbaa3adcd0eb9d241",
+    "codec": "pcm_s16le",
+    "sampleRate": 24000,
+    "channelCount": 1,
+    "frameCount": 768,
+    "timeBase": [1, 24000],
+    "outputFrameCount": 1536
+  },
+  "invariants": {
+    "format": "one platform-neutral PcmFormat is shared by FFmpeg conversion and WASAPI validation",
+    "decoder": "video and audio reuse one receive-before-supply packet and codec drain state machine",
+    "resampler": "one reader owns and reuses one SwrContext; source format changes are refused",
+    "timestamps": "the first source PTS maps once with floor rounding, then actual output sample counts advance a contiguous cursor",
+    "drain": "codec EOF is followed by null-input swresample drain until no sample remains",
+    "backpressure": "one pending decoded block is sliced into bounded admissions without re-decoding",
+    "generation": "a replacement reader opens before the active generation, queue, or pending block changes",
+    "cancellation": "cancellation terminates and clears only the current generation",
+    "wasapiLease": "non-EOS shortage may add silence; EOS requests and releases the exact remaining media frames",
+    "evidence": "captured injected WASAPI media bytes equal a separate direct canonical decode byte for byte"
+  },
+  "excluded": [
+    "production decode-executor to STA WASAPI-worker scheduling",
+    "physical-device audible playback",
+    "A/V clock anchoring and synchronization",
+    "seek, scrub, speed change, and time stretch",
+    "AAC or MP3 priming and trailing padding",
+    "multitrack mixing and effects",
+    "default-device notifications and automatic recovery",
+    "Windows 10 runtime certification"
+  ]
+}

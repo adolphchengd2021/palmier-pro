@@ -22,7 +22,11 @@ target_compile_options(
     palmier_media_ffmpeg
     PRIVATE /W4 /WX /permissive- /Zc:__cplusplus /utf-8
 )
-target_link_libraries(palmier_media_ffmpeg PRIVATE palmier_ffmpeg)
+target_link_libraries(
+    palmier_media_ffmpeg
+    PUBLIC palmier_audio_core
+    PRIVATE palmier_ffmpeg
+)
 
 if(BUILD_TESTING)
     add_executable(

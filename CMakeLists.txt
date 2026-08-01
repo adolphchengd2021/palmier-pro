@@ -15,6 +15,7 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
 endif()
 
 include(CTest)
+add_subdirectory(core/audio)
 add_subdirectory(core/project)
 add_subdirectory(core/render)
 add_subdirectory(windows/render-d3d11)

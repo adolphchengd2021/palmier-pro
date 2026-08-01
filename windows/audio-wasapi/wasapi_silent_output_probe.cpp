@@ -74,11 +74,11 @@ WasapiSilentOutputResult runSilentCycle() {
         };
     }
 
-    WasapiPcmQueue queue(environment.bufferFrames, environment.blockAlign);
+    WasapiPcmQueue queue(environment.bufferFrames, environment.pcmFormat);
     WasapiOutputStateMachine machine(
         {
             environment.bufferFrames,
-            environment.blockAlign,
+            environment.pcmFormat,
             environment.clockFrequency,
             1,
         },

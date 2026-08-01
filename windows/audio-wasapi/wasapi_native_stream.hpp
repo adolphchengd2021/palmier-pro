@@ -3,9 +3,16 @@
 #include "wasapi_environment_session.hpp"
 #include "wasapi_output_backend.hpp"
 
+#include <mmreg.h>
+
 #include <memory>
 
 namespace palmier::audio {
+
+HRESULT parseWasapiMixFormat(
+    const WAVEFORMATEX& source,
+    PcmFormat& destination
+) noexcept;
 
 HRESULT waitForWasapiRenderEvent(
     HANDLE renderEvent,

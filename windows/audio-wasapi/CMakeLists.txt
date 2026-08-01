@@ -23,6 +23,7 @@ target_compile_options(
     PRIVATE /W4 /WX /permissive- /Zc:__cplusplus /utf-8
 )
 target_link_libraries(palmier_audio_wasapi PRIVATE ole32)
+target_link_libraries(palmier_audio_wasapi PUBLIC palmier_audio_core)
 
 add_executable(
     palmier_wasapi_environment_probe

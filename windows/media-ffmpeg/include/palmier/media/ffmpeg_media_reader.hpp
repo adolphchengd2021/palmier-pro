@@ -1,5 +1,7 @@
 #pragma once
 
+#include "palmier/audio/pcm_format.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -79,11 +81,21 @@ struct DecodedVideoFrame final {
     AlphaMode alphaMode{AlphaMode::opaque};
 };
 
+struct DecodedAudioBlock final {
+    std::int64_t sourcePresentationTimestamp{};
+    Rational sourceTimeBase;
+    std::int64_t startOutputSample{};
+    std::uint32_t frameCount{};
+    audio::PcmFormat format;
+    std::vector<std::byte> interleavedBytes;
+};
+
 struct DecodeLimits final {
     std::uint64_t maximumPixels{67'108'864};
     std::uint32_t maximumPacketsBeforeFrame{4'096};
     std::int64_t maximumProbeBytes{5 * 1024 * 1024};
     std::int64_t maximumAnalyzeMicroseconds{5'000'000};
+    std::uint32_t maximumAudioFramesPerBlock{65'536};
 };
 
 enum class MediaFailureCode {
@@ -93,12 +105,15 @@ enum class MediaFailureCode {
     openFailed,
     streamInfoFailed,
     noVideoStream,
+    noAudioStream,
     decoderUnavailable,
     corruptInput,
     resourceLimitExceeded,
     unsupportedColorMetadata,
     unsupportedDisplayTransform,
     conversionFailed,
+    unsupportedAudioFormat,
+    discontinuousAudioTimestamp,
 };
 
 class MediaError final : public std::runtime_error {
@@ -132,6 +147,30 @@ public:
     FfmpegVideoFrameReader& operator=(FfmpegVideoFrameReader&&) = delete;
 
     std::optional<DecodedVideoFrame> nextFrame(
+        std::stop_token cancellation = {}
+    );
+
+private:
+    class Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+class FfmpegAudioFrameReader final {
+public:
+    FfmpegAudioFrameReader(
+        const std::filesystem::path& input,
+        audio::PcmFormat targetFormat,
+        const DecodeLimits& limits = {},
+        std::stop_token cancellation = {}
+    );
+    ~FfmpegAudioFrameReader();
+
+    FfmpegAudioFrameReader(const FfmpegAudioFrameReader&) = delete;
+    FfmpegAudioFrameReader& operator=(const FfmpegAudioFrameReader&) = delete;
+    FfmpegAudioFrameReader(FfmpegAudioFrameReader&&) = delete;
+    FfmpegAudioFrameReader& operator=(FfmpegAudioFrameReader&&) = delete;
+
+    std::optional<DecodedAudioBlock> nextBlock(
         std::stop_token cancellation = {}
     );
 

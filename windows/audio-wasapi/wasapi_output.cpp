@@ -31,21 +31,21 @@ bool multiplyFitsSize(
 
 WasapiPcmQueue::WasapiPcmQueue(
     std::uint32_t capacityFrames,
-    std::uint16_t blockAlign
-) : capacityFrames_(capacityFrames), blockAlign_(blockAlign) {
+    PcmFormat format
+) : capacityFrames_(capacityFrames), format_(format) {
     std::size_t byteCount{};
-    if (capacityFrames == 0 || blockAlign == 0
-        || !multiplyFitsSize(capacityFrames, blockAlign, byteCount)) {
+    if (capacityFrames == 0 || !isValidPcmFormat(format_)
+        || !multiplyFitsSize(capacityFrames, format_.blockAlign, byteCount)) {
         throw std::invalid_argument("invalid WASAPI PCM queue capacity");
     }
     storage_.resize(byteCount);
 }
 
 bool WasapiPcmQueue::enqueue(std::span<const std::byte> bytes) {
-    if (bytes.empty() || bytes.size() % blockAlign_ != 0) {
+    if (bytes.empty() || bytes.size() % format_.blockAlign != 0) {
         return false;
     }
-    const auto frameCount64 = bytes.size() / blockAlign_;
+    const auto frameCount64 = bytes.size() / format_.blockAlign;
     if (frameCount64 > std::numeric_limits<std::uint32_t>::max()) {
         return false;
     }
@@ -56,9 +56,10 @@ bool WasapiPcmQueue::enqueue(std::span<const std::byte> bytes) {
 
     const std::uint32_t tailFrame = (headFrame_ + sizeFrames_) % capacityFrames_;
     const std::uint32_t firstFrames = std::min(frameCount, capacityFrames_ - tailFrame);
-    const std::size_t firstBytes = static_cast<std::size_t>(firstFrames) * blockAlign_;
+    const std::size_t firstBytes = static_cast<std::size_t>(firstFrames)
+        * format_.blockAlign;
     std::memcpy(
-        storage_.data() + static_cast<std::size_t>(tailFrame) * blockAlign_,
+        storage_.data() + static_cast<std::size_t>(tailFrame) * format_.blockAlign,
         bytes.data(),
         firstBytes
     );
@@ -67,7 +68,7 @@ bool WasapiPcmQueue::enqueue(std::span<const std::byte> bytes) {
         std::memcpy(
             storage_.data(),
             bytes.data() + firstBytes,
-            static_cast<std::size_t>(secondFrames) * blockAlign_
+            static_cast<std::size_t>(secondFrames) * format_.blockAlign
         );
     }
     sizeFrames_ += frameCount;
@@ -101,10 +102,11 @@ void WasapiPcmQueue::copyFrames(
     std::uint32_t frameCount
 ) const {
     const std::uint32_t firstFrames = std::min(frameCount, capacityFrames_ - headFrame_);
-    const std::size_t firstBytes = static_cast<std::size_t>(firstFrames) * blockAlign_;
+    const std::size_t firstBytes = static_cast<std::size_t>(firstFrames)
+        * format_.blockAlign;
     std::memcpy(
         destination,
-        storage_.data() + static_cast<std::size_t>(headFrame_) * blockAlign_,
+        storage_.data() + static_cast<std::size_t>(headFrame_) * format_.blockAlign,
         firstBytes
     );
     const std::uint32_t secondFrames = frameCount - firstFrames;
@@ -112,7 +114,7 @@ void WasapiPcmQueue::copyFrames(
         std::memcpy(
             destination + firstBytes,
             storage_.data(),
-            static_cast<std::size_t>(secondFrames) * blockAlign_
+            static_cast<std::size_t>(secondFrames) * format_.blockAlign
         );
     }
 }
@@ -128,9 +130,9 @@ WasapiOutputStateMachine::WasapiOutputStateMachine(
     WasapiPcmQueue& queue,
     WasapiOutputCheckpoints* checkpoints
 ) : config_(config), backend_(backend), queue_(queue), checkpoints_(checkpoints) {
-    if (config.bufferFrames == 0 || config.blockAlign == 0
+    if (config.bufferFrames == 0 || !isValidPcmFormat(config.pcmFormat)
         || config.clockFrequency == 0 || config.generation == 0
-        || queue.blockAlign_ != config.blockAlign) {
+        || queue.format_ != config.pcmFormat) {
         throw std::invalid_argument("invalid WASAPI output configuration");
     }
 }
@@ -220,8 +222,31 @@ WasapiOutputReceipt WasapiOutputStateMachine::fillAvailable(
         return fail(value, WasapiOutputStage::paddingInvariant, E_UNEXPECTED);
     }
     value.availableFrames = config_.bufferFrames - value.paddingFrames;
-    value.requestedFrames = value.availableFrames;
-    if (value.availableFrames == 0) {
+    const bool sourceEnded = queue_.endOfStream();
+    if (sourceEnded && queue_.availableFrames() == 0) {
+        if (value.paddingFrames != 0) {
+            value.outcome = WasapiOutputOutcome::noOp;
+            return value;
+        }
+        if (clientRunning_) {
+            result = backend_.stop();
+            checkpoint(WasapiOutputCheckpoint::afterStop);
+            if (FAILED(result)) {
+                return fail(value, WasapiOutputStage::stopClient, result);
+            }
+            clientRunning_ = false;
+            value.stage = WasapiOutputStage::stopClient;
+        }
+        state_ = WasapiOutputState::completed;
+        value.currentState = state_;
+        value.outcome = WasapiOutputOutcome::changed;
+        value.hresult = S_OK;
+        return value;
+    }
+    value.requestedFrames = sourceEnded
+        ? std::min(value.availableFrames, queue_.availableFrames())
+        : value.availableFrames;
+    if (value.requestedFrames == 0) {
         if (startup) {
             state_ = WasapiOutputState::primed;
             value.currentState = state_;
@@ -231,7 +256,7 @@ WasapiOutputReceipt WasapiOutputStateMachine::fillAvailable(
     }
 
     std::byte* output = nullptr;
-    result = backend_.acquireBuffer(value.availableFrames, output);
+    result = backend_.acquireBuffer(value.requestedFrames, output);
     if (FAILED(result)) {
         return fail(value, WasapiOutputStage::acquireBuffer, result);
     }
@@ -255,16 +280,16 @@ WasapiOutputReceipt WasapiOutputStateMachine::fillAvailable(
         return value;
     }
 
-    value.mediaFrames = std::min(queue_.availableFrames(), value.availableFrames);
-    value.silenceFrames = value.availableFrames - value.mediaFrames;
+    value.mediaFrames = std::min(queue_.availableFrames(), value.requestedFrames);
+    value.silenceFrames = value.requestedFrames - value.mediaFrames;
     if (value.mediaFrames > 0) {
         queue_.copyFrames(output, value.mediaFrames);
     }
     if (value.mediaFrames > 0 && value.silenceFrames > 0) {
         const std::size_t mediaBytes = static_cast<std::size_t>(value.mediaFrames)
-            * config_.blockAlign;
+            * config_.pcmFormat.blockAlign;
         const std::size_t silenceBytes = static_cast<std::size_t>(value.silenceFrames)
-            * config_.blockAlign;
+            * config_.pcmFormat.blockAlign;
         std::memset(output + mediaBytes, 0, silenceBytes);
     }
     checkpoint(WasapiOutputCheckpoint::afterCopy);
@@ -282,14 +307,15 @@ WasapiOutputReceipt WasapiOutputStateMachine::fillAvailable(
     const DWORD flags = value.mediaFrames == 0
         ? static_cast<DWORD>(AUDCLNT_BUFFERFLAGS_SILENT)
         : DWORD{0};
-    result = backend_.releaseBuffer(value.availableFrames, flags);
+    result = backend_.releaseBuffer(value.requestedFrames, flags);
     checkpoint(WasapiOutputCheckpoint::afterRelease);
     if (FAILED(result)) {
         return fail(value, WasapiOutputStage::releaseBuffer, result);
     }
     queue_.commitFrames(value.mediaFrames);
-    value.releasedFrames = value.availableFrames;
-    if (!startup && !queue_.endOfStream() && value.mediaFrames < value.availableFrames) {
+    value.releasedFrames = value.requestedFrames;
+    if (!startup && !queue_.endOfStream()
+        && value.mediaFrames < value.requestedFrames) {
         ++underrunEvents_;
         value.underrunEventsDelta = 1;
     }
@@ -325,6 +351,9 @@ WasapiOutputReceipt WasapiOutputStateMachine::start(std::stop_token stopToken) {
         if (value.lateCancellation) {
             return value;
         }
+        if (state_ == WasapiOutputState::completed) {
+            return value;
+        }
     } else if (state_ != WasapiOutputState::primed
         && state_ != WasapiOutputState::stopped) {
         value.outcome = WasapiOutputOutcome::refused;
@@ -347,7 +376,6 @@ WasapiOutputReceipt WasapiOutputStateMachine::start(std::stop_token stopToken) {
     if (value.lateCancellation) {
         return value;
     }
-
     WasapiClockReading reading;
     result = backend_.loadClockPosition(reading);
     if (FAILED(result)) {
@@ -398,6 +426,9 @@ WasapiOutputReceipt WasapiOutputStateMachine::renderOnce(
     if (value.lateCancellation) {
         return value;
     }
+    if (state_ == WasapiOutputState::completed) {
+        return value;
+    }
 
     WasapiClockReading reading;
     const HRESULT clockResult = backend_.loadClockPosition(reading);
@@ -423,7 +454,8 @@ WasapiOutputReceipt WasapiOutputStateMachine::pause(std::stop_token stopToken) {
         value.hresult = cancelledResult;
         return value;
     }
-    if (state_ == WasapiOutputState::stopped) {
+    if (state_ == WasapiOutputState::stopped
+        || state_ == WasapiOutputState::completed) {
         value.outcome = WasapiOutputOutcome::noOp;
         return value;
     }
@@ -457,7 +489,9 @@ WasapiOutputReceipt WasapiOutputStateMachine::reset(std::stop_token stopToken) {
         value.outcome = WasapiOutputOutcome::noOp;
         return value;
     }
-    if (state_ != WasapiOutputState::stopped && state_ != WasapiOutputState::primed) {
+    if (state_ != WasapiOutputState::stopped
+        && state_ != WasapiOutputState::primed
+        && state_ != WasapiOutputState::completed) {
         value.outcome = WasapiOutputOutcome::refused;
         value.hresult = E_ILLEGAL_METHOD_CALL;
         return value;
