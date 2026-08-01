@@ -709,7 +709,7 @@ void settingsCanChangeWithoutRestartingPlayback() {
     verify("height", [](auto& value) { value.renderLayer.transform.height = 0.5F; }, 0);
     verify("rotation", [](auto& value) { value.renderLayer.transform.rotationDegrees = 15; }, 0);
     verify("opacity", [](auto& value) { value.renderLayer.opacity = 0.5F; }, 0);
-    verify("exposure", [](auto& value) { value.renderLayer.exposureEv = 1; }, 0);
+    verify("exposure", [](auto& value) { value.renderLayer.exposureEv = 1.0F; }, 0);
 }
 
 void sourceMappingChangeRequiresPlaybackRestart() {

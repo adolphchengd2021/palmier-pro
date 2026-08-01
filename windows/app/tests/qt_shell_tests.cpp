@@ -219,7 +219,7 @@ private slots:
         QCOMPARE(layer.transform.height, 0.25F);
         QCOMPARE(layer.transform.rotationDegrees, 15.0F);
         QCOMPARE(layer.opacity, 0.75F);
-        QVERIFY(layer.exposureEv == std::optional<float>{1});
+        QVERIFY(layer.exposureEv == std::optional<float>{1.0F});
     }
 
     void unsupportedVisualPropertiesAreNotSilentlyDropped() {
