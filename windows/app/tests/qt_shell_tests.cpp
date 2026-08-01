@@ -30,6 +30,20 @@ std::filesystem::path fixture(const char* name) {
         / "fixtures" / "contracts" / "projects" / name;
 }
 
+void waitForCancellation(std::stop_token cancellation) {
+    std::mutex mutex;
+    std::condition_variable_any condition;
+    std::stop_callback callback{
+        cancellation,
+        [&condition, &mutex] {
+            const std::lock_guard lock(mutex);
+            condition.notify_all();
+        },
+    };
+    std::unique_lock lock(mutex);
+    condition.wait(lock, [cancellation] { return cancellation.stop_requested(); });
+}
+
 palmier::windows::ProjectProjection oneTrackProjection(
     std::string timelineId,
     std::string timelineName
@@ -219,10 +233,7 @@ private slots:
                     loadedPaths.push_back(path.filename().wstring());
                 }
                 if (path.filename() == L"first.palmier") {
-                    std::mutex mutex;
-                    std::condition_variable_any condition;
-                    std::unique_lock lock(mutex);
-                    condition.wait(lock, cancellation, [] { return false; });
+                    waitForCancellation(cancellation);
                 }
                 return palmier::windows::loadProjectProjection(
                     fixture("legacy-bare-timeline.palmier"), cancellation
@@ -245,10 +256,7 @@ private slots:
         palmier::windows::ProjectLoadCoordinator coordinator(
             [&cancellationObserved](const std::filesystem::path&, std::stop_token cancellation)
                 -> palmier::windows::ProjectProjection {
-                std::mutex mutex;
-                std::condition_variable_any condition;
-                std::unique_lock lock(mutex);
-                condition.wait(lock, cancellation, [] { return false; });
+                waitForCancellation(cancellation);
                 cancellationObserved.release();
                 throw std::runtime_error("cancelled");
             },
@@ -288,10 +296,7 @@ private slots:
         palmier::windows::ProjectLoadCoordinator coordinator(
             [&cancellationObserved](const std::filesystem::path&, std::stop_token cancellation)
                 -> palmier::windows::ProjectProjection {
-                std::mutex mutex;
-                std::condition_variable_any condition;
-                std::unique_lock lock(mutex);
-                condition.wait(lock, cancellation, [] { return false; });
+                waitForCancellation(cancellation);
                 cancellationObserved.release();
                 throw palmier::windows::ProjectProjectionError("cancelled", "cancelled");
             },
@@ -507,10 +512,7 @@ private slots:
         palmier::windows::ProjectLoadCoordinator coordinator(
             [&cancellationObserved](const std::filesystem::path&, std::stop_token cancellation)
                 -> palmier::windows::ProjectProjection {
-                std::mutex mutex;
-                std::condition_variable_any condition;
-                std::unique_lock lock(mutex);
-                condition.wait(lock, cancellation, [] { return false; });
+                waitForCancellation(cancellation);
                 cancellationObserved.release();
                 throw palmier::windows::ProjectProjectionError("cancelled", "cancelled");
             },
