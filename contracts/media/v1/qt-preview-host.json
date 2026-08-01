@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "owner": "windows/app",
+  "stateOwner": "the Qt controller owns one Qt-native child window, surface epoch, latest positive physical size, one in-flight command, one pending resize, cancellation admission, UI receipt state, and the shutdown barrier",
+  "threadContract": "the Qt UI thread owns only QWindow embedding and immutable command publication; one persistent background presentation thread constructs, resizes, closes, and destroys PreviewPresentationSession",
+  "states": [
+    "empty",
+    "attaching",
+    "ready",
+    "occluded",
+    "cancelled",
+    "unavailable",
+    "invalidated",
+    "failed",
+    "closing",
+    "closed"
+  ],
+  "invariants": {
+    "nativeOwnership": "QML embeds one Qt-owned QWindow through WindowContainer; no external-window wrapper or manual child HWND is introduced",
+    "physicalSize": "the UI thread reads the embedded HWND client rectangle and never submits zero width or height to the preview session",
+    "backgroundOwnership": "session construction, resize, close, and destruction occur on the same persistent background presentation thread",
+    "boundedQueue": "only one synchronous session command is in flight and resize bursts retain only the latest distinct physical size",
+    "cancellation": "shutdown requests the admitted stop source before queuing serialized close and admits no later resize",
+    "surfaceEpoch": "a changed HWND retires the current session instead of reusing its swap chain or accepting stale completion",
+    "shutdown": "the root QML window waits for both project loading and preview session close before allowing Qt to destroy the child window; post-event-loop drain covers programmatic quit, and unexpected controller teardown retains the QWindow until background session destruction"
+  },
+  "excluded": [
+    "project media resolution and playback requests",
+    "preview tick timer and interactive cadence",
+    "visible pixel and overlay correctness",
+    "physical GPU performance",
+    "DPI transition and multi-display manual evidence",
+    "device recreation",
+    "Windows 10 runtime certification"
+  ]
+}

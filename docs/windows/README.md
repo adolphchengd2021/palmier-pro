@@ -146,6 +146,7 @@ The first Qt target is an optional read-only project shell:
 
 ```powershell
 $env:QT_ROOT_DIR = "C:\Qt\6.10.3\msvc2022_64"
+$env:VCPKG_ROOT = "C:\path\to\vcpkg"
 cmake --preset windows-msvc-x64-qt-shell
 cmake --build --preset windows-msvc-x64-qt-shell-release --parallel
 ctest --preset windows-msvc-x64-qt-shell-release
@@ -158,5 +159,11 @@ reject stale results; failure and cancellation retain the last successful
 model. The target does not write projects or provide editing, media resolution,
 playback, undo, or deployment. Unsafe clips are reported and omitted from the
 visual projection; over-dense active timelines are explicitly refused instead
-of being truncated. Its offscreen CI is not Windows 10, native-dialog, focus,
-DPI, accessibility, or visual evidence. See ADR 0014.
+of being truncated. The same preset now embeds a Qt-owned native child window
+through `WindowContainer` and constructs, resizes, closes, and destroys the
+real preview session on one persistent background thread. Resize bursts retain
+only the latest positive client size, and application close waits for both the
+project reader and preview session. Windows-platform tests prove the native
+child relationship and a WARP lifecycle, not project media playback, visible
+pixels, cadence, physical-GPU performance, DPI behavior, A/V synchronization,
+or Windows 10 runtime compatibility. See ADR 0014 and ADR 0023.

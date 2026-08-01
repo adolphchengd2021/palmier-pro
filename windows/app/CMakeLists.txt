@@ -22,6 +22,20 @@ target_link_libraries(
 )
 target_compile_features(palmier_qt_shell_core PUBLIC cxx_std_20)
 
+add_library(palmier_qt_preview STATIC
+    include/palmier/windows/preview_presentation_controller.hpp
+    src/preview_presentation_controller.cpp
+)
+target_include_directories(palmier_qt_preview PUBLIC "${app_include_dir}")
+target_link_libraries(
+    palmier_qt_preview
+    PUBLIC
+        Qt6::Core
+        Qt6::Gui
+        palmier_preview_session
+)
+target_compile_features(palmier_qt_preview PUBLIC cxx_std_20)
+
 qt_add_executable(palmier_qt_shell app/main.cpp)
 set_source_files_properties(qml/AppTheme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_qml_module(palmier_qt_shell
@@ -33,6 +47,7 @@ target_link_libraries(
     palmier_qt_shell
     PRIVATE
         palmier_qt_shell_core
+        palmier_qt_preview
         Qt6::Gui
         Qt6::Qml
         Qt6::Quick
@@ -40,7 +55,7 @@ target_link_libraries(
         Qt6::QuickDialogs2
 )
 
-foreach(target palmier_qt_shell_core palmier_qt_shell)
+foreach(target palmier_qt_shell_core palmier_qt_preview palmier_qt_shell)
     target_compile_options(${target} PRIVATE /W4 /WX /permissive- /Zc:__cplusplus /utf-8)
 endforeach()
 
@@ -54,6 +69,7 @@ if(BUILD_TESTING)
         palmier_qt_shell_tests
         PRIVATE
             palmier_qt_shell_core
+            palmier_qt_preview
             Qt6::Gui
             Qt6::Qml
             Qt6::Quick
@@ -99,4 +115,66 @@ if(BUILD_TESTING)
     add_palmier_qt_shell_test(qml_close_waits_for_worker qmlCloseWaitsForActiveWorker)
     add_test(NAME qt_shell.module_smoke COMMAND palmier_qt_shell --smoke-test)
     set_tests_properties(qt_shell.module_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    qt_add_executable(palmier_qt_preview_tests tests/qt_preview_tests.cpp)
+    set_target_properties(palmier_qt_preview_tests PROPERTIES WIN32_EXECUTABLE FALSE)
+    target_link_libraries(
+        palmier_qt_preview_tests
+        PRIVATE
+            palmier_qt_preview
+            palmier_qt_shell_core
+            Qt6::Gui
+            Qt6::Qml
+            Qt6::Quick
+            Qt6::QuickControls2
+            Qt6::QuickDialogs2
+            Qt6::Test
+    )
+    target_compile_definitions(
+        palmier_qt_preview_tests
+        PRIVATE PALMIER_QML_MAIN_FILE="${CMAKE_CURRENT_SOURCE_DIR}/qml/Main.qml"
+    )
+    target_compile_options(
+        palmier_qt_preview_tests
+        PRIVATE /W4 /WX /permissive- /Zc:__cplusplus /utf-8
+    )
+    function(add_palmier_qt_preview_test test_name test_function)
+        set(test_log "${CMAKE_CURRENT_BINARY_DIR}/qt-preview-test-${test_name}.txt")
+        add_test(
+            NAME qt_preview.${test_name}
+            COMMAND palmier_qt_preview_tests ${test_function} -v1 -o "${test_log},txt"
+        )
+        set_tests_properties(
+            qt_preview.${test_name}
+            PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=windows" TIMEOUT 30
+        )
+    endfunction()
+    add_palmier_qt_preview_test(
+        native_child_background_owner
+        nativeChildUsesOneBackgroundSessionOwner
+    )
+    add_palmier_qt_preview_test(
+        resize_burst_coalesces
+        resizeBurstKeepsOnlyLatestPhysicalSize
+    )
+    add_palmier_qt_preview_test(
+        warp_child_surface_lifecycle
+        warpChildSurfaceLifecycle
+    )
+    add_palmier_qt_preview_test(
+        qml_close_waits_for_preview_release
+        qmlCloseWaitsForPreviewSessionRelease
+    )
+    add_palmier_qt_preview_test(
+        unexpected_teardown_retires_window
+        unexpectedTeardownRetiresWindowUntilSessionDestruction
+    )
+    add_test(
+        NAME qt_preview.programmatic_quit_drains
+        COMMAND palmier_qt_shell --quit-smoke-test
+    )
+    set_tests_properties(
+        qt_preview.programmatic_quit_drains
+        PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=windows" TIMEOUT 30
+    )
 endif()

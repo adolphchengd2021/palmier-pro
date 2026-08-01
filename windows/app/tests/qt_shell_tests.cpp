@@ -1,5 +1,6 @@
 #include "palmier/windows/project_load_coordinator.hpp"
 #include "palmier/windows/project_projection_loader.hpp"
+#include "palmier/windows/preview_presentation_controller.hpp"
 #include "palmier/project/project_reader.hpp"
 
 #include <QGuiApplication>
@@ -24,6 +25,32 @@
 #include <vector>
 
 namespace {
+
+class FakePreviewShutdownCoordinator final : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(QWindow* window READ window CONSTANT)
+
+public:
+    QWindow* window() noexcept { return &window_; }
+    Q_INVOKABLE bool requestShutdown() {
+        requested_ = true;
+        return ready_;
+    }
+    void completeShutdown() {
+        if (ready_) return;
+        ready_ = true;
+        emit shutdownReady();
+    }
+    bool requested() const noexcept { return requested_; }
+
+signals:
+    void shutdownReady();
+
+private:
+    QWindow window_;
+    bool requested_{};
+    bool ready_{};
+};
 
 std::filesystem::path fixture(const char* name) {
     return std::filesystem::path(PALMIER_REPOSITORY_ROOT)
@@ -473,12 +500,19 @@ private slots:
             },
             nullptr
         );
+        palmier::windows::PreviewPresentationController previewController;
         QQmlApplicationEngine engine;
         engine.rootContext()->setContextProperty(QStringLiteral("projectCoordinator"), &coordinator);
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("previewCoordinator"),
+            &previewController
+        );
         engine.load(QUrl::fromLocalFile(QStringLiteral(PALMIER_QML_MAIN_FILE)));
         QVERIFY2(!engine.rootObjects().isEmpty(), "Main QML did not load");
         auto* root = engine.rootObjects().front();
         QVERIFY(root->findChild<QObject*>(QStringLiteral("timelineTracks")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("previewViewport")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("previewErrorState")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("emptyState")) != nullptr);
         auto* emptyState = root->findChild<QObject*>(QStringLiteral("emptyState"));
         auto* loadedState = root->findChild<QObject*>(QStringLiteral("loadedState"));
@@ -518,8 +552,13 @@ private slots:
             },
             nullptr
         );
+        FakePreviewShutdownCoordinator previewController;
         QQmlApplicationEngine engine;
         engine.rootContext()->setContextProperty(QStringLiteral("projectCoordinator"), &coordinator);
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("previewCoordinator"),
+            &previewController
+        );
         engine.load(QUrl::fromLocalFile(QStringLiteral(PALMIER_QML_MAIN_FILE)));
         QVERIFY2(!engine.rootObjects().isEmpty(), "Main QML did not load");
         auto* window = qobject_cast<QWindow*>(engine.rootObjects().front());
@@ -531,8 +570,11 @@ private slots:
         QVERIFY(window->isVisible());
         window->close();
         QVERIFY(window->isVisible());
+        QVERIFY(previewController.requested());
         QTRY_COMPARE_WITH_TIMEOUT(cancellationObserved.available(), 1, 5000);
         QTRY_COMPARE_WITH_TIMEOUT(shutdownReady.count(), 1, 5000);
+        QVERIFY(window->isVisible());
+        previewController.completeShutdown();
         QTRY_VERIFY_WITH_TIMEOUT(!window->isVisible(), 5000);
     }
 };

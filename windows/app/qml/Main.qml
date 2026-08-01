@@ -6,6 +6,8 @@ import "."
 ApplicationWindow {
     id: window
     property bool shutdownApproved: false
+    property bool projectShutdownReady: false
+    property bool previewShutdownReady: false
     width: AppTheme.windowWidth
     height: AppTheme.windowHeight
     visible: true
@@ -13,16 +15,34 @@ ApplicationWindow {
     color: AppTheme.windowBackground
 
     onClosing: function(closeEvent) {
-        if (!shutdownApproved && !projectCoordinator.requestShutdown()) {
-            closeEvent.accepted = false
+        if (!shutdownApproved) {
+            projectShutdownReady = projectCoordinator.requestShutdown()
+            previewShutdownReady = previewCoordinator.requestShutdown()
+            shutdownApproved = projectShutdownReady && previewShutdownReady
+            closeEvent.accepted = shutdownApproved
+        }
+    }
+
+    function finishShutdownIfReady() {
+        if (projectShutdownReady && previewShutdownReady && !shutdownApproved) {
+            shutdownApproved = true
+            window.close()
         }
     }
 
     Connections {
         target: projectCoordinator
         function onShutdownReady() {
-            window.shutdownApproved = true
-            window.close()
+            window.projectShutdownReady = true
+            window.finishShutdownIfReady()
+        }
+    }
+
+    Connections {
+        target: previewCoordinator
+        function onShutdownReady() {
+            window.previewShutdownReady = true
+            window.finishShutdownIfReady()
         }
     }
 
@@ -80,6 +100,20 @@ ApplicationWindow {
             text: projectCoordinator.errorMessage
             color: AppTheme.errorText
             wrapMode: Text.Wrap
+        }
+
+        WindowContainer {
+            objectName: "previewViewport"
+            width: parent.width
+            height: AppTheme.trackHeight * 3
+            window: previewCoordinator.window
+        }
+
+        Label {
+            objectName: "previewErrorState"
+            visible: previewCoordinator.errorCode.length > 0
+            text: qsTr("Preview is unavailable.")
+            color: AppTheme.errorText
         }
 
         ListView {

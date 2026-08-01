@@ -32,5 +32,8 @@ endif()
 
 option(PALMIER_ENABLE_QT_SHELL "Build the optional Qt/QML read-only shell" OFF)
 if(PALMIER_ENABLE_QT_SHELL)
+    if(NOT PALMIER_ENABLE_FFMPEG_PROTOTYPE)
+        message(FATAL_ERROR "The Qt shell requires the FFmpeg preview prototype")
+    endif()
     add_subdirectory(windows/app)
 endif()

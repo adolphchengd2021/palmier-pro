@@ -16,12 +16,47 @@ jobs:
   qt-shell:
     name: Qt 6.10.3 MSVC 2022 x64
     runs-on: windows-2022
-    timeout-minutes: 25
+    timeout-minutes: 60
     env:
       QT_ROOT_DIR: C:/Qt/6.10.3/msvc2022_64
       QT_QPA_PLATFORM: offscreen
+      VCPKG_DISABLE_METRICS: 1
+      VCPKG_DEFAULT_TRIPLET: x64-windows
     steps:
       - uses: actions/checkout@v6
+
+      - name: Resolve runner image cache identity
+        id: runner-image
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ImageVersion)) {
+            throw "ImageVersion is required for the vcpkg ABI cache key"
+          }
+          $imageVersion = $env:ImageVersion -replace '[^0-9A-Za-z._-]', '-'
+          "version=$imageVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Restore vcpkg caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}\vcpkg-downloads
+            ${{ runner.temp }}\vcpkg-binary-cache
+          key: windows-vcpkg-v3-${{ steps.runner-image.outputs.version }}-x64-msvc-14.44-${{ hashFiles('vcpkg.json') }}
+
+      - name: Bootstrap locked vcpkg
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "vcpkg"
+          git clone --filter=blob:none https://github.com/microsoft/vcpkg.git $root
+          git -C $root checkout cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3
+          & "$root\bootstrap-vcpkg.bat" -disableMetrics
+          $downloads = Join-Path $env:RUNNER_TEMP "vcpkg-downloads"
+          $binaryCache = Join-Path $env:RUNNER_TEMP "vcpkg-binary-cache"
+          New-Item -ItemType Directory -Force -Path $downloads, $binaryCache | Out-Null
+          "VCPKG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VCPKG_DISABLE_METRICS=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VCPKG_DOWNLOADS=$downloads" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VCPKG_BINARY_SOURCES=clear;files,$binaryCache,readwrite" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - uses: actions/setup-python@v6
         with:
@@ -71,7 +106,7 @@ jobs:
           ctest --preset windows-msvc-x64-qt-shell-release
           $testExitCode = $LASTEXITCODE
           if ($testExitCode -ne 0) {
-            Get-ChildItem -Path "out/build/windows-msvc-x64-qt-shell" -Recurse -Filter "qt-test-*.txt" |
+            Get-ChildItem -Path "out/build/windows-msvc-x64-qt-shell" -Recurse -Filter "qt*-test-*.txt" |
               Sort-Object -Property FullName |
               ForEach-Object {
                 Write-Host "::group::$($_.Name)"

@@ -3775,6 +3775,7 @@ def windows_qt_read_only_shell_contract() -> None:
 
     for token in [
         'option(PALMIER_ENABLE_QT_SHELL "Build the optional Qt/QML read-only shell" OFF)',
+        'message(FATAL_ERROR "The Qt shell requires the FFmpeg preview prototype")',
         "add_subdirectory(windows/app)",
     ]:
         if token not in root_cmake:
@@ -3789,13 +3790,19 @@ def windows_qt_read_only_shell_contract() -> None:
         qt_preset["cacheVariables"],
         {
             "CMAKE_PREFIX_PATH": "$env{QT_ROOT_DIR}",
+            "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+            "PALMIER_ENABLE_FFMPEG_PROTOTYPE": "ON",
             "PALMIER_ENABLE_QT_SHELL": "ON",
+            "VCPKG_APPLOCAL_DEPS": "ON",
+            "VCPKG_MANIFEST_INSTALL": "ON",
+            "VCPKG_TARGET_TRIPLET": "x64-windows",
         },
     )
     for token in [
         "Qt6 6.10.3 EXACT REQUIRED",
         "Qt6::Concurrent",
         "Qt6::QuickDialogs2",
+        "palmier_qt_preview",
         "qt_add_executable(palmier_qt_shell",
         "qt_add_qml_module(palmier_qt_shell",
         "include/palmier/windows/project_load_coordinator.hpp",
@@ -3867,6 +3874,8 @@ def windows_qt_read_only_shell_contract() -> None:
         "extentRatio",
         "AppTheme.",
         "requestShutdown()",
+        "WindowContainer",
+        "previewCoordinator.window",
         "clip: true",
     ]:
         if token not in qml:
@@ -3897,6 +3906,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "staleGenerationCannotReplaceNewerProject",
         "qmlLoadsOffscreen",
         "qmlCloseWaitsForActiveWorker",
+        "previewViewport",
     ]:
         if token not in qt_tests:
             raise ContractError(f"Qt shell test missing token {token!r}")
@@ -3916,9 +3926,12 @@ def windows_qt_read_only_shell_contract() -> None:
         "cmake --preset windows-msvc-x64-qt-shell",
         "ctest --preset windows-msvc-x64-qt-shell-release",
         "$testExitCode = $LASTEXITCODE",
-        'Get-ChildItem -Path "out/build/windows-msvc-x64-qt-shell" -Recurse -Filter "qt-test-*.txt"',
+        'Get-ChildItem -Path "out/build/windows-msvc-x64-qt-shell" -Recurse -Filter "qt*-test-*.txt"',
         "Get-Content -LiteralPath $_.FullName -Encoding UTF8",
         "exit $testExitCode",
+        "Resolve runner image cache identity",
+        "windows-vcpkg-v3-${{ steps.runner-image.outputs.version }}-x64-msvc-14.44-${{ hashFiles('vcpkg.json') }}",
+        "VCPKG_BINARY_SOURCES=clear;files,$binaryCache,readwrite",
     ]:
         if token not in workflow:
             raise ContractError(f"Qt shell workflow missing token {token!r}")
@@ -3934,6 +3947,163 @@ def windows_qt_read_only_shell_contract() -> None:
     ]:
         if token not in adr:
             raise ContractError(f"Qt shell ADR missing token {token!r}")
+
+
+def windows_qt_preview_host_contract() -> None:
+    contract = load_json("contracts/media/v1/qt-preview-host.json")
+    header = read_text(
+        "windows/app/include/palmier/windows/preview_presentation_controller.hpp"
+    )
+    source = read_text("windows/app/src/preview_presentation_controller.cpp")
+    tests = read_text("windows/app/tests/qt_preview_tests.cpp")
+    app_cmake = read_text("windows/app/CMakeLists.txt")
+    qml = read_text("windows/app/qml/Main.qml")
+    main_source = read_text("windows/app/app/main.cpp")
+    workflow = read_text(".github/workflows/windows-qt-shell.yml")
+
+    require_equal("Qt preview host version", contract.get("version"), CONTRACT_VERSION)
+    require_equal(
+        "Qt preview host states",
+        contract.get("states"),
+        [
+            "empty",
+            "attaching",
+            "ready",
+            "occluded",
+            "cancelled",
+            "unavailable",
+            "invalidated",
+            "failed",
+            "closing",
+            "closed",
+        ],
+    )
+    require_equal(
+        "Qt preview host invariants",
+        sorted(contract.get("invariants", {}).keys()),
+        sorted(
+            [
+                "nativeOwnership",
+                "physicalSize",
+                "backgroundOwnership",
+                "boundedQueue",
+                "cancellation",
+                "surfaceEpoch",
+                "shutdown",
+            ]
+        ),
+    )
+    require_equal(
+        "Qt preview host exclusions",
+        contract.get("excluded"),
+        [
+            "project media resolution and playback requests",
+            "preview tick timer and interactive cadence",
+            "visible pixel and overlay correctness",
+            "physical GPU performance",
+            "DPI transition and multi-display manual evidence",
+            "device recreation",
+            "Windows 10 runtime certification",
+        ],
+    )
+    for token in [
+        "Q_PROPERTY(QWindow* window READ window CONSTANT)",
+        "QtPreviewSessionFactory",
+        "std::shared_ptr<std::stop_source>",
+        "std::optional<PendingResize>",
+        "surfaceEpoch_",
+        "operationActive_",
+        "requestShutdown()",
+        "nativeSurfaceAboutToBeDestroyed",
+    ]:
+        if token not in header:
+            raise ContractError(f"Qt preview host API missing token {token!r}")
+    for token in [
+        "previewPresentationThread()",
+        "dispatcher_->moveToThread(previewPresentationThread())",
+        "QEvent::WinIdChange",
+        "QPlatformSurfaceEvent::SurfaceAboutToBeDestroyed",
+        "GetClientRect(handle, &client)",
+        "pixelWidth == requestedWidth_ && pixelHeight == requestedHeight_",
+        "pendingResize_ = request",
+        "activeCancellation_->request_stop()",
+        "state->session.reset()",
+        "window_.release()",
+        "delete retiredWindow",
+        "QGuiApplication::platformName()",
+    ]:
+        if token not in source:
+            raise ContractError(f"Qt preview host invariant missing token {token!r}")
+    if "QThread::wait" in source or ".waitForFinished(" in source:
+        raise ContractError("Qt preview host must not wait on the UI thread")
+    for token in [
+        "nativeChildUsesOneBackgroundSessionOwner",
+        "resizeBurstKeepsOnlyLatestPhysicalSize",
+        "warpChildSurfaceLifecycle",
+        "qmlCloseWaitsForPreviewSessionRelease",
+        "unexpectedTeardownRetiresWindowUntilSessionDestruction",
+        "GetParent(child)",
+        "WS_CHILD",
+        "state_->firstResizeEntered",
+        "state->sizes.back().first",
+        "controller.shutdownComplete()",
+    ]:
+        if token not in tests:
+            raise ContractError(f"Qt preview host test missing token {token!r}")
+    for token in [
+        "palmier_qt_preview",
+        "palmier_qt_preview_tests",
+        "add_palmier_qt_preview_test(",
+        "native_child_background_owner",
+        "resize_burst_coalesces",
+        "warp_child_surface_lifecycle",
+        "qml_close_waits_for_preview_release",
+        "unexpected_teardown_retires_window",
+        "qt_preview.programmatic_quit_drains",
+        'ENVIRONMENT "QT_QPA_PLATFORM=windows" TIMEOUT 30',
+    ]:
+        if token not in app_cmake:
+            raise ContractError(f"Qt preview host CMake missing token {token!r}")
+    for token in [
+        "WindowContainer",
+        "previewCoordinator.window",
+        "previewCoordinator.requestShutdown()",
+        "previewCoordinator.errorCode",
+        "projectShutdownReady && previewShutdownReady",
+    ]:
+        if token not in qml:
+            raise ContractError(f"Qt preview host QML missing token {token!r}")
+    for token in [
+        "PreviewPresentationController previewController",
+        'QStringLiteral("previewCoordinator")',
+        "application.closeAllWindows()",
+        "--quit-smoke-test",
+        "QCoreApplication::quit",
+        "drainShutdown(coordinator, previewController)",
+        "QEventLoop::ExcludeUserInputEvents",
+    ]:
+        if token not in main_source:
+            raise ContractError(f"Qt preview host executable missing token {token!r}")
+    for token in [
+        "Restore vcpkg caches",
+        "VCPKG_BINARY_SOURCES=clear;files,$binaryCache,readwrite",
+    ]:
+        if token not in workflow:
+            raise ContractError(f"Qt preview host workflow missing token {token!r}")
+    adr = read_text("docs/windows/adr/0023-qt-native-preview-host.md")
+    for token in [
+        "WindowContainer",
+        "one process-lifetime presentation thread",
+        "only the latest physical size",
+        "closes only after both receipts arrive",
+        "do not prove a project media candidate",
+    ]:
+        if token not in adr:
+            raise ContractError(f"Qt preview host ADR missing token {token!r}")
+    readme = read_text("docs/windows/README.md")
+    for token in ["Qt-owned native child window", "ADR 0023"]:
+        if token not in readme:
+            raise ContractError(f"Qt preview host README missing token {token!r}")
 
 
 def main() -> int:
@@ -3966,6 +4136,7 @@ def main() -> int:
         ("Windows WASAPI clock and environment probe", windows_audio_wasapi_contract),
         ("Windows bounded WASAPI output", windows_wasapi_output_contract),
         ("Windows Qt read-only project shell", windows_qt_read_only_shell_contract),
+        ("Windows Qt native preview host", windows_qt_preview_host_contract),
     ]
     for label, check in checks:
         check()

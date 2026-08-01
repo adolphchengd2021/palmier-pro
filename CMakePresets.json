@@ -27,7 +27,12 @@
       "binaryDir": "${sourceDir}/out/build/windows-msvc-x64-qt-shell",
       "cacheVariables": {
         "CMAKE_PREFIX_PATH": "$env{QT_ROOT_DIR}",
-        "PALMIER_ENABLE_QT_SHELL": "ON"
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "PALMIER_ENABLE_FFMPEG_PROTOTYPE": "ON",
+        "PALMIER_ENABLE_QT_SHELL": "ON",
+        "VCPKG_APPLOCAL_DEPS": "ON",
+        "VCPKG_MANIFEST_INSTALL": "ON",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
       }
     },
     {
