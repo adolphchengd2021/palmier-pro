@@ -47,6 +47,7 @@
     "failure",
     "hresult",
     "mediaFailureCode",
+    "audioFailure",
     "audioState",
     "videoState",
     "fillCalls",

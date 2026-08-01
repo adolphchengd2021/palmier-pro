@@ -303,6 +303,10 @@ void failedReplacementPreservesTheActiveGeneration() {
     );
     require(refusedAudio.generation == 1, "failed audio replacement changed generation");
     require(
+        refusedAudio.audioFailure == AudioPlaybackFailureCode::mediaFailure,
+        "failed audio replacement lost its structured failure"
+    );
+    require(
         playback->snapshot().state == HeadlessAvPlaybackState::playing,
         "failed audio replacement stopped active playback"
     );
@@ -350,6 +354,10 @@ void failedReplacementPreservesTheActiveGeneration() {
     const auto committedFailure = playback->play(input, 3, {10, 1});
     require(committedFailure.generation == 2, "post-commit failure kept old generation");
     require(committedFailure.state == HeadlessAvPlaybackState::failed, "post-commit failure stayed playing");
+    require(
+        committedFailure.audioFailure == AudioPlaybackFailureCode::outputFailure,
+        "post-commit failure lost its structured audio failure"
+    );
     const auto recovered = playback->play(input, 4, {10, 1});
     require(recovered.generation == 3, "post-commit failure blocked next generation");
     require(recovered.state == HeadlessAvPlaybackState::playing, "post-commit recovery failed");

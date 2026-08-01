@@ -82,17 +82,25 @@ shell state and the combined project/preview shutdown barrier.
 Candidate regressions prove stable persisted IDs, deterministic earliest-clip
 selection, media path containment, one tick in flight, terminal completion,
 replacement cancellation, stale-result rejection, and shutdown during a gated
-tick.
+tick. A serial integration smoke creates an isolated `.palmier` package around
+the fixed H.264/AAC fixture, follows `projectCommitted` into the real WARP
+session, and requires positive render and present serials plus EOF. If the
+runner has no audio endpoint, the smoke reports Partial only when the propagated
+audio failure is `deviceUnavailable`, no media error exists, and a separate
+WASAPI probe returns the same unavailable HRESULT.
 
 ## Evidence boundary
 
 A green MSVC `/W4 /WX` build and Windows-platform Qt tests prove native child
 ownership, serialized background setup and teardown, bounded resize, and the
 shutdown gate, stable project candidate publication, and bounded playback tick
-admission on the runner. They do not prove visible pixels, overlays, multi-layer
-timeline composition, trim/speed mapping, video-only playback, physical GPU
-performance, DPI and multi-display behavior, device recreation, A/V
-synchronization, or Windows 10 build 19045 compatibility.
+admission on the runner. When WASAPI is available, the project smoke also proves
+the fixed H.264/AAC project route reaches at least one WARP render and present
+before EOF; an audio-unavailable runner produces only Partial evidence. These
+tests do not prove visible pixels, overlays, multi-layer timeline composition,
+trim/speed mapping, video-only playback, physical GPU performance, DPI and
+multi-display behavior, device recreation, physical-device A/V synchronization,
+or Windows 10 build 19045 compatibility.
 
 ## References
 

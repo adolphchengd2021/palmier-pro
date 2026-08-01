@@ -1,8 +1,13 @@
+#include "media_test_fixtures.hpp"
+#include "media_test_support.hpp"
+#include "palmier/audio/wasapi_environment_probe.hpp"
 #include "palmier/windows/preview_presentation_controller.hpp"
 #include "palmier/windows/project_load_coordinator.hpp"
 
 #include <QDebug>
+#include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFutureWatcher>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlComponent>
@@ -13,16 +18,20 @@
 #include <QSignalSpy>
 #include <QTest>
 #include <QThread>
+#include <QtConcurrent/QtConcurrentRun>
 
 #include <Windows.h>
 
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -31,6 +40,188 @@ namespace {
 using palmier::preview::PreviewPresentationOutcome;
 using palmier::preview::PreviewPresentationReceipt;
 using palmier::preview::PreviewPresentationState;
+
+template <typename Function>
+auto awaitBackground(Function&& function) {
+    using Result = std::invoke_result_t<std::decay_t<Function>>;
+    auto future = QtConcurrent::run(std::forward<Function>(function));
+    QFutureWatcher<Result> watcher;
+    QEventLoop loop;
+    QObject::connect(&watcher, &QFutureWatcher<Result>::finished, &loop, &QEventLoop::quit);
+    watcher.setFuture(future);
+    if (!future.isFinished()) loop.exec();
+    return future.result();
+}
+
+struct ProjectPackageFixture final {
+    std::shared_ptr<palmier::media::test_support::TemporaryDirectory> owner;
+    std::filesystem::path package;
+};
+
+void writeFixtureFile(
+    const std::filesystem::path& destination,
+    const std::vector<std::uint8_t>& bytes
+) {
+    std::ofstream output(destination, std::ios::binary | std::ios::trunc);
+    palmier::media::test_support::require(
+        output.is_open(),
+        "project preview fixture could not be opened"
+    );
+    output.write(
+        reinterpret_cast<const char*>(bytes.data()),
+        static_cast<std::streamsize>(bytes.size())
+    );
+    palmier::media::test_support::require(
+        output.good(),
+        "project preview fixture could not be written"
+    );
+}
+
+void writeFixtureFile(
+    const std::filesystem::path& destination,
+    std::string_view contents
+) {
+    std::ofstream output(destination, std::ios::binary | std::ios::trunc);
+    palmier::media::test_support::require(
+        output.is_open(),
+        "project preview manifest could not be opened"
+    );
+    output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+    palmier::media::test_support::require(
+        output.good(),
+        "project preview manifest could not be written"
+    );
+}
+
+ProjectPackageFixture createProjectPackageFixture() {
+    auto owner = std::make_shared<palmier::media::test_support::TemporaryDirectory>();
+    const auto package = owner->path() / "warp-project-preview.palmier";
+    const auto mediaDirectory = package / "media";
+    std::filesystem::create_directories(mediaDirectory);
+    writeFixtureFile(package / "project.json", R"json({
+  "timelines": [
+    {
+      "id": "timeline-main",
+      "name": "Main",
+      "fps": 10,
+      "width": 16,
+      "height": 16,
+      "settingsConfigured": true,
+      "tracks": [
+        {
+          "id": "track-v1",
+          "type": "video",
+          "muted": false,
+          "hidden": false,
+          "syncLocked": true,
+          "clips": [
+            {
+              "id": "clip-h264-aac",
+              "mediaRef": "media-h264-aac",
+              "mediaType": "video",
+              "sourceClipType": "video",
+              "startFrame": 0,
+              "durationFrames": 1,
+              "speed": 1,
+              "opacity": 1,
+              "blendMode": "normal"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "activeTimelineId": "timeline-main",
+  "openTimelineIds": ["timeline-main"]
+})json");
+    writeFixtureFile(package / "media.json", R"json({
+  "version": 2,
+  "entries": [
+    {
+      "id": "media-h264-aac",
+      "name": "H.264 AAC fixture",
+      "type": "video",
+      "source": {"project": {"relativePath": "media/h264-aac.mp4"}},
+      "duration": 0.1,
+      "sourceWidth": 16,
+      "sourceHeight": 16,
+      "sourceFPS": 10,
+      "hasAudio": true
+    }
+  ],
+  "folders": []
+})json");
+    writeFixtureFile(
+        mediaDirectory / "h264-aac.mp4",
+        palmier::media::test_support::decodeBase64(
+            palmier::media::test_fixtures::h264Aac
+        )
+    );
+    return {std::move(owner), package};
+}
+
+bool waitForPreviewTerminal(
+    palmier::windows::PreviewPresentationController& controller,
+    int timeoutMilliseconds
+) {
+    const auto terminal = [&controller] {
+        return controller.state() == QStringLiteral("completed")
+            || !controller.errorCode().isEmpty();
+    };
+    if (terminal()) return true;
+    QSignalSpy stateChanges(
+        &controller,
+        &palmier::windows::PreviewPresentationController::stateChanged
+    );
+    if (terminal()) return true;
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (!terminal() && elapsed.elapsed() < timeoutMilliseconds) {
+        const auto remaining = timeoutMilliseconds - elapsed.elapsed();
+        if (!stateChanges.wait(static_cast<int>(remaining))) break;
+    }
+    return terminal();
+}
+
+bool drainPreview(
+    palmier::windows::ProjectLoadCoordinator& project,
+    palmier::windows::PreviewPresentationController& controller,
+    std::unique_ptr<QObject>& root
+) {
+    QSignalSpy projectReady(
+        &project,
+        &palmier::windows::ProjectLoadCoordinator::shutdownReady
+    );
+    QSignalSpy previewReady(
+        &controller,
+        &palmier::windows::PreviewPresentationController::shutdownReady
+    );
+    bool projectDrained = project.requestShutdown();
+    bool previewDrained = controller.requestShutdown();
+    if (!projectDrained && projectReady.count() == 0) {
+        static_cast<void>(projectReady.wait(10000));
+    }
+    if (!previewDrained && previewReady.count() == 0) {
+        static_cast<void>(previewReady.wait(10000));
+    }
+    projectDrained = projectDrained || projectReady.count() != 0;
+    previewDrained = previewDrained || previewReady.count() != 0;
+    const bool drained = projectDrained && previewDrained
+        && controller.shutdownComplete();
+    root.reset();
+    return drained;
+}
+
+bool releaseFixture(ProjectPackageFixture& fixture) {
+    auto owner = std::move(fixture.owner);
+    return awaitBackground([owner = std::move(owner)]() mutable {
+        const auto path = owner->path();
+        owner.reset();
+        std::error_code error;
+        const bool remains = std::filesystem::exists(path, error);
+        return !error && !remains;
+    });
+}
 
 PreviewPresentationReceipt resizedReceipt() {
     PreviewPresentationReceipt receipt;
@@ -385,6 +576,9 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(playCount(state), std::size_t{1}, 5000);
         QTRY_COMPARE_WITH_TIMEOUT(tickCount(state), std::size_t{1}, 5000);
         QTRY_COMPARE_WITH_TIMEOUT(controller.state(), QStringLiteral("completed"), 5000);
+        const auto playbackReceipt = controller.latestPlaybackReceipt();
+        QCOMPARE(playbackReceipt.generation, std::uint64_t{1});
+        QVERIFY(playbackReceipt.state == PreviewPresentationState::completed);
         QCoreApplication::processEvents();
         QCOMPARE(tickCount(state), std::size_t{1});
         controller.replaceProjectPreview(1, availablePreview("media-duplicate"));
@@ -557,6 +751,121 @@ private slots:
         static_cast<void>(controller.requestShutdown());
         QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 10000);
         root.reset();
+    }
+
+    void projectPackageDrivesWarpPresentationOrReportsAudioUnavailable() {
+        palmier::windows::ProjectLoadCoordinator project;
+        palmier::windows::PreviewPresentationController controller(
+            palmier::render::D3d11PreviewDriver::warp,
+            nullptr
+        );
+        QObject::connect(
+            &project,
+            &palmier::windows::ProjectLoadCoordinator::projectCommitted,
+            &controller,
+            [&project, &controller] {
+                controller.replaceProjectPreview(
+                    project.committedGeneration(),
+                    project.committedPreview()
+                );
+            }
+        );
+        QQmlEngine engine;
+        auto root = createPreviewWindow(engine, controller, 160, 90);
+        QVERIFY(root != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            controller.ready() || !controller.errorCode().isEmpty(),
+            10000
+        );
+        QVERIFY2(controller.ready(), qPrintable(controller.errorCode()));
+
+        auto fixture = awaitBackground(createProjectPackageFixture);
+        QSignalSpy committed(
+            &project,
+            &palmier::windows::ProjectLoadCoordinator::projectCommitted
+        );
+        project.openFolder(QUrl::fromLocalFile(
+            QString::fromStdWString(fixture.package.wstring())
+        ));
+        const bool projectLoaded = committed.count() == 1 || committed.wait(10000);
+        const bool previewTerminal = projectLoaded && waitForPreviewTerminal(controller, 20000);
+        const auto receipt = controller.latestPlaybackReceipt();
+        const bool presentedToEof = previewTerminal
+            && controller.state() == QStringLiteral("completed")
+            && receipt.state == PreviewPresentationState::completed
+            && receipt.generation != 0
+            && receipt.renderSerial != 0
+            && receipt.presentSerial != 0;
+        std::optional<palmier::audio::WasapiEnvironmentProbeResult> environment;
+        if (previewTerminal && !presentedToEof) {
+            environment = awaitBackground(
+                palmier::audio::probeDefaultWasapiRenderEndpoint
+            );
+        }
+
+        const bool drained = drainPreview(project, controller, root);
+        const bool fixtureReleased = releaseFixture(fixture);
+        QVERIFY2(projectLoaded, qPrintable(project.errorMessage()));
+        QVERIFY2(previewTerminal, "project preview did not reach a terminal state");
+        QVERIFY2(drained, "project preview did not drain cleanly");
+        QVERIFY2(fixtureReleased, "project preview fixture cleanup failed");
+        if (presentedToEof) {
+            QVERIFY(receipt.hasTargetTimelineFrame);
+            QCOMPARE(receipt.targetTimelineFrame, std::int64_t{0});
+            QVERIFY(receipt.hasSourcePresentationTimestamp);
+            return;
+        }
+
+        QVERIFY(
+            receipt.stage == palmier::preview::PreviewPresentationStage::startPlayback
+        );
+        QVERIFY(
+            receipt.failure
+            == palmier::preview::PreviewPresentationFailureCode::playbackFailure
+        );
+        QVERIFY(
+            receipt.audioFailure
+            == palmier::media::AudioPlaybackFailureCode::deviceUnavailable
+        );
+        QCOMPARE(receipt.mediaFailureCode, std::int32_t{-1});
+        QVERIFY(environment.has_value());
+        if (
+            environment->status == palmier::audio::WasapiProbeStatus::unavailable
+            && environment->hresult == receipt.hresult
+        ) {
+            const auto message = QStringLiteral(
+                "Partial: project route reached playback, but WASAPI is unavailable "
+                "at %1 (HRESULT 0x%2); no WARP present/EOF proof"
+            ).arg(
+                QString::fromStdString(environment->stage),
+                QString::number(
+                    static_cast<qulonglong>(
+                        static_cast<std::uint32_t>(environment->hresult)
+                    ),
+                    16
+                ).rightJustified(8, QLatin1Char('0'))
+            );
+            const auto encoded = message.toUtf8();
+            QSKIP(encoded.constData());
+        }
+        const auto failure = QStringLiteral(
+            "project playback failed while WASAPI probe status was %1 at %2 "
+            "(playback HRESULT 0x%3, probe HRESULT 0x%4)"
+        ).arg(
+            QString::number(static_cast<int>(environment->status)),
+            QString::fromStdString(environment->stage),
+            QString::number(
+                static_cast<qulonglong>(static_cast<std::uint32_t>(receipt.hresult)),
+                16
+            ).rightJustified(8, QLatin1Char('0')),
+            QString::number(
+                static_cast<qulonglong>(
+                    static_cast<std::uint32_t>(environment->hresult)
+                ),
+                16
+            ).rightJustified(8, QLatin1Char('0'))
+        ).toUtf8();
+        QFAIL(failure.constData());
     }
 
     void qmlCloseWaitsForPreviewSessionRelease() {

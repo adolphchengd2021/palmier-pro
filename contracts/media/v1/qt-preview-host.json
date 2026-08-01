@@ -27,6 +27,7 @@
     "boundedQueue": "only one synchronous session command is in flight, resize bursts retain only the latest distinct physical size, and a tick completion admits at most one later single-shot tick",
     "cancellation": "project replacement and shutdown request the admitted stop source; replacement clears the old playback before starting the latest source, and shutdown admits no later resize, play, or tick",
     "projectCommit": "only a latest successful project load publishes its immutable stable-ID preview source; failed and cancelled loads preserve the committed preview",
+    "playbackEvidence": "the controller retains the latest accepted play or tick receipt by value so tests can distinguish project-driven render, present, and EOF proof from a typed audio-device-unavailable partial result",
     "replacement": "project generation, source serial, surface epoch, and playback generation reject stale completions; an offline, unsupported, or empty replacement clears the previous surface",
     "surfaceEpoch": "a changed HWND retires the current session instead of reusing its swap chain or accepting stale completion",
     "shutdown": "the root QML window waits for both project loading and preview session close before allowing Qt to destroy the child window; one guarded drain handles explicit quit before exit, aboutToQuit fallback, and post-event-loop fallback, close failure changes a successful exit code, and unexpected controller teardown retains the QWindow until background session destruction"

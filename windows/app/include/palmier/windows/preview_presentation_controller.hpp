@@ -86,6 +86,7 @@ public:
     bool shutdownComplete() const noexcept;
     QString state() const;
     QString errorCode() const;
+    preview::PreviewPresentationReceipt latestPlaybackReceipt() const noexcept;
     void replaceProjectPreview(
         std::uint64_t projectGeneration,
         ProjectPreviewProjection preview
@@ -183,6 +184,7 @@ private:
     bool ready_{};
     QString state_{QStringLiteral("empty")};
     QString errorCode_;
+    preview::PreviewPresentationReceipt latestPlaybackReceipt_;
 };
 
 }

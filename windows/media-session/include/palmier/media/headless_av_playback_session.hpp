@@ -98,6 +98,7 @@ struct HeadlessAvPlaybackReceipt final {
     HeadlessAvPlaybackFailureCode failure{HeadlessAvPlaybackFailureCode::none};
     HRESULT hresult{S_OK};
     std::int32_t mediaFailureCode{-1};
+    AudioPlaybackFailureCode audioFailure{AudioPlaybackFailureCode::none};
     AudioPlaybackState audioState{AudioPlaybackState::idle};
     PresentationVideoDecodeState videoState{PresentationVideoDecodeState::idle};
     std::size_t fillCalls{};

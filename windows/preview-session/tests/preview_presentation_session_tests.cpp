@@ -685,6 +685,7 @@ void postCommitPlaybackFailureAdvancesTheTerminalGeneration() {
         HeadlessAvPlaybackOutcome::failed
     );
     failed.failure = palmier::media::HeadlessAvPlaybackFailureCode::audioFailure;
+    failed.audioFailure = palmier::media::AudioPlaybackFailureCode::deviceUnavailable;
     failed.hresult = E_FAIL;
     fixture.playback->plays.push_back(failed);
 
@@ -692,6 +693,11 @@ void postCommitPlaybackFailureAdvancesTheTerminalGeneration() {
     require(result.outcome == PreviewPresentationOutcome::failed, "playback failure was hidden");
     require(result.generation == 2, "post-commit failure kept the old generation");
     require(result.state == PreviewPresentationState::failed, "post-commit state differs");
+    require(
+        result.audioFailure
+            == palmier::media::AudioPlaybackFailureCode::deviceUnavailable,
+        "post-commit failure lost its structured audio failure"
+    );
     require(!result.hasCachedFrame, "post-commit failure retained old video");
 }
 

@@ -264,6 +264,11 @@ bool PreviewPresentationController::shutdownComplete() const noexcept {
 QString PreviewPresentationController::state() const { return state_; }
 QString PreviewPresentationController::errorCode() const { return errorCode_; }
 
+preview::PreviewPresentationReceipt
+PreviewPresentationController::latestPlaybackReceipt() const noexcept {
+    return latestPlaybackReceipt_;
+}
+
 void PreviewPresentationController::replaceProjectPreview(
     std::uint64_t projectGeneration,
     ProjectPreviewProjection preview
@@ -720,6 +725,9 @@ void PreviewPresentationController::completeOperation(OperationResult result) {
         return;
     }
     if (result.surfaceEpoch != surfaceEpoch_) return;
+    if (result.kind == OperationKind::play || result.kind == OperationKind::tick) {
+        latestPlaybackReceipt_ = result.receipt;
+    }
     const auto outcome = result.receipt.outcome;
     if (result.kind == OperationKind::attach || result.kind == OperationKind::resize) {
         const bool usable = outcome == preview::PreviewPresentationOutcome::changed

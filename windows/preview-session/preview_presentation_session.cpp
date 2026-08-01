@@ -357,6 +357,7 @@ PreviewPresentationReceipt PreviewPresentationSession::play(
             : PreviewPresentationFailureCode::playbackFailure;
         value.hresult = playback.hresult;
         value.mediaFailureCode = playback.mediaFailureCode;
+        value.audioFailure = playback.audioFailure;
         return value;
     }
 
@@ -468,6 +469,7 @@ PreviewPresentationReceipt PreviewPresentationSession::tick(
             : PreviewPresentationFailureCode::playbackFailure;
         value.hresult = playback.hresult;
         value.mediaFailureCode = playback.mediaFailureCode;
+        value.audioFailure = playback.audioFailure;
         return value;
     }
     if (!presentationDirty_ || !cachedFrame_.has_value()
@@ -692,6 +694,9 @@ PreviewPresentationReceipt PreviewPresentationSession::cancel(
     );
     value.hresult = terminalSurface ? surface.hresult : playback.hresult;
     value.mediaFailureCode = terminalSurface ? -1 : playback.mediaFailureCode;
+    value.audioFailure = terminalSurface
+        ? media::AudioPlaybackFailureCode::none
+        : playback.audioFailure;
     if (terminalSurface) {
         value.failure = PreviewPresentationFailureCode::surfaceFailure;
     } else if (playback.failure != media::HeadlessAvPlaybackFailureCode::none) {
@@ -744,6 +749,7 @@ PreviewPresentationReceipt PreviewPresentationSession::close() {
     );
     value.hresult = FAILED(playback.hresult) ? playback.hresult : surface.hresult;
     value.mediaFailureCode = playback.mediaFailureCode;
+    value.audioFailure = playback.audioFailure;
     if (playbackFailed) {
         value.failure = PreviewPresentationFailureCode::playbackFailure;
     } else if (surfaceFailed) {

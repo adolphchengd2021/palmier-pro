@@ -299,6 +299,7 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::play(
             HeadlessAvPlaybackStage::startAudio
         );
         value.failure = HeadlessAvPlaybackFailureCode::audioFailure;
+        value.audioFailure = AudioPlaybackFailureCode::invariantFailure;
         value.hresult = E_UNEXPECTED;
         return value;
     }
@@ -357,6 +358,7 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::play(
             value.audioState = audioStart.state;
             value.hresult = audioStart.hresult;
             value.mediaFailureCode = audioStart.mediaFailureCode;
+            value.audioFailure = audioStart.failure;
             value.failure = state_ == HeadlessAvPlaybackState::cancelled
                 ? HeadlessAvPlaybackFailureCode::none
                 : HeadlessAvPlaybackFailureCode::audioFailure;
@@ -371,6 +373,7 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::play(
             HeadlessAvPlaybackStage::startAudio
         );
         value.audioState = audioStart.state;
+        value.audioFailure = audioStart.failure;
         value.hresult = operationToken.stop_requested()
             ? cancelledResult
             : audioStart.hresult;
@@ -411,6 +414,7 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::play(
         HeadlessAvPlaybackStage::commitVideo
     );
     value.audioState = audioStart.state;
+    value.audioFailure = audioStart.failure;
     value.videoState = video_->state();
     value.fillCalls = 1;
     value.admittedFrames = prefill.admittedFrames;
@@ -517,6 +521,7 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::tick(
             HeadlessAvPlaybackStage::audioPosition
         );
         value.audioState = position.state;
+        value.audioFailure = position.failure;
         value.hresult = position.hresult;
         return value;
     }
@@ -536,6 +541,7 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::tick(
         HeadlessAvPlaybackStage::selectVideo
     );
     value.audioState = position.state;
+    value.audioFailure = position.failure;
     try {
         for (;;) {
             if (operationToken.stop_requested()) {
@@ -711,6 +717,7 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::close() {
             HeadlessAvPlaybackStage::close
         );
         value.audioState = audio.state;
+        value.audioFailure = audio.failure;
         value.failure = audio.state == AudioPlaybackState::closed
             ? HeadlessAvPlaybackFailureCode::none
             : HeadlessAvPlaybackFailureCode::audioFailure;
@@ -722,6 +729,7 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::close() {
             HeadlessAvPlaybackStage::close
         );
         value.failure = HeadlessAvPlaybackFailureCode::audioFailure;
+        value.audioFailure = AudioPlaybackFailureCode::invariantFailure;
         value.hresult = E_UNEXPECTED;
     }
     video_.reset();
@@ -739,7 +747,9 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::baseReceipt(
     value.outcome = outcome;
     value.stage = stage;
     if (audio_ != nullptr) {
-        value.audioState = audio_->snapshot().state;
+        const auto audio = audio_->snapshot();
+        value.audioState = audio.state;
+        value.audioFailure = audio.failure;
     }
     if (video_ != nullptr) {
         value.videoState = video_->state();
@@ -761,6 +771,7 @@ HeadlessAvPlaybackSession::terminateFromAudioPosition(
     }
     auto value = baseReceipt(outcomeForAudio(position.outcome), stage);
     value.audioState = position.state;
+    value.audioFailure = position.failure;
     value.hresult = position.hresult;
     value.failure = state_ == HeadlessAvPlaybackState::failed
         || state_ == HeadlessAvPlaybackState::invalidated
@@ -814,6 +825,7 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::cancelCurrent() {
                 HeadlessAvPlaybackStage::cancel
             );
             value.failure = HeadlessAvPlaybackFailureCode::audioFailure;
+            value.audioFailure = audio.failure;
             value.hresult = audio.hresult;
             value.audioState = audio.state;
             return value;
@@ -824,6 +836,7 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::cancelCurrent() {
             HeadlessAvPlaybackStage::cancel
         );
         value.audioState = audio.state;
+        value.audioFailure = audio.failure;
         value.hresult = audio.hresult;
         return value;
     } catch (...) {
@@ -833,6 +846,7 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::cancelCurrent() {
             HeadlessAvPlaybackStage::cancel
         );
         value.failure = HeadlessAvPlaybackFailureCode::invariantFailure;
+        value.audioFailure = AudioPlaybackFailureCode::invariantFailure;
         value.hresult = E_UNEXPECTED;
         return value;
     }

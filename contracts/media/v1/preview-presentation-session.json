@@ -51,6 +51,7 @@
     "failure",
     "hresult",
     "mediaFailureCode",
+    "audioFailure",
     "hasTargetTimelineFrame",
     "targetTimelineFrame",
     "hasSourcePresentationTimestamp",

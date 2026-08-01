@@ -128,6 +128,7 @@ if(BUILD_TESTING)
         PRIVATE
             palmier_qt_preview
             palmier_qt_shell_core
+            Qt6::Concurrent
             Qt6::Gui
             Qt6::Qml
             Qt6::Quick
@@ -138,6 +139,10 @@ if(BUILD_TESTING)
     target_compile_definitions(
         palmier_qt_preview_tests
         PRIVATE PALMIER_QML_MAIN_FILE="${CMAKE_CURRENT_SOURCE_DIR}/qml/Main.qml"
+    )
+    target_include_directories(
+        palmier_qt_preview_tests
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../media-ffmpeg/tests"
     )
     target_compile_options(
         palmier_qt_preview_tests
@@ -189,6 +194,14 @@ if(BUILD_TESTING)
     add_palmier_qt_preview_test(
         warp_child_surface_lifecycle
         warpChildSurfaceLifecycle
+    )
+    add_palmier_qt_preview_test(
+        project_package_warp_presentation
+        projectPackageDrivesWarpPresentationOrReportsAudioUnavailable
+    )
+    set_tests_properties(
+        qt_preview.project_package_warp_presentation
+        PROPERTIES RUN_SERIAL TRUE TIMEOUT 60
     )
     add_palmier_qt_preview_test(
         qml_close_waits_for_preview_release

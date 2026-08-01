@@ -84,6 +84,7 @@ struct PreviewPresentationReceipt final {
     PreviewPresentationFailureCode failure{PreviewPresentationFailureCode::none};
     HRESULT hresult{S_OK};
     std::int32_t mediaFailureCode{-1};
+    media::AudioPlaybackFailureCode audioFailure{media::AudioPlaybackFailureCode::none};
     bool hasTargetTimelineFrame{};
     std::int64_t targetTimelineFrame{};
     bool hasSourcePresentationTimestamp{};

@@ -164,6 +164,9 @@ through `WindowContainer` and constructs, resizes, closes, and destroys the
 real preview session on one persistent background thread. Resize bursts retain
 only the latest positive client size, and application close waits for both the
 project reader and preview session. Windows-platform tests prove the native
-child relationship and a WARP lifecycle, not project media playback, visible
-pixels, cadence, physical-GPU performance, DPI behavior, A/V synchronization,
-or Windows 10 runtime compatibility. See ADR 0014 and ADR 0023.
+child relationship and WARP lifecycle. A serial smoke drives a fixed H.264/AAC
+`.palmier` package through project commit and requires render, present, and EOF
+receipts when WASAPI is available; a typed matching endpoint-unavailable result
+is reported only as Partial. This does not prove visible pixels, interactive
+cadence, physical-GPU performance, DPI behavior, physical-device A/V
+synchronization, or Windows 10 runtime compatibility. See ADR 0014 and ADR 0023.
