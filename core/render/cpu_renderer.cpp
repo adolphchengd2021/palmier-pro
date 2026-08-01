@@ -80,10 +80,14 @@ Rgba32Float sourceOver(const Rgba32Float& source, const Rgba32Float& destination
 
 RenderedFrame CpuRenderer::render(
     const RenderPlan& plan,
-    const FrameResolver& resolveFrame
+    const FrameResolver& resolveFrame,
+    std::stop_token cancellation
 ) {
     const auto pixelCount = static_cast<std::size_t>(plan.canvasWidth()) * plan.canvasHeight();
-    const auto sources = resolveAndValidateSourceFrames(plan, resolveFrame);
+    const auto sources = resolveAndValidateSourceFrames(plan, resolveFrame, cancellation);
+    if (cancellation.stop_requested()) {
+        throw RenderError("cancelled", "/", "CPU render was cancelled");
+    }
     std::vector<Rgba32Float> pixels;
     try {
         pixels.assign(pixelCount, {0, 0, 0, 1});
@@ -94,12 +98,21 @@ RenderedFrame CpuRenderer::render(
             "CPU render output allocation failed"
         );
     }
+    if (cancellation.stop_requested()) {
+        throw RenderError("cancelled", "/", "CPU render was cancelled");
+    }
     RenderedFrame result{plan.canvasWidth(), plan.canvasHeight(), std::move(pixels)};
 
     for (std::size_t layerIndex = 0; layerIndex < plan.layers().size(); ++layerIndex) {
+        if (cancellation.stop_requested()) {
+            throw RenderError("cancelled", "/", "CPU render was cancelled");
+        }
         const auto& layer = plan.layers()[layerIndex];
         const auto& source = *sources[layerIndex];
         for (std::uint32_t y = 0; y < plan.canvasHeight(); ++y) {
+            if (cancellation.stop_requested()) {
+                throw RenderError("cancelled", "/", "CPU render was cancelled");
+            }
             for (std::uint32_t x = 0; x < plan.canvasWidth(); ++x) {
                 const auto sourcePixel = sampleLayer(
                     layer,

@@ -25,6 +25,12 @@ void requireFinite(float value, const std::string& pointer) {
     }
 }
 
+void checkCancellation(std::stop_token cancellation) {
+    if (cancellation.stop_requested()) {
+        fail("cancelled", "/", "render operation was cancelled");
+    }
+}
+
 }
 
 RenderError::RenderError(std::string codeValue, std::string pointerValue, std::string detail)
@@ -170,17 +176,21 @@ const std::vector<RenderLayer>& RenderPlan::layers() const noexcept { return lay
 RenderedFrame renderPreviewFrame(
     const RenderPlan& plan,
     const FrameResolver& resolveFrame,
-    RenderBackend& backend
+    RenderBackend& backend,
+    std::stop_token cancellation
 ) {
-    return backend.render(plan, resolveFrame);
+    checkCancellation(cancellation);
+    return backend.render(plan, resolveFrame, cancellation);
 }
 
 RenderedFrame renderExportFrame(
     const RenderPlan& plan,
     const FrameResolver& resolveFrame,
-    RenderBackend& backend
+    RenderBackend& backend,
+    std::stop_token cancellation
 ) {
-    return backend.render(plan, resolveFrame);
+    checkCancellation(cancellation);
+    return backend.render(plan, resolveFrame, cancellation);
 }
 
 void validateSourceFrameDimensions(
@@ -207,14 +217,22 @@ void validateSourceFrameDimensions(
     }
 }
 
-void validateSourceFrame(const SourceFrame& frame, std::string_view layerPointer) {
+void validateSourceFrame(
+    const SourceFrame& frame,
+    std::string_view layerPointer,
+    std::stop_token cancellation
+) {
     const auto pointer = std::string(layerPointer);
     validateSourceFrameDimensions(frame.width, frame.height, pointer);
     const auto expected = static_cast<std::uint64_t>(frame.width) * frame.height;
     if (expected != frame.pixels.size()) {
         fail("invalidSourceStorage", pointer, "source pixel count does not match dimensions");
     }
-    for (const auto& pixel : frame.pixels) {
+    for (std::size_t index = 0; index < frame.pixels.size(); ++index) {
+        if ((index & 4'095U) == 0) {
+            checkCancellation(cancellation);
+        }
+        const auto& pixel = frame.pixels[index];
         const double values[]{pixel.red, pixel.green, pixel.blue, pixel.alpha};
         for (const auto value : values) {
             if (!std::isfinite(value) || value < 0 || value > 1) {
@@ -230,8 +248,10 @@ void validateSourceFrame(const SourceFrame& frame, std::string_view layerPointer
 
 std::vector<const SourceFrame*> resolveAndValidateSourceFrames(
     const RenderPlan& plan,
-    const FrameResolver& resolveFrame
+    const FrameResolver& resolveFrame,
+    std::stop_token cancellation
 ) {
+    checkCancellation(cancellation);
     std::vector<const SourceFrame*> sources;
     try {
         sources.reserve(plan.layers().size());
@@ -241,6 +261,7 @@ std::vector<const SourceFrame*> resolveAndValidateSourceFrames(
 
     std::uint64_t resolvedSourcePixels = 0;
     for (std::size_t index = 0; index < plan.layers().size(); ++index) {
+        checkCancellation(cancellation);
         const auto& layer = plan.layers()[index];
         const auto pointer = "/layers/" + std::to_string(index);
         const auto* source = resolveFrame(layer.mediaId, layer.sourceFrame);
@@ -252,7 +273,7 @@ std::vector<const SourceFrame*> resolveAndValidateSourceFrames(
             );
         }
         if (std::find(sources.begin(), sources.end(), source) == sources.end()) {
-            validateSourceFrame(*source, pointer);
+            validateSourceFrame(*source, pointer, cancellation);
         }
         const auto sourcePixels = static_cast<std::uint64_t>(source->width)
             * source->height;

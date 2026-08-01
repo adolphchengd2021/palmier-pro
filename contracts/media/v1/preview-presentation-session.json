@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "owner": "windows/preview-session",
+  "stateOwner": "one coordinator owns the headless A/V generation, latest selected source frame, shared renderer, pending rendered frame, HWND surface, render serial, present serial, cancellation admission, and close receipt",
+  "threadContract": "all synchronous play, tick, render, resize, present, cancel, and close work runs on one background presentation executor and never on the Qt UI thread",
+  "states": [
+    "idle",
+    "playing",
+    "completed",
+    "cancelled",
+    "invalidated",
+    "failed",
+    "closed"
+  ],
+  "outcomes": [
+    "changed",
+    "presented",
+    "noOp",
+    "stale",
+    "cancelled",
+    "refused",
+    "occluded",
+    "unavailable",
+    "invalidated",
+    "failed"
+  ],
+  "stages": [
+    "none",
+    "validate",
+    "startPlayback",
+    "tickPlayback",
+    "render",
+    "present",
+    "resize",
+    "cancel",
+    "close"
+  ],
+  "failures": [
+    "none",
+    "invalidRequest",
+    "playbackFailure",
+    "renderFailure",
+    "surfaceFailure",
+    "invariantFailure"
+  ],
+  "receiptFields": [
+    "generation",
+    "state",
+    "outcome",
+    "stage",
+    "failure",
+    "hresult",
+    "mediaFailureCode",
+    "hasTargetTimelineFrame",
+    "targetTimelineFrame",
+    "hasSourcePresentationTimestamp",
+    "sourcePresentationTimestamp",
+    "hasCachedFrame",
+    "renderSerial",
+    "presentSerial"
+  ],
+  "invariants": {
+    "singleClock": "each admitted scheduler tick calls the headless A/V tick exactly once and reuses its target timeline frame without separate clock math",
+    "sourceOwnership": "the latest selected source frame remains cached until replacement, cancellation, or close so a surface retry or resize cannot consume a second media frame",
+    "coalescing": "an unchanged source PTS, target timeline frame, settings, and surface does not rerender or call Present",
+    "retry": "occluded and busy presentation retain one rendered frame and retry at most once on a later scheduler tick without polling",
+    "resize": "resize marks cached content dirty but does not consume media or render synchronously on the caller's resize request",
+    "failure": "render or terminal surface failure stops the matching playback generation, releases cached frame ownership before its receipt, and returns an explicit terminal result; a terminal surface refuses playback and resize until a new session owns a new device",
+    "cancellation": "close requests the admitted operation stop source before waiting for serialized ownership; cancellation is rechecked before render and Present, and no work is admitted after close",
+    "settings": "the first boundary accepts only one integer-rate resolved layer and validates the shared RenderPlan before starting playback"
+  },
+  "excluded": [
+    "Qt timer and window integration",
+    "visible pixel and interactive cadence evidence",
+    "multi-layer project compilation",
+    "fractional frame rates",
+    "zero-copy decode-render-present interop",
+    "physical audio and GPU synchronization",
+    "device recreation",
+    "Windows 10 runtime certification"
+  ]
+}

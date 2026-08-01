@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstring>
 #include <iomanip>
@@ -158,6 +159,38 @@ private:
     D3D11_MAPPED_SUBRESOURCE mapped_{};
 };
 
+class RenderGateLease final {
+public:
+    RenderGateLease(
+        std::mutex& mutex,
+        std::condition_variable_any& condition,
+        bool& occupied,
+        std::stop_token cancellation
+    ) : mutex_(mutex), condition_(condition), occupied_(occupied) {
+        std::unique_lock lock(mutex_);
+        if (!condition_.wait(lock, cancellation, [&] { return !occupied_; })) {
+            fail("cancelled", "D3D11 render gate wait was cancelled");
+        }
+        occupied_ = true;
+    }
+
+    ~RenderGateLease() {
+        {
+            std::scoped_lock lock(mutex_);
+            occupied_ = false;
+        }
+        condition_.notify_one();
+    }
+
+    RenderGateLease(const RenderGateLease&) = delete;
+    RenderGateLease& operator=(const RenderGateLease&) = delete;
+
+private:
+    std::mutex& mutex_;
+    std::condition_variable_any& condition_;
+    bool& occupied_;
+};
+
 ComPtr<ID3DBlob> compileShader(const char* entryPoint, const char* target) {
     constexpr UINT flags = D3DCOMPILE_ENABLE_STRICTNESS
         | D3DCOMPILE_IEEE_STRICTNESS
@@ -304,9 +337,25 @@ public:
         );
     }
 
-    RenderedFrame render(const RenderPlan& plan, const FrameResolver& resolveFrame) {
-        const std::scoped_lock lock(renderMutex_);
-        const auto sources = resolveAndValidateSourceFrames(plan, resolveFrame);
+    RenderedFrame render(
+        const RenderPlan& plan,
+        const FrameResolver& resolveFrame,
+        std::stop_token cancellation
+    ) {
+        if (cancellation.stop_requested()) {
+            fail("cancelled", "D3D11 render was cancelled");
+        }
+        [[maybe_unused]] const RenderGateLease gate(
+            renderGateMutex_,
+            renderGateCondition_,
+            renderGateOccupied_,
+            cancellation
+        );
+        const auto sources = resolveAndValidateSourceFrames(
+            plan,
+            resolveFrame,
+            cancellation
+        );
         const auto targetDescription = textureDescription(
             plan.canvasWidth(),
             plan.canvasHeight(),
@@ -347,6 +396,10 @@ public:
         context_->PSSetConstantBuffers(0, 1, constantBuffers);
 
         for (std::size_t index = 0; index < plan.layers().size(); ++index) {
+            if (cancellation.stop_requested()) {
+                context_->ClearState();
+                fail("cancelled", "D3D11 render was cancelled");
+            }
             const auto& layer = plan.layers()[index];
             const auto& source = *sources[index];
             const auto sourceDescription = textureDescription(
@@ -404,6 +457,10 @@ public:
             D3D11_CPU_ACCESS_READ
         );
         ComPtr<ID3D11Texture2D> staging;
+        if (cancellation.stop_requested()) {
+            context_->ClearState();
+            fail("cancelled", "D3D11 render was cancelled");
+        }
         requireSuccess(
             device_->CreateTexture2D(&stagingDescription, nullptr, &staging),
             "CreateTexture2D(staging)"
@@ -424,6 +481,10 @@ public:
         context_->CopyResource(staging.Get(), targetTexture.Get());
         const ScopedTextureMap mapped(context_.Get(), staging.Get());
         for (std::uint32_t row = 0; row < plan.canvasHeight(); ++row) {
+            if (cancellation.stop_requested()) {
+                context_->ClearState();
+                fail("cancelled", "D3D11 render was cancelled");
+            }
             const auto* sourceRow = static_cast<const std::byte*>(mapped.value().pData)
                 + static_cast<std::size_t>(row) * mapped.value().RowPitch;
             auto* destinationRow = output.pixels.data()
@@ -446,7 +507,9 @@ private:
     ComPtr<ID3D11Buffer> layerConstants_;
     ComPtr<ID3D11BlendState> blendState_;
     ComPtr<ID3D11RasterizerState> rasterizerState_;
-    std::mutex renderMutex_;
+    std::mutex renderGateMutex_;
+    std::condition_variable_any renderGateCondition_;
+    bool renderGateOccupied_{};
 };
 
 D3d11WarpRenderer::D3d11WarpRenderer() : impl_(std::make_unique<Impl>()) {}
@@ -454,9 +517,10 @@ D3d11WarpRenderer::~D3d11WarpRenderer() = default;
 
 RenderedFrame D3d11WarpRenderer::render(
     const RenderPlan& plan,
-    const FrameResolver& resolveFrame
+    const FrameResolver& resolveFrame,
+    std::stop_token cancellation
 ) {
-    return impl_->render(plan, resolveFrame);
+    return impl_->render(plan, resolveFrame, cancellation);
 }
 
 }

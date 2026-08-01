@@ -131,6 +131,17 @@ physical-GPU performance, device recovery, A/V synchronization, and Windows 10
 runtime behavior remain open. See ADR 0021 and
 `contracts/render/v1/d3d11-preview-surface.json`.
 
+The first background preview coordinator now owns the headless A/V generation,
+latest selected source frame, shared WARP renderer, pending rendered frame, and
+one HWND surface. Each scheduler tick consumes the headless audio-clock tick
+exactly once. Identical content is coalesced; busy or occluded Present results
+retain one rendered frame for one later tick, and resize only marks cached
+content dirty. This boundary has no timer or retry loop and must not run on the
+Qt UI thread. Its injected tests do not prove Qt integration, visible pixels,
+physical A/V synchronization, fractional frame rates, zero-copy performance,
+or Windows 10 runtime behavior. See ADR 0022 and
+`contracts/media/v1/preview-presentation-session.json`.
+
 The first Qt target is an optional read-only project shell:
 
 ```powershell

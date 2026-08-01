@@ -106,7 +106,8 @@
     "unknown-alpha-mode"
   ],
   "projectCompilerAvailable": false,
-  "rendererConcurrency": "serialized-immediate-context-per-backend-instance",
+  "rendererConcurrency": "a stop-token-aware gate serializes the immediate context per backend instance",
+  "rendererCancellation": "shared preview/export and CPU/WARP backends accept a stop token and check it before validation, allocation, each layer, and bounded row work; a synchronous D3D11 staging Map remains non-interruptible",
   "resolverLifetime": "immutable-source-through-render-call",
   "runtimeGates": {
     "windowsServer2022Warp": "required-ci",

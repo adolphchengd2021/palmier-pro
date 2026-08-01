@@ -8,7 +8,8 @@ class CpuRenderer final : public RenderBackend {
 public:
     RenderedFrame render(
         const RenderPlan& plan,
-        const FrameResolver& resolveFrame
+        const FrameResolver& resolveFrame,
+        std::stop_token cancellation = {}
     ) override;
 };
 

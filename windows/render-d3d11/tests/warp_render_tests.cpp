@@ -165,12 +165,35 @@ void clockwiseRotationCoverage() {
     compareFrames(expected, warp.render(plan, resolver), 2e-5F);
 }
 
+void cancellationStopsWarpBeforeRendering() {
+    const SourceFrame source{1, 1, {{1, 0, 0, 1}}};
+    const auto plan = RenderPlan::create(
+        1,
+        1,
+        30,
+        0,
+        {layer("clip", "track", "media")}
+    );
+    const auto resolver = [&](std::string_view, std::int64_t) { return &source; };
+    palmier::render::D3d11WarpRenderer warp;
+    std::stop_source stopped;
+    stopped.request_stop();
+    try {
+        static_cast<void>(warp.render(plan, resolver, stopped.get_token()));
+    } catch (const palmier::render::RenderError& error) {
+        require(error.code == "cancelled", "WARP cancellation code differs");
+        return;
+    }
+    throw std::runtime_error("cancelled WARP render was accepted");
+}
+
 }
 
 int main() {
     try {
         renderParity();
         clockwiseRotationCoverage();
+        cancellationStopsWarpBeforeRendering();
         std::cout << "PALMIER_D3D11_WARP_TESTS_OK\n";
         return 0;
     } catch (const std::exception& error) {

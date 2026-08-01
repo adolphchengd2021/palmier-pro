@@ -1713,7 +1713,7 @@ def windows_render_plan_contract() -> None:
     require_equal(
         "render plan backend concurrency",
         contract["rendererConcurrency"],
-        "serialized-immediate-context-per-backend-instance",
+        "a stop-token-aware gate serializes the immediate context per backend instance",
     )
     require_equal(
         "render plan resolver lifetime",
@@ -1755,7 +1755,11 @@ def windows_render_plan_contract() -> None:
             "wasapiAudio": "pending",
         },
     )
-
+    require_equal(
+        "render plan cancellation",
+        contract["rendererCancellation"],
+        "shared preview/export and CPU/WARP backends accept a stop token and check it before validation, allocation, each layer, and bounded row work; a synchronous D3D11 staging Map remains non-interruptible",
+    )
     header = read_text("core/render/include/palmier/render/render_plan.hpp")
     plan_source = read_text("core/render/render_plan.cpp")
     cpu_source = read_text("core/render/cpu_renderer.cpp")
@@ -1780,8 +1784,9 @@ def windows_render_plan_contract() -> None:
         '"sourceWorkBudgetExceeded"',
         "std::remainder(",
         "resolveAndValidateSourceFrames(",
-        "return backend.render(plan, resolveFrame);",
+        "return backend.render(plan, resolveFrame, cancellation);",
         "validateSourceFrame",
+        'fail("cancelled", "/", "render operation was cancelled")',
     ]:
         if token not in plan_source:
             raise ContractError(f"render plan source missing token {token!r}")
@@ -1792,6 +1797,7 @@ def windows_render_plan_contract() -> None:
         "sourceOver",
         "pixels.assign(pixelCount, {0, 0, 0, 1})",
         "!std::isfinite(sourceU)",
+        "cancellation.stop_requested()",
     ]:
         if token not in cpu_source:
             raise ContractError(f"CPU reference renderer missing token {token!r}")
@@ -1806,7 +1812,9 @@ def windows_render_plan_contract() -> None:
         "D3D11_USAGE_STAGING",
         "mapped.value().RowPitch",
         "ScopedTextureMap",
-        "std::scoped_lock lock(renderMutex_)",
+        "condition_.wait(lock, cancellation",
+        "D3D11 render gate wait was cancelled",
+        'fail("cancelled", "D3D11 render was cancelled")',
     ]:
         if token not in warp_source:
             raise ContractError(f"D3D11 WARP renderer missing token {token!r}")
@@ -3229,6 +3237,159 @@ def windows_d3d11_preview_surface_contract() -> None:
             raise ContractError(f"D3D11 preview ADR missing token {token!r}")
 
 
+def windows_preview_presentation_session_contract() -> None:
+    contract = load_json("contracts/media/v1/preview-presentation-session.json")
+    header = read_text(
+        "windows/preview-session/include/palmier/preview/"
+        "preview_presentation_session.hpp"
+    )
+    source = read_text(
+        "windows/preview-session/preview_presentation_session.cpp"
+    )
+    tests = read_text(
+        "windows/preview-session/tests/preview_presentation_session_tests.cpp"
+    )
+    cmake = read_text("windows/preview-session/CMakeLists.txt")
+    root_cmake = read_text("CMakeLists.txt")
+    windows_readme = read_text("docs/windows/README.md")
+
+    require_equal(
+        "preview presentation version",
+        contract.get("version"),
+        CONTRACT_VERSION,
+    )
+    require_equal(
+        "preview presentation states",
+        cpp_enum_cases(header, "PreviewPresentationState"),
+        contract.get("states"),
+    )
+    require_equal(
+        "preview presentation outcomes",
+        cpp_enum_cases(header, "PreviewPresentationOutcome"),
+        contract.get("outcomes"),
+    )
+    require_equal(
+        "preview presentation stages",
+        cpp_enum_cases(header, "PreviewPresentationStage"),
+        contract.get("stages"),
+    )
+    require_equal(
+        "preview presentation failures",
+        cpp_enum_cases(header, "PreviewPresentationFailureCode"),
+        contract.get("failures"),
+    )
+    require_equal(
+        "preview presentation receipt fields",
+        cpp_stored_fields(header, "PreviewPresentationReceipt"),
+        contract.get("receiptFields"),
+    )
+    require_equal(
+        "preview presentation exclusions",
+        contract.get("excluded"),
+        [
+            "Qt timer and window integration",
+            "visible pixel and interactive cadence evidence",
+            "multi-layer project compilation",
+            "fractional frame rates",
+            "zero-copy decode-render-present interop",
+            "physical audio and GPU synchronization",
+            "device recreation",
+            "Windows 10 runtime certification",
+        ],
+    )
+    for token in [
+        "class PreviewPlaybackPort",
+        "class PreviewRenderPort",
+        "class PreviewSurfacePort",
+        "class PreviewPresentationSession final",
+        "PreviewPresentationReceipt play(",
+        "PreviewPresentationReceipt tick(",
+        "PreviewPresentationReceipt resize(",
+        "PreviewPresentationReceipt cancel(",
+        "PreviewPresentationReceipt snapshot() const",
+        "PreviewPresentationReceipt close()",
+        "std::shared_ptr<detail::PreviewPresentationActiveOperation>",
+    ]:
+        if token not in header:
+            raise ContractError(f"preview presentation API missing token {token!r}")
+    for token in [
+        "playback_->tick(",
+        "cachedFrame_ = std::move(playback.frame)",
+        "presentationDirty_ = true",
+        "pendingRenderedFrame_ = renderer_->render(",
+        "surface_->present(",
+        "pendingRenderedSourceTimestamp_ != sourceTimestamp",
+        "pendingRenderedTargetFrame_ != targetFrame",
+        "isSurfaceTerminal(surface.outcome)",
+        "terminalSurfaceReceipt_ = surface",
+        "playback_->cancel(generation_)",
+        "activeOperation_->cancellation.request_stop()",
+        "PreviewPresentationStage::render",
+        "closeRequested_ = true",
+        "closeReceipt_.has_value()",
+    ]:
+        if token not in source:
+            raise ContractError(f"preview presentation invariant missing token {token!r}")
+    if "audio::timelineFrame(" in source or "targetPresentationTimestamp(" in source:
+        raise ContractError("preview presentation coordinator duplicates clock math")
+    if "while (" in source or "Sleep(" in source:
+        raise ContractError("preview presentation coordinator must not poll or retry")
+    if source.count("playback_->tick(") != 1:
+        raise ContractError("preview presentation must have one headless tick call site")
+    for token in [
+        "oneTickConsumesAndPresentsOneFrame",
+        "busySurfaceRetriesTheRenderedFrame",
+        "completedPlaybackRetriesAndResizesTheFinalFrame",
+        "resizeMarksTheCachedFrameDirty",
+        "settingsCanChangeWithoutRestartingPlayback",
+        "invalidAndStaleRequestsDoNotReachOwnedPorts",
+        "terminalSurfaceStopsPlayback",
+        "renderFailureStopsPlayback",
+        "cancellationAfterPlaybackStopsBeforeRender",
+        "postCommitPlaybackFailureAdvancesTheTerminalGeneration",
+        "invalidCancelCannotStopTheFirstPlay",
+        "cancellationAndCloseSurfaceFailuresStayObservable",
+        "closeInterruptsOneAdmittedTick",
+        "tick was consumed more than once",
+        "busy retry rerendered identical content",
+        "resize path bypassed scheduler tick ownership",
+        "close did not cancel admitted tick",
+    ]:
+        if token not in tests:
+            raise ContractError(f"preview presentation test missing token {token!r}")
+    for token in [
+        "palmier_preview_session",
+        "palmier_preview_presentation_session_tests",
+        "preview_session.presentation_coordinator",
+        "PROPERTIES TIMEOUT 30",
+    ]:
+        if token not in cmake:
+            raise ContractError(f"preview presentation CMake missing token {token!r}")
+    if "add_subdirectory(windows/preview-session)" not in root_cmake:
+        raise ContractError("root CMake is missing the preview presentation session")
+    for token in [
+        "owns the headless A/V generation",
+        "Each scheduler tick consumes the headless audio-clock tick",
+        "This boundary has no timer or retry loop",
+        "contracts/media/v1/preview-presentation-session.json",
+    ]:
+        if token not in windows_readme:
+            raise ContractError(f"preview presentation README missing token {token!r}")
+    adr = read_text("docs/windows/adr/0022-preview-presentation-coordinator.md")
+    for token in [
+        "single owner above the existing headless",
+        "never from the UI thread",
+        "calls `HeadlessAvPlaybackSession::tick` exactly",
+        "There is no polling loop, timer, or recursive retry",
+        "does not decode or\nrender inside the resize request",
+        "Close requests the stop\nsource before waiting",
+        "do not prove Qt integration",
+        "Windows 10 build 19045 behavior",
+    ]:
+        if token not in adr:
+            raise ContractError(f"preview presentation ADR missing token {token!r}")
+
+
 def windows_audio_wasapi_contract() -> None:
     root_cmake = read_text("CMakeLists.txt")
     audio_cmake = read_text("windows/audio-wasapi/CMakeLists.txt")
@@ -3797,6 +3958,7 @@ def main() -> int:
         ("Windows FFmpeg to WASAPI audio pipeline", windows_ffmpeg_wasapi_audio_pipeline_contract),
         ("Windows headless A/V playback", windows_headless_av_playback_contract),
         ("Windows D3D11 preview surface", windows_d3d11_preview_surface_contract),
+        ("Windows preview presentation session", windows_preview_presentation_session_contract),
         ("Windows WASAPI clock and environment probe", windows_audio_wasapi_contract),
         ("Windows bounded WASAPI output", windows_wasapi_output_contract),
         ("Windows Qt read-only project shell", windows_qt_read_only_shell_contract),

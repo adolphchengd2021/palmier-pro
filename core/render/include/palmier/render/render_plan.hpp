@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <stop_token>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -103,23 +104,30 @@ public:
     virtual ~RenderBackend() = default;
     virtual RenderedFrame render(
         const RenderPlan& plan,
-        const FrameResolver& resolveFrame
+        const FrameResolver& resolveFrame,
+        std::stop_token cancellation = {}
     ) = 0;
 };
 
 RenderedFrame renderPreviewFrame(
     const RenderPlan& plan,
     const FrameResolver& resolveFrame,
-    RenderBackend& backend
+    RenderBackend& backend,
+    std::stop_token cancellation = {}
 );
 
 RenderedFrame renderExportFrame(
     const RenderPlan& plan,
     const FrameResolver& resolveFrame,
-    RenderBackend& backend
+    RenderBackend& backend,
+    std::stop_token cancellation = {}
 );
 
-void validateSourceFrame(const SourceFrame& frame, std::string_view layerPointer);
+void validateSourceFrame(
+    const SourceFrame& frame,
+    std::string_view layerPointer,
+    std::stop_token cancellation = {}
+);
 
 void validateSourceFrameDimensions(
     std::uint32_t width,
@@ -129,7 +137,8 @@ void validateSourceFrameDimensions(
 
 std::vector<const SourceFrame*> resolveAndValidateSourceFrames(
     const RenderPlan& plan,
-    const FrameResolver& resolveFrame
+    const FrameResolver& resolveFrame,
+    std::stop_token cancellation = {}
 );
 
 }

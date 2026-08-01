@@ -273,6 +273,32 @@ void transformedLayerUsesTopLeftCanvasCoordinates() {
     requireNear(at(3, 3).red, 1, "bottom-right last covered pixel");
 }
 
+void cancellationStopsSharedRendering() {
+    const SourceFrame source{1, 1, {{1, 0, 0, 1}}};
+    const auto plan = RenderPlan::create(
+        1,
+        1,
+        30,
+        0,
+        {layer("clip", "track", "media")}
+    );
+    const auto resolver = [&](std::string_view, std::int64_t) { return &source; };
+    palmier::render::CpuRenderer renderer;
+    std::stop_source stopped;
+    stopped.request_stop();
+    requireError(
+        [&] {
+            static_cast<void>(palmier::render::renderPreviewFrame(
+                plan,
+                resolver,
+                renderer,
+                stopped.get_token()
+            ));
+        },
+        "cancelled"
+    );
+}
+
 }
 
 int main() {
@@ -283,6 +309,7 @@ int main() {
         resolvedSourceWorkIsBoundedBeforeRendering();
         cpuReferencePipeline();
         transformedLayerUsesTopLeftCanvasCoordinates();
+        cancellationStopsSharedRendering();
         std::cout << "PALMIER_RENDER_PLAN_TESTS_OK\n";
         return 0;
     } catch (const std::exception& error) {
