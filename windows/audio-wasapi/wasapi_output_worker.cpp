@@ -6,6 +6,7 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <condition_variable>
 #include <deque>
 #include <limits>
 #include <mutex>
