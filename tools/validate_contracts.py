@@ -2210,7 +2210,8 @@ def windows_qt_read_only_shell_contract() -> None:
         "include/palmier/windows/project_load_coordinator.hpp",
         "include/palmier/windows/read_only_timeline_model.hpp",
         "set_target_properties(palmier_qt_shell_tests PROPERTIES WIN32_EXECUTABLE FALSE)",
-        "COMMAND palmier_qt_shell_tests ${test_function} -v1 -o -,txt",
+        'set(test_log "${CMAKE_CURRENT_BINARY_DIR}/qt-test-${test_name}.txt")',
+        'COMMAND palmier_qt_shell_tests ${test_function} -v1 -o "${test_log},txt"',
         "PROPERTIES ENVIRONMENT \"QT_QPA_PLATFORM=offscreen\" TIMEOUT 30",
         "add_palmier_qt_shell_test(reader_maps_current_project readerMapsCurrentProject)",
         "add_palmier_qt_shell_test(model_publishes_track_layout modelPublishesReadOnlyTrackLayout)",
@@ -2319,6 +2320,10 @@ def windows_qt_read_only_shell_contract() -> None:
         "Windows Kits\\10\\Include\\10.0.26100.0",
         "cmake --preset windows-msvc-x64-qt-shell",
         "ctest --preset windows-msvc-x64-qt-shell-release",
+        "$testExitCode = $LASTEXITCODE",
+        'Get-ChildItem -Path "out/build/windows-msvc-x64-qt-shell" -Recurse -Filter "qt-test-*.txt"',
+        "Get-Content -LiteralPath $_.FullName -Encoding UTF8",
+        "exit $testExitCode",
     ]:
         if token not in workflow:
             raise ContractError(f"Qt shell workflow missing token {token!r}")

@@ -66,4 +66,17 @@ jobs:
         run: cmake --build --preset windows-msvc-x64-qt-shell-release --parallel
 
       - name: Test offscreen shell
-        run: ctest --preset windows-msvc-x64-qt-shell-release
+        shell: pwsh
+        run: |
+          ctest --preset windows-msvc-x64-qt-shell-release
+          $testExitCode = $LASTEXITCODE
+          if ($testExitCode -ne 0) {
+            Get-ChildItem -Path "out/build/windows-msvc-x64-qt-shell" -Recurse -Filter "qt-test-*.txt" |
+              Sort-Object -Property FullName |
+              ForEach-Object {
+                Write-Host "::group::$($_.Name)"
+                Get-Content -LiteralPath $_.FullName -Encoding UTF8
+                Write-Host "::endgroup::"
+              }
+            exit $testExitCode
+          }

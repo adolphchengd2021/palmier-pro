@@ -73,9 +73,10 @@ if(BUILD_TESTING)
     )
     add_dependencies(palmier_qt_shell_tests palmier_qt_shell)
     function(add_palmier_qt_shell_test test_name test_function)
+        set(test_log "${CMAKE_CURRENT_BINARY_DIR}/qt-test-${test_name}.txt")
         add_test(
             NAME qt_shell.${test_name}
-            COMMAND palmier_qt_shell_tests ${test_function} -v1 -o -,txt
+            COMMAND palmier_qt_shell_tests ${test_function} -v1 -o "${test_log},txt"
         )
         set_tests_properties(
             qt_shell.${test_name}
