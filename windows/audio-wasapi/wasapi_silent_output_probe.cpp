@@ -29,6 +29,7 @@ std::string stageName(WasapiOutputStage stage) {
     case WasapiOutputStage::clockPosition: return "clock-position";
     case WasapiOutputStage::stopClient: return "stop-client";
     case WasapiOutputStage::resetClient: return "reset-client";
+    case WasapiOutputStage::generationInvariant: return "generation-invariant";
     case WasapiOutputStage::closeBackend: return "close-backend";
     }
     return "none";
@@ -104,7 +105,7 @@ WasapiSilentOutputResult runSilentCycle() {
         machine.close();
         return terminalResult(paused, primedFrames, eventFrames);
     }
-    const auto reset = machine.reset();
+    const auto reset = machine.installGeneration(1, 2);
     if (reset.outcome != WasapiOutputOutcome::changed) {
         machine.close();
         return terminalResult(reset, primedFrames, eventFrames);

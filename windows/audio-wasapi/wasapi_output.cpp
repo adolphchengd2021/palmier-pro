@@ -163,19 +163,17 @@ WasapiOutputReceipt WasapiOutputStateMachine::fail(
 ) {
     value.stage = stage;
     value.hresult = result;
+    const bool shouldStop = clientRunning_
+        && stage != WasapiOutputStage::stopClient;
     if (isWasapiOutputInvalidation(result)) {
-        if (config_.generation != std::numeric_limits<std::uint64_t>::max()) {
-            ++config_.generation;
-        }
         queue_.clear();
-        clientRunning_ = false;
         state_ = WasapiOutputState::invalidated;
         value.outcome = WasapiOutputOutcome::invalidated;
     } else {
         state_ = WasapiOutputState::failed;
         value.outcome = WasapiOutputOutcome::failed;
     }
-    if (clientRunning_ && stage != WasapiOutputStage::stopClient) {
+    if (shouldStop) {
         backend_.stop();
     }
     clientRunning_ = false;
@@ -478,38 +476,92 @@ WasapiOutputReceipt WasapiOutputStateMachine::pause(std::stop_token stopToken) {
     return value;
 }
 
-WasapiOutputReceipt WasapiOutputStateMachine::reset(std::stop_token stopToken) {
-    auto value = receipt(WasapiOutputOperation::reset);
+WasapiOutputReceipt WasapiOutputStateMachine::discardGeneration(
+    std::uint64_t expectedGeneration,
+    std::stop_token stopToken
+) {
+    return resetForGeneration(
+        WasapiOutputOperation::discardGeneration,
+        expectedGeneration,
+        std::nullopt,
+        stopToken
+    );
+}
+
+WasapiOutputReceipt WasapiOutputStateMachine::installGeneration(
+    std::uint64_t expectedGeneration,
+    std::uint64_t nextGeneration,
+    std::stop_token stopToken
+) {
+    return resetForGeneration(
+        WasapiOutputOperation::installGeneration,
+        expectedGeneration,
+        nextGeneration,
+        stopToken
+    );
+}
+
+WasapiOutputReceipt WasapiOutputStateMachine::resetForGeneration(
+    WasapiOutputOperation operation,
+    std::uint64_t expectedGeneration,
+    std::optional<std::uint64_t> nextGeneration,
+    std::stop_token stopToken
+) {
+    auto value = receipt(operation);
     if (stopToken.stop_requested()) {
         value.outcome = WasapiOutputOutcome::cancelled;
         value.hresult = cancelledResult;
         return value;
     }
-    if (state_ == WasapiOutputState::ready) {
+    if (expectedGeneration != config_.generation
+        || (nextGeneration.has_value()
+            && (*nextGeneration == 0
+                || *nextGeneration <= expectedGeneration))) {
+        value.outcome = WasapiOutputOutcome::refused;
+        value.stage = WasapiOutputStage::generationInvariant;
+        value.hresult = E_INVALIDARG;
+        return value;
+    }
+    if (!nextGeneration.has_value()
+        && state_ == WasapiOutputState::ready
+        && queue_.availableFrames() == 0
+        && !queue_.endOfStream()) {
         value.outcome = WasapiOutputOutcome::noOp;
         return value;
     }
-    if (state_ != WasapiOutputState::stopped
+    if (state_ == WasapiOutputState::running) {
+        const HRESULT stopResult = backend_.stop();
+        checkpoint(WasapiOutputCheckpoint::afterStop);
+        if (FAILED(stopResult)) {
+            return fail(value, WasapiOutputStage::stopClient, stopResult);
+        }
+        clientRunning_ = false;
+        state_ = WasapiOutputState::stopped;
+        value.stage = WasapiOutputStage::stopClient;
+    }
+    if (state_ != WasapiOutputState::ready
+        && state_ != WasapiOutputState::stopped
         && state_ != WasapiOutputState::primed
         && state_ != WasapiOutputState::completed) {
         value.outcome = WasapiOutputOutcome::refused;
         value.hresult = E_ILLEGAL_METHOD_CALL;
         return value;
     }
-    if (config_.generation == std::numeric_limits<std::uint64_t>::max()) {
-        return fail(value, WasapiOutputStage::resetClient, E_UNEXPECTED);
+    if (state_ != WasapiOutputState::ready) {
+        const HRESULT resetResult = backend_.reset();
+        checkpoint(WasapiOutputCheckpoint::afterReset);
+        if (FAILED(resetResult)) {
+            return fail(value, WasapiOutputStage::resetClient, resetResult);
+        }
+        value.stage = WasapiOutputStage::resetClient;
     }
-    const HRESULT result = backend_.reset();
-    checkpoint(WasapiOutputCheckpoint::afterReset);
-    if (FAILED(result)) {
-        return fail(value, WasapiOutputStage::resetClient, result);
-    }
-    ++config_.generation;
     queue_.clear();
+    if (nextGeneration.has_value()) {
+        config_.generation = *nextGeneration;
+    }
     state_ = WasapiOutputState::ready;
     value.outcome = WasapiOutputOutcome::changed;
     value.currentState = state_;
-    value.stage = WasapiOutputStage::resetClient;
     value.generation = config_.generation;
     value.lateCancellation = stopToken.stop_requested();
     return value;

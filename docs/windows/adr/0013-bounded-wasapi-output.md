@@ -36,10 +36,13 @@ completed. Padding greater than the engine buffer is an invariant failure and
 is never clamped or subtracted.
 
 Pause calls `Stop` without reset, preserving the stream generation and native
-clock position. Reset is accepted only from stopped, primed, or completed, calls the native
-reset while no lease exists, clears queued PCM, increments the generation, and
-returns to ready. Device, resource, and audio-service invalidation also advance
-the generation, clear old PCM, and make the old stream unusable. Reopening and
+clock position. The control owner installs an exact strictly newer generation.
+The audio owner first calls `Stop` when running, then `Reset` when native audio
+may be pending and no lease exists, clears queued PCM, installs the requested
+identity, and returns to ready. Discard performs the same required engine flush
+while preserving the current identity; an empty ready generation is a no-op.
+Device, resource, and audio-service invalidation report the current generation
+instead of inventing a replacement identity. Reopening and
 default-device notification recovery are a later owner-level workflow.
 
 All native setup and output interfaces share `WasapiNativeStream`; the probe and

@@ -25,7 +25,8 @@ enum class WasapiOutputOperation {
     start,
     render,
     pause,
-    reset,
+    discardGeneration,
+    installGeneration,
     close,
 };
 
@@ -50,6 +51,7 @@ enum class WasapiOutputStage {
     clockPosition,
     stopClient,
     resetClient,
+    generationInvariant,
     closeBackend,
 };
 

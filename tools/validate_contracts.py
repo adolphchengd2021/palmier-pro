@@ -2925,7 +2925,10 @@ def windows_wasapi_output_contract() -> None:
         "value.requestedFrames = sourceEnded",
         "WasapiOutputState::completed",
         "value.lateCancellation = stopToken.stop_requested()",
-        "++config_.generation",
+        "WasapiOutputOperation::discardGeneration",
+        "WasapiOutputOperation::installGeneration",
+        "expectedGeneration != config_.generation",
+        "config_.generation = *nextGeneration",
         "isWasapiOutputInvalidation",
     ]:
         if token not in output_source:
@@ -2948,7 +2951,7 @@ def windows_wasapi_output_contract() -> None:
         "machine.start()",
         "machine.renderOnce(2'000)",
         "machine.pause()",
-        "machine.reset()",
+        "machine.installGeneration(1, 2)",
         "machine.close()",
         '"completed-silent-cycle"',
     ]:
@@ -2965,6 +2968,9 @@ def windows_wasapi_output_contract() -> None:
         "validatesPaddingBeforeSubtraction",
         "invalidationRejectsTheOldGeneration",
         "pauseResumeResetAndRepeatedCommandsAreExact",
+        "exactGenerationDiscardAndInstallAreOrdered",
+        "generationInstallFinishesAfterLateCancellation",
+        "generationInstallFailureIsAtomic",
         "preservesPrecisionAndFailureReceipts",
         "closeStopsRunningStreamAndReleasesBackend",
     ]:

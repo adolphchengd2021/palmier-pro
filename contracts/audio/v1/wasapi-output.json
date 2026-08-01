@@ -50,8 +50,9 @@
     "emptyPacket": "AUDCLNT_BUFFERFLAGS_SILENT",
     "endOfStream": "request and release only the remaining media frames; wait for endpoint padding to reach zero, then stop and complete",
     "pcmIdentity": "sample rate, encoding, channel count, container bits, valid bits, block align, channel mask, and interleaving must match before a lease",
-    "reset": "only while stopped or primed; increment generation",
-    "invalidation": "increment generation and reject the old stream"
+    "generation": "the control owner installs an exact strictly newer generation after any required Stop and Reset, then queue clear",
+    "discard": "when audio is pending, Stop and Reset flush released engine audio while preserving the current generation identity; an already empty ready generation is a no-op",
+    "invalidation": "report the current generation without inventing a replacement identity"
   },
   "nativeSmoke": {
     "payload": "silence only",

@@ -274,9 +274,9 @@ void endOfStreamReleasesTheExactTailThenCompletes() {
     require(completed.outcome == WasapiOutputOutcome::changed, "EOS did not complete");
     require(completed.currentState == WasapiOutputState::completed, "wrong EOS state");
     require(backend.calls.back() == "stop", "EOS completion did not stop client");
-    const auto reset = machine.reset();
+    const auto reset = machine.installGeneration(7, 42);
     require(reset.outcome == WasapiOutputOutcome::changed, "completed reset failed");
-    require(reset.generation == 8, "completed reset generation changed");
+    require(reset.generation == 42, "completed reset generation changed");
     require(machine.state() == WasapiOutputState::ready, "completed reset state changed");
 }
 
@@ -410,13 +410,23 @@ void invalidationRejectsTheOldGeneration() {
     WasapiPcmQueue queue(8, pcmFormat());
     WasapiOutputStateMachine machine(config(), backend, queue);
     require(machine.start().outcome == WasapiOutputOutcome::changed, "start failed");
+    require(queue.enqueue(frames({1, 2})), "stale PCM enqueue failed");
+    backend.calls.clear();
     backend.paddingResult = AUDCLNT_E_DEVICE_INVALIDATED;
 
     const auto result = machine.renderOnce(125);
     require(result.outcome == WasapiOutputOutcome::invalidated, "loss not invalidated");
     require(result.stage == WasapiOutputStage::currentPadding, "loss stage changed");
-    require(result.generation == 8, "generation did not advance");
+    require(result.generation == 7, "invalidation changed generation");
     require(machine.state() == WasapiOutputState::invalidated, "state not invalidated");
+    require(queue.availableFrames() == 0, "invalidation retained application PCM");
+    require(
+        backend.calls == std::vector<std::string>{"wait:125", "padding", "stop", "close"},
+        "invalidation teardown order changed"
+    );
+    const auto terminalCalls = backend.calls.size();
+    require(machine.close().outcome == WasapiOutputOutcome::changed, "terminal close failed");
+    require(backend.calls.size() == terminalCalls, "invalidation repeated teardown");
 }
 
 void pauseResumeResetAndRepeatedCommandsAreExact() {
@@ -424,8 +434,12 @@ void pauseResumeResetAndRepeatedCommandsAreExact() {
     WasapiPcmQueue queue(8, pcmFormat());
     WasapiOutputStateMachine machine(config(), backend, queue);
     const auto readyCalls = backend.calls.size();
-    require(machine.reset().outcome == WasapiOutputOutcome::noOp, "ready reset changed");
-    require(backend.calls.size() == readyCalls, "ready reset touched backend");
+    require(
+        machine.installGeneration(7, 42).outcome
+            == WasapiOutputOutcome::changed,
+        "ready generation install failed"
+    );
+    require(backend.calls.size() == readyCalls, "ready install touched backend");
     require(machine.start().outcome == WasapiOutputOutcome::changed, "start failed");
     const auto runningCalls = backend.calls.size();
     const auto repeatedStart = machine.start();
@@ -437,10 +451,136 @@ void pauseResumeResetAndRepeatedCommandsAreExact() {
     require(backend.calls.size() == stoppedCalls, "repeat pause touched backend");
     require(machine.start().outcome == WasapiOutputOutcome::changed, "resume failed");
     require(machine.pause().outcome == WasapiOutputOutcome::changed, "second pause failed");
-    const auto reset = machine.reset();
+    const auto reset = machine.installGeneration(42, 100);
     require(reset.outcome == WasapiOutputOutcome::changed, "reset failed");
-    require(reset.generation == 8, "reset generation wrong");
+    require(reset.generation == 100, "reset generation wrong");
     require(machine.state() == WasapiOutputState::ready, "reset did not become ready");
+}
+
+void exactGenerationDiscardAndInstallAreOrdered() {
+    ScriptedBackend backend;
+    WasapiPcmQueue queue(8, pcmFormat());
+    require(queue.enqueue(frames({1, 2, 3, 4})), "generation PCM enqueue failed");
+    WasapiOutputStateMachine machine(config(), backend, queue);
+    require(machine.start().outcome == WasapiOutputOutcome::changed, "start failed");
+    backend.calls.clear();
+    require(queue.enqueue(frames({9, 10})), "queued old-generation PCM failed");
+
+    const auto refused = machine.installGeneration(8, 42);
+    require(refused.outcome == WasapiOutputOutcome::refused, "stale owner installed");
+    require(
+        refused.stage == WasapiOutputStage::generationInvariant,
+        "stale owner lost its reason"
+    );
+    require(backend.calls.empty(), "stale generation touched backend");
+
+    const auto installed = machine.installGeneration(7, 42);
+    require(installed.outcome == WasapiOutputOutcome::changed, "install failed");
+    require(installed.generation == 42, "exact generation was not installed");
+    require(
+        backend.calls == std::vector<std::string>{"stop", "reset"},
+        "install did not flush the native engine before acknowledgement"
+    );
+    require(queue.availableFrames() == 0, "install retained application PCM");
+
+    require(machine.start().outcome == WasapiOutputOutcome::changed, "restart failed");
+    backend.calls.clear();
+    require(queue.enqueue(frames({5, 6})), "discard PCM enqueue failed");
+    const auto discarded = machine.discardGeneration(42);
+    require(discarded.outcome == WasapiOutputOutcome::changed, "discard failed");
+    require(discarded.generation == 42, "discard advanced generation");
+    require(queue.availableFrames() == 0, "discard retained PCM");
+    require(
+        backend.calls == std::vector<std::string>{"stop", "reset"},
+        "discard did not flush the native engine"
+    );
+    backend.calls.clear();
+    require(
+        machine.discardGeneration(42).outcome == WasapiOutputOutcome::noOp,
+        "empty ready discard changed"
+    );
+    require(backend.calls.empty(), "empty ready discard touched backend");
+}
+
+void generationInstallFinishesAfterLateCancellation() {
+    for (const auto target : {
+        WasapiOutputCheckpoint::afterStop,
+        WasapiOutputCheckpoint::afterReset,
+    }) {
+        ScriptedBackend backend;
+        WasapiPcmQueue queue(8, pcmFormat());
+        std::stop_source source;
+        CancellingCheckpoint checkpoint(target, source);
+        WasapiOutputStateMachine machine(config(), backend, queue, &checkpoint);
+        require(machine.start().outcome == WasapiOutputOutcome::changed, "checkpoint start failed");
+        backend.calls.clear();
+
+        const auto installed = machine.installGeneration(7, 42, source.get_token());
+        require(installed.outcome == WasapiOutputOutcome::changed, "late install failed");
+        require(installed.lateCancellation, "late install cancellation was hidden");
+        require(installed.generation == 42, "late install lost exact generation");
+        require(machine.state() == WasapiOutputState::ready, "late install state changed");
+        require(
+            backend.calls == std::vector<std::string>{"stop", "reset"},
+            "late install did not finish one atomic flush"
+        );
+    }
+}
+
+void generationInstallFailureIsAtomic() {
+    {
+        ScriptedBackend backend;
+        WasapiPcmQueue queue(8, pcmFormat());
+        WasapiOutputStateMachine machine(config(), backend, queue);
+        require(machine.start().outcome == WasapiOutputOutcome::changed, "start failed");
+        backend.calls.clear();
+        backend.stopResult = E_ACCESSDENIED;
+
+        const auto failed = machine.installGeneration(7, 42);
+        require(failed.outcome == WasapiOutputOutcome::failed, "Stop failure hidden");
+        require(failed.stage == WasapiOutputStage::stopClient, "Stop failure stage lost");
+        require(failed.generation == 7, "Stop failure installed generation");
+        require(
+            backend.calls == std::vector<std::string>{"stop", "close"},
+            "Stop failure reset or skipped close"
+        );
+    }
+    {
+        ScriptedBackend backend;
+        WasapiPcmQueue queue(8, pcmFormat());
+        WasapiOutputStateMachine machine(config(), backend, queue);
+        require(machine.start().outcome == WasapiOutputOutcome::changed, "start failed");
+        backend.calls.clear();
+        backend.resetResult = E_ACCESSDENIED;
+
+        const auto failed = machine.installGeneration(7, 42);
+        require(failed.outcome == WasapiOutputOutcome::failed, "Reset failure hidden");
+        require(failed.stage == WasapiOutputStage::resetClient, "Reset failure stage lost");
+        require(failed.generation == 7, "Reset failure installed generation");
+        require(
+            backend.calls == std::vector<std::string>{"stop", "reset", "close"},
+            "Reset failure teardown order changed"
+        );
+    }
+    {
+        ScriptedBackend backend;
+        WasapiPcmQueue queue(8, pcmFormat());
+        WasapiOutputStateMachine machine(config(), backend, queue);
+        require(machine.start().outcome == WasapiOutputOutcome::changed, "start failed");
+        backend.calls.clear();
+        backend.resetResult = AUDCLNT_E_DEVICE_INVALIDATED;
+
+        const auto invalidated = machine.installGeneration(7, 42);
+        require(
+            invalidated.outcome == WasapiOutputOutcome::invalidated,
+            "Reset invalidation hidden"
+        );
+        require(invalidated.generation == 7, "invalidation installed generation");
+        require(
+            backend.calls == std::vector<std::string>{"stop", "reset", "close"},
+            "Reset invalidation teardown order changed"
+        );
+    }
 }
 
 void preservesPrecisionAndFailureReceipts() {
@@ -521,6 +661,9 @@ int main() {
         validatesPaddingBeforeSubtraction();
         invalidationRejectsTheOldGeneration();
         pauseResumeResetAndRepeatedCommandsAreExact();
+        exactGenerationDiscardAndInstallAreOrdered();
+        generationInstallFinishesAfterLateCancellation();
+        generationInstallFailureIsAtomic();
         preservesPrecisionAndFailureReceipts();
         closeStopsRunningStreamAndReleasesBackend();
         clockFailureStillStopsTheStartedClientOnClose();

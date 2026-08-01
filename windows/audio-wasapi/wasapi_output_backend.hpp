@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <stop_token>
 #include <vector>
@@ -97,7 +98,15 @@ public:
         std::stop_token stopToken = {}
     );
     WasapiOutputReceipt pause(std::stop_token stopToken = {});
-    WasapiOutputReceipt reset(std::stop_token stopToken = {});
+    WasapiOutputReceipt discardGeneration(
+        std::uint64_t expectedGeneration,
+        std::stop_token stopToken = {}
+    );
+    WasapiOutputReceipt installGeneration(
+        std::uint64_t expectedGeneration,
+        std::uint64_t nextGeneration,
+        std::stop_token stopToken = {}
+    );
     WasapiOutputReceipt close() noexcept;
 
     [[nodiscard]] WasapiOutputState state() const;
@@ -110,6 +119,12 @@ private:
         std::stop_token stopToken
     );
     WasapiOutputReceipt receipt(WasapiOutputOperation operation) const;
+    WasapiOutputReceipt resetForGeneration(
+        WasapiOutputOperation operation,
+        std::uint64_t expectedGeneration,
+        std::optional<std::uint64_t> nextGeneration,
+        std::stop_token stopToken
+    );
     WasapiOutputReceipt fail(
         WasapiOutputReceipt value,
         WasapiOutputStage stage,
