@@ -43,6 +43,7 @@ using palmier::media::HeadlessAvPlaybackOutcome;
 using palmier::media::HeadlessAvPlaybackReceipt;
 using palmier::media::HeadlessAvPlaybackState;
 using palmier::preview::PreviewPresentationOutcome;
+using palmier::preview::PreviewPresentationFailureCode;
 using palmier::preview::PreviewPresentationSession;
 using palmier::preview::PreviewPresentationSettings;
 using palmier::preview::PreviewPresentationStage;
