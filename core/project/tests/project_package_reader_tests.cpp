@@ -1,4 +1,5 @@
 #include "palmier/project/project_package_reader.hpp"
+#include "palmier/project/media_manifest_reader.hpp"
 
 #include "project_package_reader_testing.hpp"
 
@@ -65,13 +66,17 @@ public:
     const std::filesystem::path& path() const noexcept { return path_; }
 
     void write(std::string_view content) const {
-        std::ofstream stream(path_ / "project.json", std::ios::binary);
+        write("project.json", content);
+    }
+
+    void write(std::string_view name, std::string_view content) const {
+        std::ofstream stream(path_ / name, std::ios::binary);
         if (!stream) {
-            throw std::runtime_error("cannot create project.json fixture");
+            throw std::runtime_error("cannot create package fixture");
         }
         stream.write(content.data(), static_cast<std::streamsize>(content.size()));
         if (!stream) {
-            throw std::runtime_error("cannot write project.json fixture");
+            throw std::runtime_error("cannot write package fixture");
         }
     }
 
@@ -88,6 +93,22 @@ void requirePackageError(Operation operation, const std::string& code) {
         return;
     }
     throw std::runtime_error("expected project package failure");
+}
+
+template<typename Operation>
+void requireManifestError(
+    Operation operation,
+    const std::string& code,
+    const std::string& pointer = {}
+) {
+    try {
+        operation();
+    } catch (const palmier::project::MediaManifestReadError& error) {
+        require(error.code == code, "unexpected manifest error code");
+        require(error.jsonPointer == pointer, "unexpected manifest error pointer");
+        return;
+    }
+    throw std::runtime_error("expected media manifest failure");
 }
 
 class CancellingCheckpoint final : public ProjectPackageReadCheckpoints {
@@ -182,6 +203,73 @@ void readsRepositoryPackages(const std::filesystem::path& root) {
     require(
         at(unknown.source(), "x-contract-null").kind() == Value::Kind::nullValue,
         "unknown package field was lost"
+    );
+}
+
+void readsMediaManifestContract(const std::filesystem::path& root) {
+    const auto package = root / "fixtures/contracts/projects/current-multitimeline.palmier";
+    const auto manifest = palmier::project::readMediaManifest(package);
+    require(manifest.has_value(), "repository media manifest was not found");
+    require(manifest->entries.size() == 1, "wrong media entry count");
+    const auto& entry = manifest->entries.front();
+    require(entry.id == "media-main-1", "media ID changed");
+    require(entry.type == "video", "media type changed");
+    require(
+        entry.source.kind == palmier::project::MediaSourceKind::project,
+        "media source kind changed"
+    );
+    require(entry.source.path == "media/main.mp4", "media source path changed");
+    require(entry.hasAudio == true, "media audio hint changed");
+
+    TemporaryDirectory missing;
+    require(
+        !palmier::project::readMediaManifest(missing.path()),
+        "missing manifest did not return empty"
+    );
+}
+
+void validatesMediaManifestContract() {
+    TemporaryDirectory package;
+    package.write(
+        "media.json",
+        R"({"entries":[{"id":"first","name":"First","type":"video","source":{"external":{"absolutePath":"C:\\first.mov"}},"duration":1},{"id":"first","name":"Duplicate","type":"video","source":{"project":{"relativePath":"media/duplicate.mov"}},"duration":1}]})"
+    );
+    const auto manifest = palmier::project::readMediaManifest(package.path());
+    require(manifest && manifest->entries.size() == 2, "duplicate media IDs were not preserved");
+    require(manifest->entries.front().source.path == "C:\\first.mov", "first media entry changed");
+
+    package.write("media.json", R"({"version":0,"entries":[]})");
+    requireManifestError(
+        [&] { static_cast<void>(palmier::project::readMediaManifest(package.path())); },
+        "invalidManifestVersion",
+        "/version"
+    );
+    package.write(
+        "media.json",
+        R"({"entries":[{"id":"both","name":"Both","type":"video","source":{"external":{"absolutePath":"C:\\a.mov"},"project":{"relativePath":"media/a.mov"}},"duration":1}]})"
+    );
+    requireManifestError(
+        [&] { static_cast<void>(palmier::project::readMediaManifest(package.path())); },
+        "invalidMediaSource",
+        "/entries/0/source"
+    );
+    package.write("media.json", R"({"entries":[]})");
+    auto options = palmier::project::MediaManifestReadOptions{};
+    options.maximumMediaJsonBytes = 1;
+    requireManifestError(
+        [&] { static_cast<void>(palmier::project::readMediaManifest(package.path(), options)); },
+        "mediaJsonTooLarge"
+    );
+    std::stop_source cancellation;
+    cancellation.request_stop();
+    requireManifestError(
+        [&] {
+            static_cast<void>(palmier::project::readMediaManifest(
+                package.path(),
+                {.cancellation = cancellation.get_token()}
+            ));
+        },
+        "cancelled"
     );
 }
 
@@ -410,6 +498,8 @@ void growingFileCannotCrossLimit() {
 void runTests(const std::filesystem::path& root) {
     readsValidPackage();
     readsRepositoryPackages(root);
+    readsMediaManifestContract(root);
+    validatesMediaManifestContract();
     validatesPackageAndLimit();
     validatesJsonComplexityBudgets();
     defaultBudgetAcceptsMaximumTimelineProjection();

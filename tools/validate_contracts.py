@@ -3716,6 +3716,12 @@ def windows_wasapi_output_contract() -> None:
 
 
 def windows_qt_read_only_shell_contract() -> None:
+    media_header = read_text(
+        "core/project/include/palmier/project/media_manifest_reader.hpp"
+    )
+    media_source = read_text(
+        "core/project/serialization/media_manifest_reader.cpp"
+    )
     package_header = read_text(
         "core/project/include/palmier/project/project_package_reader.hpp"
     )
@@ -3760,6 +3766,34 @@ def windows_qt_read_only_shell_contract() -> None:
     ]:
         if token not in package_tests:
             raise ContractError(f"project package reader test missing token {token!r}")
+    for token in [
+        "defaultMaximumMediaJsonBytes",
+        "MediaSourceKind",
+        "MediaManifestReadError",
+        "std::stop_token cancellation",
+        "readMediaManifest(",
+        "Caller must run this synchronous file operation off the UI thread",
+    ]:
+        if token not in media_header:
+            raise ContractError(f"media manifest reader header missing token {token!r}")
+    for token in [
+        "mediaJsonTooLarge",
+        "invalidManifestVersion",
+        "invalidMediaSource",
+        "invalidMediaDuration",
+        "checkCancellation(options.cancellation)",
+        "palmier::json::parse",
+    ]:
+        if token not in media_source:
+            raise ContractError(f"media manifest reader invariant missing token {token!r}")
+    for token in [
+        "readsMediaManifestContract",
+        "validatesMediaManifestContract",
+        "duplicate media IDs were not preserved",
+        "mediaJsonTooLarge",
+    ]:
+        if token not in package_tests:
+            raise ContractError(f"media manifest reader test missing token {token!r}")
 
     root_cmake = read_text("CMakeLists.txt")
     presets = load_json("CMakePresets.json")
@@ -3812,6 +3846,7 @@ def windows_qt_read_only_shell_contract() -> None:
         'COMMAND palmier_qt_shell_tests ${test_function} -v1 -o "${test_log},txt"',
         "PROPERTIES ENVIRONMENT \"QT_QPA_PLATFORM=offscreen\" TIMEOUT 30",
         "add_palmier_qt_shell_test(reader_maps_current_project readerMapsCurrentProject)",
+        "stablePreviewCandidateUsesPersistedIds",
         "add_palmier_qt_shell_test(model_publishes_track_layout modelPublishesReadOnlyTrackLayout)",
         "add_palmier_qt_shell_test(failure_preserves_model failurePreservesPreviousModel)",
         "add_palmier_qt_shell_test(stale_generation_is_rejected staleGenerationCannotReplaceNewerProject)",
@@ -3855,6 +3890,10 @@ def windows_qt_read_only_shell_contract() -> None:
         "result.timelines.reserve(1)",
         "firstDiagnostic",
         "skippedUnsafeClipCount",
+        "projectPreviewForActiveTimeline",
+        "weakly_canonical",
+        "unstableCandidateId",
+        "mediaFileUnavailable",
     ]:
         if token not in projection:
             raise ContractError(f"Qt project projection missing token {token!r}")
@@ -3894,6 +3933,7 @@ def windows_qt_read_only_shell_contract() -> None:
             raise ContractError(f"Qt AppTheme mirror missing {swift_token!r}")
     for token in [
         "readerMapsCurrentProject",
+        "stablePreviewCandidateUsesPersistedIds",
         "failurePreservesPreviousModel",
         "cancellationReachesReader",
         "cancellationAfterWorkBeforeCommitRejectsResult",

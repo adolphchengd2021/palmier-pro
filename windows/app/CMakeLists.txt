@@ -100,6 +100,10 @@ if(BUILD_TESTING)
         )
     endfunction()
     add_palmier_qt_shell_test(reader_maps_current_project readerMapsCurrentProject)
+    add_palmier_qt_shell_test(
+        stable_preview_candidate_uses_persisted_ids
+        stablePreviewCandidateUsesPersistedIds
+    )
     add_palmier_qt_shell_test(model_publishes_track_layout modelPublishesReadOnlyTrackLayout)
     add_palmier_qt_shell_test(failure_preserves_model failurePreservesPreviousModel)
     add_palmier_qt_shell_test(stale_generation_is_rejected staleGenerationCannotReplaceNewerProject)
