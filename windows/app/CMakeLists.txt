@@ -71,7 +71,7 @@ if(BUILD_TESTING)
         PRIVATE /W4 /WX /permissive- /Zc:__cplusplus /utf-8
     )
     add_dependencies(palmier_qt_shell_tests palmier_qt_shell)
-    add_test(NAME qt_shell.reader_model_qml COMMAND palmier_qt_shell_tests)
+    add_test(NAME qt_shell.reader_model_qml COMMAND palmier_qt_shell_tests -v1)
     set_tests_properties(qt_shell.reader_model_qml PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_test(NAME qt_shell.module_smoke COMMAND palmier_qt_shell --smoke-test)
     set_tests_properties(qt_shell.module_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

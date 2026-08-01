@@ -14,6 +14,7 @@
 
 #include <condition_variable>
 #include <cstddef>
+#include <cstdio>
 #include <filesystem>
 #include <mutex>
 #include <stdexcept>
@@ -537,7 +538,9 @@ private slots:
 }
 
 int main(int argc, char* argv[]) {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     QGuiApplication application(argc, argv);
+    application.setQuitOnLastWindowClosed(false);
     QtShellTests tests;
     return QTest::qExec(&tests, argc, argv);
 }
