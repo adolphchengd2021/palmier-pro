@@ -9,7 +9,7 @@
 
 namespace {
 
-void drainShutdown(
+bool drainShutdown(
     palmier::windows::ProjectLoadCoordinator& project,
     palmier::windows::PreviewPresentationController& preview
 ) {
@@ -42,6 +42,8 @@ void drainShutdown(
     if (!projectReady || !previewReady) {
         loop.exec(QEventLoop::ExcludeUserInputEvents);
     }
+    return projectReady && previewReady && preview.shutdownComplete()
+        && preview.errorCode().isEmpty();
 }
 
 }
@@ -58,15 +60,36 @@ int main(int argc, char* argv[]) {
             : palmier::render::D3d11PreviewDriver::hardware,
         nullptr
     );
+    bool shutdownDraining{};
+    bool shutdownDrained{};
+    bool shutdownSucceeded{true};
+    const auto drainOnce = [&] {
+        if (shutdownDraining || shutdownDrained) return;
+        shutdownDraining = true;
+        shutdownSucceeded = drainShutdown(coordinator, previewController);
+        shutdownDrained = true;
+        shutdownDraining = false;
+    };
+    QObject::connect(
+        &application,
+        &QCoreApplication::aboutToQuit,
+        &application,
+        drainOnce,
+        Qt::DirectConnection
+    );
+    bool quitSmokeExitScheduled{};
     if (quitSmoke) {
         QObject::connect(
             &previewController,
             &palmier::windows::PreviewPresentationController::readyChanged,
             &application,
             [&] {
-                if (previewController.ready()) {
-                    QTimer::singleShot(0, &application, &QCoreApplication::quit);
-                }
+                if (!previewController.ready() || quitSmokeExitScheduled) return;
+                quitSmokeExitScheduled = true;
+                QTimer::singleShot(0, &application, [&] {
+                    drainOnce();
+                    application.exit(shutdownSucceeded ? 0 : 3);
+                });
             }
         );
         QObject::connect(
@@ -74,11 +97,15 @@ int main(int argc, char* argv[]) {
             &palmier::windows::PreviewPresentationController::errorCodeChanged,
             &application,
             [&] {
-                if (!previewController.errorCode().isEmpty()) {
-                    QTimer::singleShot(0, &application, [&application] {
-                        application.exit(2);
-                    });
+                if (previewController.errorCode().isEmpty() || shutdownDraining
+                    || quitSmokeExitScheduled) {
+                    return;
                 }
+                quitSmokeExitScheduled = true;
+                QTimer::singleShot(0, &application, [&] {
+                    drainOnce();
+                    application.exit(2);
+                });
             }
         );
     }
@@ -91,11 +118,12 @@ int main(int argc, char* argv[]) {
     engine.loadFromModule("PalmierPro.Windows", "Main");
     if (engine.rootObjects().isEmpty()) return 1;
     if (!quitSmoke && application.arguments().contains(QStringLiteral("--smoke-test"))) {
-        QTimer::singleShot(0, &application, [&application] {
-            application.closeAllWindows();
+        QTimer::singleShot(0, &application, [] {
+            for (auto* window : QGuiApplication::topLevelWindows()) window->close();
         });
     }
-    const auto result = application.exec();
-    drainShutdown(coordinator, previewController);
+    auto result = application.exec();
+    drainOnce();
+    if (!shutdownSucceeded && result == 0) result = 3;
     return result;
 }

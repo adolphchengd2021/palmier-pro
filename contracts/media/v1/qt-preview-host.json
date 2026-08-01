@@ -22,7 +22,7 @@
     "boundedQueue": "only one synchronous session command is in flight and resize bursts retain only the latest distinct physical size",
     "cancellation": "shutdown requests the admitted stop source before queuing serialized close and admits no later resize",
     "surfaceEpoch": "a changed HWND retires the current session instead of reusing its swap chain or accepting stale completion",
-    "shutdown": "the root QML window waits for both project loading and preview session close before allowing Qt to destroy the child window; post-event-loop drain covers programmatic quit, and unexpected controller teardown retains the QWindow until background session destruction"
+    "shutdown": "the root QML window waits for both project loading and preview session close before allowing Qt to destroy the child window; one guarded drain handles explicit quit before exit, aboutToQuit fallback, and post-event-loop fallback, close failure changes a successful exit code, and unexpected controller teardown retains the QWindow until background session destruction"
   },
   "excluded": [
     "project media resolution and playback requests",

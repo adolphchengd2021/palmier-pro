@@ -111,7 +111,7 @@ private:
     void scheduleResize(PendingResize request);
     void scheduleClose();
     void completeOperation(OperationResult result);
-    void completeShutdown(bool notify = true);
+    void completeShutdown(bool notify = true, QString errorCode = {});
     void setReady(bool value);
     void setState(QString value);
     void setErrorCode(QString value);

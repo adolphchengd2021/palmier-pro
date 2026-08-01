@@ -365,8 +365,7 @@ void PreviewPresentationController::completeOperation(OperationResult result) {
     activeCancellation_.reset();
     sessionExists_ = result.sessionExists;
     if (result.kind == OperationKind::close) {
-        setErrorCode(errorName(result.receipt));
-        completeShutdown();
+        completeShutdown(true, errorName(result.receipt));
         return;
     }
     if (shutdownRequested_) {
@@ -380,8 +379,11 @@ void PreviewPresentationController::completeOperation(OperationResult result) {
         || outcome == preview::PreviewPresentationOutcome::noOp
         || outcome == preview::PreviewPresentationOutcome::occluded;
     setReady(usable);
+    if (shutdownRequested_ || shutdownComplete_) return;
     setState(outcomeName(outcome));
+    if (shutdownRequested_ || shutdownComplete_) return;
     setErrorCode(errorName(result.receipt));
+    if (shutdownRequested_ || shutdownComplete_) return;
     if (pendingResize_) {
         const auto pending = *pendingResize_;
         pendingResize_.reset();
@@ -389,13 +391,14 @@ void PreviewPresentationController::completeOperation(OperationResult result) {
     }
 }
 
-void PreviewPresentationController::completeShutdown(bool notify) {
+void PreviewPresentationController::completeShutdown(bool notify, QString errorCode) {
+    if (shutdownComplete_) return;
+    shutdownComplete_ = true;
     sessionExists_ = false;
     nativeWindow_ = nullptr;
     setReady(false);
+    setErrorCode(std::move(errorCode));
     setState(errorCode_.isEmpty() ? QStringLiteral("closed") : QStringLiteral("failed"));
-    if (shutdownComplete_) return;
-    shutdownComplete_ = true;
     emit shutdownCompleteChanged();
     if (notify) emit shutdownReady();
 }

@@ -1,6 +1,7 @@
 #include "palmier/windows/preview_presentation_controller.hpp"
 #include "palmier/windows/project_load_coordinator.hpp"
 
+#include <QEventLoop>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlComponent>
@@ -49,6 +50,7 @@ struct FakeSessionState final {
     QSemaphore firstResizeEntered;
     QSemaphore releaseFirstResize;
     bool gateFirstResize{};
+    bool failClose{};
     bool destroyed{};
     HWND window{};
     bool windowAliveAtDestruction{};
@@ -96,7 +98,9 @@ public:
     PreviewPresentationReceipt close() override {
         const std::lock_guard lock(state_->mutex);
         state_->threads.push_back(std::this_thread::get_id());
-        return closedReceipt();
+        auto receipt = closedReceipt();
+        if (state_->failClose) receipt.outcome = PreviewPresentationOutcome::failed;
+        return receipt;
     }
 
 private:
@@ -292,6 +296,72 @@ private slots:
         state->releaseFirstResize.release();
         QTRY_VERIFY_WITH_TIMEOUT(sessionDestroyed(state), 5000);
         QTRY_VERIFY_WITH_TIMEOUT(!IsWindow(handle), 5000);
+    }
+
+    void shutdownDuringReadySignalDoesNotRestoreReadyState() {
+        auto state = std::make_shared<FakeSessionState>();
+        palmier::windows::PreviewPresentationController controller(
+            [state](HWND) { return std::make_unique<FakeSession>(state); },
+            nullptr
+        );
+        QObject::connect(
+            &controller,
+            &palmier::windows::PreviewPresentationController::readyChanged,
+            &controller,
+            [&] {
+                if (!controller.ready()) return;
+                QEventLoop loop;
+                QObject::connect(
+                    &controller,
+                    &palmier::windows::PreviewPresentationController::shutdownReady,
+                    &loop,
+                    &QEventLoop::quit
+                );
+                if (!controller.requestShutdown()) loop.exec();
+            }
+        );
+        QQmlEngine engine;
+        auto root = createPreviewWindow(engine, controller);
+        QVERIFY(root != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);
+        QCOMPARE(controller.state(), QStringLiteral("closed"));
+        QVERIFY(!controller.ready());
+        root.reset();
+    }
+
+    void shutdownFailureSignalReentryStillNotifiesDrain() {
+        auto state = std::make_shared<FakeSessionState>();
+        state->failClose = true;
+        palmier::windows::PreviewPresentationController controller(
+            [state](HWND) { return std::make_unique<FakeSession>(state); },
+            nullptr
+        );
+        QObject::connect(
+            &controller,
+            &palmier::windows::PreviewPresentationController::errorCodeChanged,
+            &controller,
+            [&] {
+                if (!controller.errorCode().isEmpty()) {
+                    static_cast<void>(controller.requestShutdown());
+                }
+            }
+        );
+        QSignalSpy shutdownReady(
+            &controller,
+            &palmier::windows::PreviewPresentationController::shutdownReady
+        );
+        QQmlEngine engine;
+        auto root = createPreviewWindow(engine, controller);
+        QVERIFY(root != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(controller.ready(), 5000);
+        QVERIFY(!controller.requestShutdown());
+        QTRY_COMPARE_WITH_TIMEOUT(shutdownReady.count(), 1, 5000);
+        QVERIFY(controller.shutdownComplete());
+        QCOMPARE(controller.errorCode(), QStringLiteral("previewFailed"));
+        QCOMPARE(controller.state(), QStringLiteral("failed"));
+        QVERIFY(controller.requestShutdown());
+        QCOMPARE(shutdownReady.count(), 1);
+        root.reset();
     }
 };
 

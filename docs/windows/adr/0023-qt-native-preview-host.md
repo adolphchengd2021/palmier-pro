@@ -34,9 +34,12 @@ window only after the session has closed and been destroyed on the background
 thread. If a controller is destroyed without the normal handshake, it retires
 the `QWindow`, closes and destroys the session on the background thread, and
 posts final window deletion back to the UI thread without waiting there.
-After the main event loop returns, the executable also drains project and
-preview shutdown completion before destroying the QML engine. This covers
-programmatic `QCoreApplication::quit()` paths that bypass the QML close event.
+One guarded executable-level drain covers explicit quit before exit,
+`aboutToQuit` as the system-termination fallback, and a final post-event-loop
+fallback before destroying the QML engine. A preview close failure changes an
+otherwise successful process exit code. Controller receipt publication checks
+for reentrant shutdown after each signal-emitting state setter so a nested drain
+cannot restore `ready` after reaching `closed`.
 
 The Qt shell preset now enables the locked FFmpeg prototype and vcpkg toolchain
 because the runtime controller links the real preview session. It shares the
@@ -49,10 +52,12 @@ Deterministic injected tests embed the real Qt `QWindow` with
 resize, close, and destruction stay on one non-UI thread, and hold the first
 resize while a burst confirms only the latest physical size is applied. A
 separate WARP smoke uses the real session, Qt child window, background resize,
-and close path. A second executable smoke calls `QCoreApplication::quit()`
-while the real Qt/WARP host is active and succeeds only after the post-loop
-shutdown drain. Existing QML tests cover read-only shell state and the combined
-project/preview shutdown barrier.
+and close path. A second executable smoke requests guarded application exit
+while the real Qt/WARP host is active and succeeds only after shutdown drain.
+Controller regressions perform a nested drain from `readyChanged`, prove the
+final state remains `closed`, and reenter shutdown from a close-failure signal
+without losing the single terminal receipt. Existing QML tests cover read-only
+shell state and the combined project/preview shutdown barrier.
 
 ## Evidence boundary
 

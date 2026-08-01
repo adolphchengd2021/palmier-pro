@@ -4031,6 +4031,7 @@ def windows_qt_preview_host_contract() -> None:
         "window_.release()",
         "delete retiredWindow",
         "QGuiApplication::platformName()",
+        "if (shutdownRequested_ || shutdownComplete_) return;",
     ]:
         if token not in source:
             raise ContractError(f"Qt preview host invariant missing token {token!r}")
@@ -4042,6 +4043,8 @@ def windows_qt_preview_host_contract() -> None:
         "warpChildSurfaceLifecycle",
         "qmlCloseWaitsForPreviewSessionRelease",
         "unexpectedTeardownRetiresWindowUntilSessionDestruction",
+        "shutdownDuringReadySignalDoesNotRestoreReadyState",
+        "shutdownFailureSignalReentryStillNotifiesDrain",
         "GetParent(child)",
         "WS_CHILD",
         "state_->firstResizeEntered",
@@ -4059,6 +4062,8 @@ def windows_qt_preview_host_contract() -> None:
         "warp_child_surface_lifecycle",
         "qml_close_waits_for_preview_release",
         "unexpected_teardown_retires_window",
+        "shutdown_during_ready_signal",
+        "shutdown_failure_signal_reentry",
         "qt_preview.programmatic_quit_drains",
         'ENVIRONMENT "QT_QPA_PLATFORM=windows" TIMEOUT 30',
     ]:
@@ -4076,10 +4081,12 @@ def windows_qt_preview_host_contract() -> None:
     for token in [
         "PreviewPresentationController previewController",
         'QStringLiteral("previewCoordinator")',
-        "application.closeAllWindows()",
+        "QGuiApplication::topLevelWindows()",
         "--quit-smoke-test",
-        "QCoreApplication::quit",
-        "drainShutdown(coordinator, previewController)",
+        "QCoreApplication::aboutToQuit",
+        "Qt::DirectConnection",
+        "drainOnce()",
+        "shutdownSucceeded",
         "QEventLoop::ExcludeUserInputEvents",
     ]:
         if token not in main_source:

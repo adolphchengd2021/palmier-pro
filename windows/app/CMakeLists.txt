@@ -169,6 +169,14 @@ if(BUILD_TESTING)
         unexpected_teardown_retires_window
         unexpectedTeardownRetiresWindowUntilSessionDestruction
     )
+    add_palmier_qt_preview_test(
+        shutdown_during_ready_signal
+        shutdownDuringReadySignalDoesNotRestoreReadyState
+    )
+    add_palmier_qt_preview_test(
+        shutdown_failure_signal_reentry
+        shutdownFailureSignalReentryStillNotifiesDrain
+    )
     add_test(
         NAME qt_preview.programmatic_quit_drains
         COMMAND palmier_qt_shell --quit-smoke-test
