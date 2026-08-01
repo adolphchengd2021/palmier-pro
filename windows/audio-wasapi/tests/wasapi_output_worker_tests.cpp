@@ -4,6 +4,7 @@
 #include "wasapi_output_worker_testing.hpp"
 
 #include <Windows.h>
+#include <audioclient.h>
 
 #include <algorithm>
 #include <atomic>
