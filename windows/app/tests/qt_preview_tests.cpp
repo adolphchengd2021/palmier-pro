@@ -607,7 +607,10 @@ private slots:
         QCOMPARE(playCount(state), std::size_t{1});
         {
             const std::lock_guard lock(state->mutex);
-            QCOMPARE(state->candidates.front().mediaId, std::string("media-a"));
+            QCOMPARE(
+                state->candidates.front().renderLayer.mediaId,
+                std::string("media-a")
+            );
             for (const auto thread : state->threads) {
                 QVERIFY(thread != uiThread);
                 QVERIFY(thread == state->threads.front());
@@ -638,7 +641,7 @@ private slots:
         {
             const std::lock_guard lock(state->mutex);
             QCOMPARE(
-                state->candidates.front().mediaId,
+                state->candidates.front().renderLayer.mediaId,
                 std::string("media-during-attach")
             );
         }
