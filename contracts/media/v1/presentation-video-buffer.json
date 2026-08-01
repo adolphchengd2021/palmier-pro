@@ -6,6 +6,7 @@
     "start",
     "enqueue",
     "dequeue",
+    "select",
     "cancel"
   ],
   "outcomes": [
@@ -21,6 +22,8 @@
     "stateChanged",
     "operationCancelled",
     "generationCancelled",
+    "staleClock",
+    "frameEarly",
     "frameCapacity",
     "byteCapacity"
   ],
@@ -33,6 +36,20 @@
     "queuedFrames",
     "queuedBytes"
   ],
+  "clockFields": [
+    "deviceAnchor",
+    "deviceSample",
+    "timelineFrameRate",
+    "sourcePresentationTimestamp",
+    "sourceTimeBase"
+  ],
+  "selectionFields": [
+    "receipt",
+    "frame",
+    "droppedFrames",
+    "hasTargetTimelineFrame",
+    "targetTimelineFrame"
+  ],
   "limits": {
     "maximumFrames": 8,
     "maximumBytes": 268435456
@@ -43,6 +60,10 @@
     "invalidAdapterResult",
     "revisionOverflow",
     "invalidGeneration",
+    "invalidClock",
+    "invalidClockSourceTimeBase",
+    "clockPositionDiscontinuity",
+    "clockArithmeticOverflow",
     "missingPresentationTimestamp",
     "invalidTimeBase",
     "changedTimeBase",
@@ -57,12 +78,14 @@
     "capacity": "refuse before adaptation when either frame or byte budget would be exceeded",
     "cancellation": "operation cancellation rejects one enqueue; generation cancellation clears the queue and rejects every late frame",
     "staleResult": "a result for any non-current generation or changed revision never mutates the buffer",
-    "dequeue": "frames leave in accepted presentation order"
+    "dequeue": "frames leave in accepted presentation order",
+    "clock": "selection requires one generation-matched device anchor and sample, a positive source-media time base, and checked integer timeline mapping",
+    "selection": "hold an early frame without mutation; otherwise atomically return the latest due frame, drop only older due frames, and advance revision once"
   },
   "excluded": [
     "file I/O or decode",
     "thread creation",
-    "audio synchronization",
+    "physical-device audio synchronization and drift correction",
     "seek or rate conversion",
     "interactive presentation",
     "cache eviction",

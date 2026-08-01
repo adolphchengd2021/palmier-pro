@@ -1943,7 +1943,7 @@ def validate_presentation_video_contract(contract: dict[str, Any]) -> None:
     require_equal(
         "presentation-video operations",
         contract.get("operations"),
-        ["start", "enqueue", "dequeue", "cancel"],
+        ["start", "enqueue", "dequeue", "select", "cancel"],
     )
     require_equal(
         "presentation-video outcomes",
@@ -1959,6 +1959,8 @@ def validate_presentation_video_contract(contract: dict[str, Any]) -> None:
             "stateChanged",
             "operationCancelled",
             "generationCancelled",
+            "staleClock",
+            "frameEarly",
             "frameCapacity",
             "byteCapacity",
         ],
@@ -1990,6 +1992,10 @@ def validate_presentation_video_contract(contract: dict[str, Any]) -> None:
             "invalidAdapterResult",
             "revisionOverflow",
             "invalidGeneration",
+            "invalidClock",
+            "invalidClockSourceTimeBase",
+            "clockPositionDiscontinuity",
+            "clockArithmeticOverflow",
             "missingPresentationTimestamp",
             "invalidTimeBase",
             "changedTimeBase",
@@ -2009,6 +2015,8 @@ def validate_presentation_video_contract(contract: dict[str, Any]) -> None:
             "cancellation": "operation cancellation rejects one enqueue; generation cancellation clears the queue and rejects every late frame",
             "staleResult": "a result for any non-current generation or changed revision never mutates the buffer",
             "dequeue": "frames leave in accepted presentation order",
+            "clock": "selection requires one generation-matched device anchor and sample, a positive source-media time base, and checked integer timeline mapping",
+            "selection": "hold an early frame without mutation; otherwise atomically return the latest due frame, drop only older due frames, and advance revision once",
         },
     )
     require_equal(
@@ -2017,7 +2025,7 @@ def validate_presentation_video_contract(contract: dict[str, Any]) -> None:
         [
             "file I/O or decode",
             "thread creation",
-            "audio synchronization",
+            "physical-device audio synchronization and drift correction",
             "seek or rate conversion",
             "interactive presentation",
             "cache eviction",
@@ -2062,6 +2070,8 @@ def windows_presentation_video_buffer_contract() -> None:
         "PresentationVideoReceipt",
         "PresentedVideoFrame",
         "PresentationVideoTake",
+        "PresentationVideoClockPosition",
+        "PresentationVideoSelection",
         "class PresentationVideoBuffer final",
         "using FrameAdapter = std::function<render::SourceFrame(",
         "using AdaptedFrameCheckpoint = std::function<void()>;",
@@ -2070,6 +2080,8 @@ def windows_presentation_video_buffer_contract() -> None:
         "maximumFrames{8}",
         "maximumBytes{256ULL * 1024ULL * 1024ULL}",
         "std::stop_token cancellation",
+        "PresentationVideoSelection select(",
+        "std::uint64_t revision() const noexcept",
     ]:
         if token not in header:
             raise ContractError(f"presentation-video API missing token {token!r}")
@@ -2088,6 +2100,18 @@ def windows_presentation_video_buffer_contract() -> None:
         "revalidationReceipt(generation, expectedRevision)",
         "revision_ != expectedRevision",
         "requireRevisionCapacity()",
+        "audio::timelineFrame(",
+        "targetPresentationTimestamp(",
+        "_umul128",
+        "_udiv128",
+        "wideProduct(",
+        "UnsignedDivision divide(",
+        "fractionSumCarries(",
+        "cancelFactor(",
+        "clock.deviceSample.devicePosition < clock.deviceAnchor.devicePosition",
+        "PresentationVideoReason::frameEarly",
+        "frames_[dueFrames - 1]",
+        "dueFrames - 1",
         'error.code == "cancelled"',
         "frames_.clear()",
     ]:
@@ -2097,6 +2121,10 @@ def windows_presentation_video_buffer_contract() -> None:
         "validatesLimitsAndGenerations",
         "revisionOverflowPreservesState",
         "ordersAndDequeuesFrames",
+        "selectsLatestDueFrameAndHoldsEarlyFrames",
+        "mapsSourceOriginsAndNegativeFractionsExactly",
+        "staleClockAndRevisionNeverMutateSelection",
+        "invalidClockAndRevisionOverflowPreserveFrames",
         "validatesTimestampAndTimeBaseBeforeMutation",
         "enforcesCapacityBeforeAdaptation",
         "adapterFailurePreservesQueue",
@@ -2116,6 +2144,14 @@ def windows_presentation_video_buffer_contract() -> None:
         "PresentationVideoReason::frameCapacity",
         "PresentationVideoReason::byteCapacity",
         "PresentationVideoReason::stateChanged",
+        "PresentationVideoReason::staleClock",
+        "PresentationVideoReason::frameEarly",
+        "sourceTimeBase = {1, 30}",
+        "clockPosition(1, 3'200, 10)",
+        "clockPosition(1, 1'209'600'000, 0, {1, 90'000})",
+        "2'268'000'000",
+        "representable target with a wide denominator overflowed",
+        "wide-denominator fractional carry was lost",
         "PresentationVideoOutcome::stale",
         "PresentationVideoOutcome::cancelled",
     ]:
@@ -2149,6 +2185,16 @@ def windows_presentation_video_buffer_contract() -> None:
             "presentation-video C++ receipt fields",
             cpp_stored_fields(candidate, "PresentationVideoReceipt"),
             contract.get("receiptFields", []),
+        )
+        require_equal(
+            "presentation-video C++ clock fields",
+            cpp_stored_fields(candidate, "PresentationVideoClockPosition"),
+            contract.get("clockFields", []),
+        )
+        require_equal(
+            "presentation-video C++ selection fields",
+            cpp_stored_fields(candidate, "PresentationVideoSelection"),
+            contract.get("selectionFields", []),
         )
 
     validate_header_shape(header)
@@ -2214,6 +2260,20 @@ def windows_presentation_video_buffer_contract() -> None:
     ]:
         if token not in adr:
             raise ContractError(f"presentation-video ADR missing token {token!r}")
+    selection_adr = read_text(
+        "docs/windows/adr/0019-audio-clock-video-selection.md"
+    )
+    for token in [
+        "first atomic audio-clock selection",
+        "common media origin",
+        "holds that early frame",
+        "newest due frame",
+        "advances revision exactly once",
+        "0, 1,024, and 2,048",
+        "do not prove a swap chain",
+    ]:
+        if token not in selection_adr:
+            raise ContractError(f"video-selection ADR missing token {token!r}")
 
 
 def validate_ffmpeg_presentation_pipeline_contract(
@@ -2299,7 +2359,8 @@ def validate_ffmpeg_presentation_pipeline_contract(
             "generation": "opening a replacement succeeds before the new generation clears queued or pending state",
             "inputIdentity": "the exact input path cannot change within one generation",
             "cancellation": "fill throws a cancelled media error after cancellation terminates and clears only the current generation",
-            "handoff": "dequeue one immutable normalized frame before synchronous preview or export rendering",
+            "handoff": "atomically select one immutable normalized frame from a generation and revision current audio clock before synchronous preview or export rendering",
+            "selection": "the real three-frame fixture is selected at its exact PTS through the decode pump before CPU and WARP rendering",
         },
     )
     require_equal(
@@ -2307,9 +2368,8 @@ def validate_ffmpeg_presentation_pipeline_contract(
         contract.get("excluded"),
         [
             "seek and frame-rate conversion",
-            "clock-driven frame selection",
             "thread creation or executor scheduling",
-            "audio synchronization",
+            "physical-device audio synchronization and drift correction",
             "interactive swap-chain presentation",
             "hardware decode",
             "1080p performance qualification",
@@ -2401,6 +2461,8 @@ def windows_ffmpeg_presentation_pipeline_contract() -> None:
         "std::filesystem::path inputIdentity_",
         "maximumFramesPerFill{4}",
         "render::maximumRenderFramePixels",
+        "PresentationVideoSelection select(",
+        "std::uint64_t revision() const noexcept",
     ]:
         if token not in pump_header:
             raise ContractError(f"FFmpeg pipeline API missing token {token!r}")
@@ -2417,6 +2479,7 @@ def windows_ffmpeg_presentation_pipeline_contract() -> None:
         "maximumConfigurableFramesPerFill = 32",
         "PresentationVideoDecodeState::blocked",
         "terminate(PresentationVideoDecodeState::failed)",
+        "return buffer_.select(generation, expectedRevision, clock)",
     ]:
         if token not in pump_source:
             raise ContractError(f"FFmpeg pipeline source missing token {token!r}")
@@ -2438,6 +2501,8 @@ def windows_ffmpeg_presentation_pipeline_contract() -> None:
         "fillBudgetIsIndependentOfQueueCapacity",
         "pipeline end of stream is not stable",
         "pipeline WARP first pixel differs",
+        "pump.select(1, pump.revision(), clock)",
+        "pipeline clock dropped an exact frame",
         "cancellation setup lacks queued and pending frames",
         "failed replacement changed the generation",
         "failed replacement cleared the queue",
@@ -2524,7 +2589,7 @@ def windows_ffmpeg_presentation_pipeline_contract() -> None:
         "renderer's shared 3,840 × 2,160 pixel budget",
         "sws_getCachedContext",
         contract["fixture"]["sha256"],
-        "decode → adapter → bounded buffer → dequeue",
+        "decode → adapter → bounded buffer → audio-clock select",
         "does not prove seek",
     ]:
         if token not in adr:

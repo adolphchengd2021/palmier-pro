@@ -16,12 +16,14 @@ namespace {
 using palmier::media::AlphaMode;
 using palmier::media::DecodedVideoFrame;
 using palmier::media::PresentationVideoBuffer;
+using palmier::media::PresentationVideoClockPosition;
 using palmier::media::PresentationVideoError;
 using palmier::media::PresentationVideoErrorCode;
 using palmier::media::PresentationVideoOperation;
 using palmier::media::PresentationVideoOutcome;
 using palmier::media::PresentationVideoReason;
 using palmier::media::PresentationVideoReceipt;
+using palmier::media::Rational;
 using palmier::media::RenderSourceError;
 using palmier::media::detail::PresentationVideoBufferTestAccess;
 
@@ -97,6 +99,22 @@ DecodedVideoFrame frame(
     result.color = {1, 13, 0, 2, 0};
     result.alphaMode = AlphaMode::opaque;
     return result;
+}
+
+PresentationVideoClockPosition clockPosition(
+    std::uint64_t generation,
+    std::uint64_t positionDelta = 0,
+    std::int64_t sourcePresentationTimestamp = 0,
+    Rational sourceTimeBase = {1, 30}
+) {
+    constexpr std::uint64_t anchorPosition = 1'000;
+    return {
+        {generation, anchorPosition, 48'000, 100},
+        {generation, anchorPosition + positionDelta, 0, false},
+        {30, 1},
+        sourcePresentationTimestamp,
+        sourceTimeBase,
+    };
 }
 
 void validatesLimitsAndGenerations() {
@@ -284,6 +302,299 @@ void ordersAndDequeuesFrames() {
         0
     );
     require(!empty.frame, "empty dequeue returned a frame");
+}
+
+void selectsLatestDueFrameAndHoldsEarlyFrames() {
+    PresentationVideoBuffer exact;
+    exact.start(1);
+    exact.enqueue(1, frame(10));
+    const auto selectedExact = exact.select(
+        1,
+        exact.revision(),
+        clockPosition(1, 0, 10)
+    );
+    require(selectedExact.frame.has_value(), "exact clock did not select a frame");
+    require(
+        selectedExact.frame->presentationTimestamp == 10,
+        "exact clock selected the wrong frame"
+    );
+    require(selectedExact.droppedFrames == 0, "exact clock dropped a frame");
+    require(
+        selectedExact.hasTargetTimelineFrame
+            && selectedExact.targetTimelineFrame == 100,
+        "exact clock changed the timeline target"
+    );
+
+    PresentationVideoBuffer buffer;
+    buffer.start(1);
+    buffer.enqueue(1, frame(11));
+    buffer.enqueue(1, frame(12));
+    buffer.enqueue(1, frame(13));
+    const auto revision = buffer.revision();
+    const auto early = buffer.select(
+        1,
+        revision,
+        clockPosition(1, 0, 10)
+    );
+    requireReceipt(
+        early.receipt,
+        PresentationVideoOperation::select,
+        PresentationVideoOutcome::noOp,
+        PresentationVideoReason::frameEarly,
+        1,
+        revision,
+        3,
+        48
+    );
+    require(!early.frame.has_value(), "early clock consumed a frame");
+    require(early.droppedFrames == 0, "early clock dropped a frame");
+
+    const auto due = buffer.select(
+        1,
+        revision,
+        clockPosition(1, 3'200, 10)
+    );
+    require(due.frame.has_value(), "due clock returned no frame");
+    require(due.frame->presentationTimestamp == 12, "due clock did not choose latest frame");
+    require(due.droppedFrames == 1, "due clock reported wrong drop count");
+    require(due.targetTimelineFrame == 102, "due clock changed timeline floor");
+    requireReceipt(
+        due.receipt,
+        PresentationVideoOperation::select,
+        PresentationVideoOutcome::changed,
+        PresentationVideoReason::none,
+        1,
+        revision + 1,
+        1,
+        16
+    );
+    const auto retained = buffer.dequeue(1);
+    require(
+        retained.frame && retained.frame->presentationTimestamp == 13,
+        "selection did not retain the early frame"
+    );
+}
+
+void mapsSourceOriginsAndNegativeFractionsExactly() {
+    PresentationVideoBuffer sourceRate;
+    sourceRate.start(1);
+    sourceRate.enqueue(1, frame(30));
+    const auto atOneSecond = sourceRate.select(
+        1,
+        sourceRate.revision(),
+        clockPosition(1, 0, 24'000, {1, 24'000})
+    );
+    require(
+        atOneSecond.frame && atOneSecond.frame->presentationTimestamp == 30,
+        "source time base was independently rebased"
+    );
+
+    PresentationVideoBuffer longDuration;
+    longDuration.start(1);
+    longDuration.enqueue(1, frame(108'000));
+    const auto atOneHour = longDuration.select(
+        1,
+        longDuration.revision(),
+        clockPosition(1, 0, 324'000'000, {1, 90'000})
+    );
+    require(
+        atOneHour.frame && atOneHour.frame->presentationTimestamp == 108'000,
+        "long-duration source timestamp overflowed"
+    );
+
+    PresentationVideoBuffer sevenHours;
+    sevenHours.start(1);
+    auto sevenHourFrame = frame(2'268'000'000);
+    sevenHourFrame.timeBase = {1, 90'000};
+    sevenHours.enqueue(1, sevenHourFrame);
+    const auto atSevenHours = sevenHours.select(
+        1,
+        sevenHours.revision(),
+        clockPosition(1, 1'209'600'000, 0, {1, 90'000})
+    );
+    require(
+        atSevenHours.frame
+            && atSevenHours.frame->presentationTimestamp == 2'268'000'000,
+        "valid long-duration clock overflowed"
+    );
+
+    PresentationVideoBuffer wideDenominator;
+    wideDenominator.start(1);
+    auto zeroFrame = frame(0);
+    zeroFrame.timeBase = {2, 1};
+    wideDenominator.enqueue(1, zeroFrame);
+    auto extremeFrequency = clockPosition(1, 1);
+    extremeFrequency.deviceAnchor.frequency =
+        (std::numeric_limits<std::uint64_t>::max)();
+    const auto belowOneTick = wideDenominator.select(
+        1,
+        wideDenominator.revision(),
+        extremeFrequency
+    );
+    require(
+        belowOneTick.frame && belowOneTick.frame->presentationTimestamp == 0,
+        "representable target with a wide denominator overflowed"
+    );
+
+    PresentationVideoBuffer wideFractionCarry;
+    wideFractionCarry.start(1);
+    auto carriedFrame = frame(1);
+    carriedFrame.timeBase = {2, 1};
+    wideFractionCarry.enqueue(1, carriedFrame);
+    auto carryingClock = clockPosition(1, 0, 1, {3, 2});
+    carryingClock.deviceAnchor.devicePosition = 0;
+    carryingClock.deviceAnchor.frequency =
+        (std::numeric_limits<std::uint64_t>::max)();
+    carryingClock.deviceSample.devicePosition = 9'223'372'036'854'775'811ULL;
+    const auto carried = wideFractionCarry.select(
+        1,
+        wideFractionCarry.revision(),
+        carryingClock
+    );
+    require(
+        carried.frame && carried.frame->presentationTimestamp == 1,
+        "wide-denominator fractional carry was lost"
+    );
+
+    PresentationVideoBuffer negative;
+    negative.start(1);
+    negative.enqueue(1, frame(-1));
+    negative.enqueue(1, frame(0));
+    const auto halfTick = negative.select(
+        1,
+        negative.revision(),
+        clockPosition(1, 800, -1)
+    );
+    require(
+        halfTick.frame && halfTick.frame->presentationTimestamp == -1,
+        "negative media time did not floor exactly"
+    );
+    require(halfTick.droppedFrames == 0, "negative floor dropped a frame");
+    require(
+        negative.dequeue(1).frame->presentationTimestamp == 0,
+        "negative floor consumed an early frame"
+    );
+}
+
+void staleClockAndRevisionNeverMutateSelection() {
+    PresentationVideoBuffer buffer;
+    buffer.start(1);
+    buffer.enqueue(1, frame(0));
+    const auto revision = buffer.revision();
+
+    const auto staleGeneration = buffer.select(
+        2,
+        revision,
+        clockPosition(2)
+    );
+    require(
+        staleGeneration.receipt.outcome == PresentationVideoOutcome::stale
+            && staleGeneration.receipt.reason
+                == PresentationVideoReason::staleGeneration,
+        "stale selection generation was accepted"
+    );
+    const auto staleRevision = buffer.select(
+        1,
+        revision - 1,
+        clockPosition(1)
+    );
+    require(
+        staleRevision.receipt.outcome == PresentationVideoOutcome::stale
+            && staleRevision.receipt.reason == PresentationVideoReason::stateChanged,
+        "stale selection revision was accepted"
+    );
+    const auto staleClock = buffer.select(
+        1,
+        revision,
+        clockPosition(2)
+    );
+    require(
+        staleClock.receipt.outcome == PresentationVideoOutcome::stale
+            && staleClock.receipt.reason == PresentationVideoReason::staleClock,
+        "stale clock was accepted"
+    );
+    require(buffer.revision() == revision, "stale selection advanced revision");
+    require(buffer.queuedFrames() == 1, "stale selection consumed a frame");
+
+    buffer.cancel(1);
+    const auto cancelledRevision = buffer.revision();
+    auto invalidClock = clockPosition(1);
+    invalidClock.deviceAnchor.frequency = 0;
+    const auto cancelled = buffer.select(1, cancelledRevision, invalidClock);
+    require(
+        cancelled.receipt.outcome == PresentationVideoOutcome::cancelled
+            && cancelled.receipt.reason
+                == PresentationVideoReason::generationCancelled,
+        "cancelled selection validated its clock"
+    );
+    require(
+        buffer.revision() == cancelledRevision,
+        "cancelled selection advanced revision"
+    );
+}
+
+void invalidClockAndRevisionOverflowPreserveFrames() {
+    PresentationVideoBuffer buffer;
+    buffer.start(1);
+    buffer.enqueue(1, frame(1));
+    const auto revision = buffer.revision();
+
+    auto invalidFrequency = clockPosition(1);
+    invalidFrequency.deviceAnchor.frequency = 0;
+    requireError(
+        [&] { buffer.select(1, revision, invalidFrequency); },
+        PresentationVideoErrorCode::invalidClock
+    );
+    auto discontinuity = clockPosition(1);
+    discontinuity.deviceSample.devicePosition = 999;
+    requireError(
+        [&] { buffer.select(1, revision, discontinuity); },
+        PresentationVideoErrorCode::clockPositionDiscontinuity
+    );
+    auto invalidSourceTimeBase = clockPosition(1);
+    invalidSourceTimeBase.sourceTimeBase = {0, 1};
+    requireError(
+        [&] { buffer.select(1, revision, invalidSourceTimeBase); },
+        PresentationVideoErrorCode::invalidClockSourceTimeBase
+    );
+    auto overflow = clockPosition(1);
+    overflow.sourcePresentationTimestamp =
+        (std::numeric_limits<std::int64_t>::max)();
+    overflow.sourceTimeBase = {
+        (std::numeric_limits<std::int32_t>::max)(),
+        1,
+    };
+    requireError(
+        [&] { buffer.select(1, revision, overflow); },
+        PresentationVideoErrorCode::clockArithmeticOverflow
+    );
+    require(buffer.revision() == revision, "invalid clock advanced revision");
+    require(buffer.queuedFrames() == 1, "invalid clock consumed a frame");
+
+    PresentationVideoBufferTestAccess::setRevision(
+        buffer,
+        (std::numeric_limits<std::uint64_t>::max)()
+    );
+    const auto held = buffer.select(
+        1,
+        buffer.revision(),
+        clockPosition(1)
+    );
+    require(
+        held.receipt.reason == PresentationVideoReason::frameEarly,
+        "revision ceiling prevented a non-mutating hold"
+    );
+    requireError(
+        [&] {
+            buffer.select(
+                1,
+                buffer.revision(),
+                clockPosition(1, 1'600)
+            );
+        },
+        PresentationVideoErrorCode::revisionOverflow
+    );
+    require(buffer.queuedFrames() == 1, "overflowing selection consumed a frame");
 }
 
 void validatesTimestampAndTimeBaseBeforeMutation() {
@@ -696,6 +1007,10 @@ int main() {
         validatesLimitsAndGenerations();
         revisionOverflowPreservesState();
         ordersAndDequeuesFrames();
+        selectsLatestDueFrameAndHoldsEarlyFrames();
+        mapsSourceOriginsAndNegativeFractionsExactly();
+        staleClockAndRevisionNeverMutateSelection();
+        invalidClockAndRevisionOverflowPreserveFrames();
         validatesTimestampAndTimeBaseBeforeMutation();
         enforcesCapacityBeforeAdaptation();
         adapterFailurePreservesQueue();

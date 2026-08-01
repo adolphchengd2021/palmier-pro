@@ -46,6 +46,10 @@ bounded presentation buffer. The presentation owner dequeues one immutable
 `renderPreviewFrame` or `renderExportFrame` entry point. No resolver performs
 decode, conversion, file access, or cache mutation.
 
+ADR 0019 replaces FIFO dequeue on the clock-driven proof path with the buffer's
+atomic generation- and revision-checked selection. Diagnostic and capacity
+tests retain dequeue so queue ordering remains independently observable.
+
 ## Limits and lifecycle
 
 The default decode ceiling is the renderer's shared 3,840 × 2,160 pixel budget,
@@ -72,13 +76,13 @@ download or generate the fixture.
 
 Direct reader tests verify all three exact RGBA8 frames, presentation order,
 stable EOF, first-frame compatibility, and terminal cancellation. The pipeline
-test verifies real decode → adapter → bounded buffer → dequeue → shared CPU and
-D3D11 WARP preview/export rendering. A one-frame buffer proves repeated
+test verifies real decode → adapter → bounded buffer → audio-clock select →
+shared CPU and D3D11 WARP preview/export rendering. A one-frame buffer proves repeated
 backpressure retains all three frames. Separate cases prove cancellation and a
 generation replacement discard stale queued and pending state.
 
-A green Windows Server 2022 WARP job does not prove seek, VFR timeline mapping,
-clock-driven selection, audio synchronization, a physical GPU, hardware decode,
+A green Windows Server 2022 WARP job does not prove seek, arbitrary VFR timeline
+mapping, physical-device audio synchronization or drift correction, a physical GPU, hardware decode,
 real-time 1080p performance, interactive swap-chain presentation, packaging,
 or Windows 10 build 19045 compatibility.
 

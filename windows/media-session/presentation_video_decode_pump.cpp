@@ -202,6 +202,14 @@ PresentationVideoTake PresentationVideoDecodePump::dequeue(
     return buffer_.dequeue(generation);
 }
 
+PresentationVideoSelection PresentationVideoDecodePump::select(
+    std::uint64_t generation,
+    std::uint64_t expectedRevision,
+    const PresentationVideoClockPosition& clock
+) {
+    return buffer_.select(generation, expectedRevision, clock);
+}
+
 PresentationVideoReceipt PresentationVideoDecodePump::cancel(
     std::uint64_t generation
 ) {
@@ -216,6 +224,10 @@ PresentationVideoReceipt PresentationVideoDecodePump::cancel(
 
 std::uint64_t PresentationVideoDecodePump::generation() const noexcept {
     return buffer_.generation();
+}
+
+std::uint64_t PresentationVideoDecodePump::revision() const noexcept {
+    return buffer_.revision();
 }
 
 PresentationVideoDecodeState PresentationVideoDecodePump::state() const noexcept {

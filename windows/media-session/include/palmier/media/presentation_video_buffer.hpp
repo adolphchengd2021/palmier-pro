@@ -1,5 +1,6 @@
 #pragma once
 
+#include "palmier/audio/audio_clock.hpp"
 #include "palmier/media/render_source_adapter.hpp"
 
 #include <cstddef>
@@ -25,6 +26,7 @@ enum class PresentationVideoOperation {
     start,
     enqueue,
     dequeue,
+    select,
     cancel,
 };
 
@@ -42,6 +44,8 @@ enum class PresentationVideoReason {
     stateChanged,
     operationCancelled,
     generationCancelled,
+    staleClock,
+    frameEarly,
     frameCapacity,
     byteCapacity,
 };
@@ -52,6 +56,10 @@ enum class PresentationVideoErrorCode {
     invalidAdapterResult,
     revisionOverflow,
     invalidGeneration,
+    invalidClock,
+    invalidClockSourceTimeBase,
+    clockPositionDiscontinuity,
+    clockArithmeticOverflow,
     missingPresentationTimestamp,
     invalidTimeBase,
     changedTimeBase,
@@ -89,6 +97,22 @@ struct PresentationVideoTake final {
     std::optional<PresentedVideoFrame> frame;
 };
 
+struct PresentationVideoClockPosition final {
+    audio::AudioClockAnchor deviceAnchor;
+    audio::AudioClockSample deviceSample;
+    audio::FrameRate timelineFrameRate;
+    std::int64_t sourcePresentationTimestamp{};
+    Rational sourceTimeBase;
+};
+
+struct PresentationVideoSelection final {
+    PresentationVideoReceipt receipt;
+    std::optional<PresentedVideoFrame> frame;
+    std::size_t droppedFrames{};
+    bool hasTargetTimelineFrame{};
+    std::int64_t targetTimelineFrame{};
+};
+
 class PresentationVideoBuffer final {
 public:
     explicit PresentationVideoBuffer(PresentationVideoBufferLimits limits = {});
@@ -104,9 +128,15 @@ public:
         std::stop_token cancellation = {}
     );
     PresentationVideoTake dequeue(std::uint64_t generation);
+    PresentationVideoSelection select(
+        std::uint64_t generation,
+        std::uint64_t expectedRevision,
+        const PresentationVideoClockPosition& clock
+    );
     PresentationVideoReceipt cancel(std::uint64_t generation);
 
     std::uint64_t generation() const noexcept;
+    std::uint64_t revision() const noexcept;
     std::size_t queuedFrames() const noexcept;
     std::uint64_t queuedBytes() const noexcept;
 

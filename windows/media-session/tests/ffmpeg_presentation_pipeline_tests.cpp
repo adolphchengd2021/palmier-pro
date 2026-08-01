@@ -22,6 +22,7 @@ namespace {
 using palmier::media::MediaError;
 using palmier::media::MediaFailureCode;
 using palmier::media::PresentationVideoDecodeLimits;
+using palmier::media::PresentationVideoClockPosition;
 using palmier::media::PresentationVideoDecodeError;
 using palmier::media::PresentationVideoDecodeErrorCode;
 using palmier::media::PresentationVideoDecodePump;
@@ -199,7 +200,20 @@ void realFramesReachSharedRenderers(const std::filesystem::path& input) {
         pixel(200, 100, 50),
     };
     for (std::size_t index = 0; index < expectedTimestamps.size(); ++index) {
-        const auto take = requireFrame(pump.dequeue(1), "pipeline lost a decoded frame");
+        const PresentationVideoClockPosition clock{
+            {1, 0, 10'240, 0},
+            {1, static_cast<std::uint64_t>(expectedTimestamps[index]), 0, false},
+            {10, 1},
+            0,
+            {1, 10'240},
+        };
+        auto selection = pump.select(1, pump.revision(), clock);
+        require(selection.frame.has_value(), "pipeline clock lost a decoded frame");
+        require(selection.droppedFrames == 0, "pipeline clock dropped an exact frame");
+        PresentationVideoTake take{
+            selection.receipt,
+            std::move(selection.frame),
+        };
         require(take.frame->generation == 1, "pipeline returned the wrong generation");
         require(
             take.frame->presentationTimestamp == expectedTimestamps[index],

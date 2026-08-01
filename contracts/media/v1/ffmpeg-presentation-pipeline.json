@@ -55,13 +55,13 @@
     "generation": "opening a replacement succeeds before the new generation clears queued or pending state",
     "inputIdentity": "the exact input path cannot change within one generation",
     "cancellation": "fill throws a cancelled media error after cancellation terminates and clears only the current generation",
-    "handoff": "dequeue one immutable normalized frame before synchronous preview or export rendering"
+    "handoff": "atomically select one immutable normalized frame from a generation and revision current audio clock before synchronous preview or export rendering",
+    "selection": "the real three-frame fixture is selected at its exact PTS through the decode pump before CPU and WARP rendering"
   },
   "excluded": [
     "seek and frame-rate conversion",
-    "clock-driven frame selection",
     "thread creation or executor scheduling",
-    "audio synchronization",
+    "physical-device audio synchronization and drift correction",
     "interactive swap-chain presentation",
     "hardware decode",
     "1080p performance qualification",

@@ -63,10 +63,11 @@ enqueue/dequeue, reentrant generation and revision changes, invalid adapter
 output, and queue preservation after refusal.
 
 ADR 0016 composes this buffer with a stateful FFmpeg cursor and proves multiple
-real frames reach shared CPU and WARP render entry points. This buffer itself
-still performs no decode. Seeking, selecting a frame for a clock position,
-swap-chain presentation, audio synchronization, 1080p performance, and Windows
-10 build 19045 remain Gate G0 work.
+real frames reach shared CPU and WARP render entry points. ADR 0019 adds atomic
+selection for an injected source-aware audio clock. This buffer itself still
+performs no decode. Seeking, swap-chain presentation, physical-device audio
+synchronization, drift correction, 1080p performance, and Windows 10 build
+19045 remain Gate G0 work.
 
 ## Primary references
 

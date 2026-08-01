@@ -88,9 +88,15 @@ public:
         std::stop_token cancellation = {}
     );
     PresentationVideoTake dequeue(std::uint64_t generation);
+    PresentationVideoSelection select(
+        std::uint64_t generation,
+        std::uint64_t expectedRevision,
+        const PresentationVideoClockPosition& clock
+    );
     PresentationVideoReceipt cancel(std::uint64_t generation);
 
     std::uint64_t generation() const noexcept;
+    std::uint64_t revision() const noexcept;
     PresentationVideoDecodeState state() const noexcept;
 
 private:

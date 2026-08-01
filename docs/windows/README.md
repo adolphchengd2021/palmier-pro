@@ -108,9 +108,9 @@ serial native smoke writes silence only, waits at most two seconds for one
 render event, then stops and resets. An unavailable CI endpoint remains a
 classified diagnostic, not output evidence. It does not yet provide media PCM,
 format conversion, automatic device recovery, audible playback, or A/V frame
-selection. The media-session layer now preserves the first admitted source PTS
-and time base alongside its device clock anchor, but does not yet consume that
-mapping to select video frames.
+selection on a real swap chain. The media-session layer preserves the first
+admitted source PTS and time base alongside its device clock anchor and now uses
+that mapping for deterministic headless frame hold/drop/select behavior.
 See ADR 0013 and `contracts/audio/v1/wasapi-output.json`.
 
 The first Qt target is an optional read-only project shell:
