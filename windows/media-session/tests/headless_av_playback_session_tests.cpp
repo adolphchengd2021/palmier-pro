@@ -247,8 +247,8 @@ std::unique_ptr<HeadlessAvPlaybackSession> session(
 void playsAndTicksOneRealVideoGeneration() {
     TemporaryDirectory media;
     const auto input = media.write(
-        "av.mp4",
-        palmier::media::test_fixtures::h264Aac
+        "av.mov",
+        palmier::media::test_fixtures::qtrleOpaqueThreeFrames
     );
     auto state = std::make_shared<FakeAudioState>();
     auto playback = session(state);
@@ -288,8 +288,8 @@ void playsAndTicksOneRealVideoGeneration() {
 void failedReplacementPreservesTheActiveGeneration() {
     TemporaryDirectory media;
     const auto input = media.write(
-        "av.mp4",
-        palmier::media::test_fixtures::h264Aac
+        "av.mov",
+        palmier::media::test_fixtures::qtrleOpaqueThreeFrames
     );
     auto state = std::make_shared<FakeAudioState>();
     auto playback = session(state);
@@ -396,8 +396,8 @@ void boundsCatchUpAndDeliversOnlyTheLatestFrame() {
 void noSampleAndAudioTerminalsDoNotGuessVideoTime() {
     TemporaryDirectory media;
     const auto input = media.write(
-        "av.mp4",
-        palmier::media::test_fixtures::h264Aac
+        "av.mov",
+        palmier::media::test_fixtures::qtrleOpaqueThreeFrames
     );
     auto state = std::make_shared<FakeAudioState>();
     state->hasClockSample = false;
@@ -442,8 +442,8 @@ void validatesRequestsCancellationAndConcurrentClose() {
 
     TemporaryDirectory media;
     const auto input = media.write(
-        "av.mp4",
-        palmier::media::test_fixtures::h264Aac
+        "av.mov",
+        palmier::media::test_fixtures::qtrleOpaqueThreeFrames
     );
     auto state = std::make_shared<FakeAudioState>();
     auto playback = session(state);
