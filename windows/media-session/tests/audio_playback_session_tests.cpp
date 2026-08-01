@@ -276,7 +276,7 @@ void playsRealPcmToOneTerminalAndAnchorsTheClock() {
     );
     require(
         started.clockAnchor.sourceTimeBaseNumerator == 1
-            && started.clockAnchor.sourceTimeBaseDenominator == 48'000,
+            && started.clockAnchor.sourceTimeBaseDenominator == 24'000,
         "source time base anchor changed"
     );
 
