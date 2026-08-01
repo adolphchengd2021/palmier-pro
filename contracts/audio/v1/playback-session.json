@@ -34,9 +34,10 @@
     "failureTeardown": "decode, handoff, and EOS failures discard the active generation before publishing its terminal receipt",
     "handoff": "retain one decoded block until the device worker accepts it; cancellation retracts an unadmitted handoff",
     "generationBarrier": "Stop, Reset, device queue clear, and stale handoff refusal complete before replacement acknowledgement",
-    "sampleDomain": "source samples remain contiguous and are rebased to a checked nonnegative stream-relative output cursor",
+    "sampleDomain": "source samples and time bases remain contiguous and stable across merged blocks, then rebase to a checked nonnegative stream-relative output cursor only after the first block is admitted",
     "endOfStream": "ordered EOS carries the exact final output sample and terminal completion waits for endpoint padding drain",
-    "clock": "successful Start returns a generation-matched device clock anchor for the requested timeline frame",
+    "clock": "successful Start returns a generation-matched device clock anchor for the requested timeline frame and preserves the first admitted source presentation timestamp and time base",
+    "position": "a generation-checked read returns only a cached non-regressing device-thread clock sample and preserves terminal state and failure",
     "close": "an active generation receives a separate cancellation terminal before device close; concurrent close joins once"
   },
   "excluded": [

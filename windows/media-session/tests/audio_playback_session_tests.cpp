@@ -270,6 +270,29 @@ void playsRealPcmToOneTerminalAndAnchorsTheClock() {
     require(started.clockAnchor.value.timelineFrame == 30, "timeline anchor changed");
     require(started.clockAnchor.value.frequency == 48'000, "clock frequency changed");
     require(started.clockAnchor.value.devicePosition == 96, "device anchor changed");
+    require(
+        started.clockAnchor.sourcePresentationTimestamp == 0,
+        "source timestamp anchor changed"
+    );
+    require(
+        started.clockAnchor.sourceTimeBaseNumerator == 1
+            && started.clockAnchor.sourceTimeBaseDenominator == 48'000,
+        "source time base anchor changed"
+    );
+
+    const auto position = session.position(1);
+    require(position.hasClockAnchor, "position lost the playback anchor");
+    require(position.hasClockSample, "position did not expose a device sample");
+    require(position.clockSample.generation == 1, "position generation changed");
+    require(
+        position.clockSample.devicePosition
+            >= position.clockAnchor.value.devicePosition,
+        "position regressed before its anchor"
+    );
+    require(
+        session.position(2).outcome == AudioPlaybackOutcome::refused,
+        "stale position read was accepted"
+    );
 
     const auto terminal = session.waitForTerminal(1);
     require(terminal.state == AudioPlaybackState::completed, "playback did not complete");
@@ -307,6 +330,12 @@ void failedReplacementPreservesTheRunningGeneration() {
 
     const auto cancelled = session.cancel(1);
     require(cancelled.state == AudioPlaybackState::cancelled, "cancel failed");
+    const auto cancelledPosition = session.position(1);
+    require(
+        cancelledPosition.state == AudioPlaybackState::cancelled
+            && cancelledPosition.outcome == AudioPlaybackOutcome::cancelled,
+        "position hid the cancelled terminal"
+    );
     require(
         session.waitForTerminal(1).state == AudioPlaybackState::cancelled,
         "cancel terminal was not queryable"

@@ -273,6 +273,69 @@ public:
         };
     }
 
+    WasapiWorkerClockReceipt clockPosition(
+        std::uint64_t expectedGeneration
+    ) {
+        std::lock_guard lock(mutex_);
+        if (closeStarted_ || joined_) {
+            return {
+                WasapiWorkerClockOutcome::closed,
+                E_ILLEGAL_METHOD_CALL,
+                currentGeneration_,
+            };
+        }
+        if (startupUnavailable_) {
+            return {
+                startupOutcome_ == WasapiWorkerConfigurationOutcome::unavailable
+                    ? WasapiWorkerClockOutcome::unavailable
+                    : WasapiWorkerClockOutcome::failed,
+                startupFailure_,
+                currentGeneration_,
+            };
+        }
+        if (expectedGeneration == 0
+            || expectedGeneration != currentGeneration_) {
+            return {
+                WasapiWorkerClockOutcome::refused,
+                E_INVALIDARG,
+                currentGeneration_,
+            };
+        }
+        if (configuration_.has_value()
+            && configuration_->outcome
+                == WasapiWorkerConfigurationOutcome::unavailable) {
+            return {
+                WasapiWorkerClockOutcome::unavailable,
+                configuration_->hresult,
+                currentGeneration_,
+            };
+        }
+        if (configuration_.has_value()
+            && configuration_->outcome
+                == WasapiWorkerConfigurationOutcome::failed) {
+            return {
+                WasapiWorkerClockOutcome::failed,
+                configuration_->hresult,
+                currentGeneration_,
+            };
+        }
+        if (!latestClockSample_.has_value()
+            || latestClockSample_->generation != expectedGeneration) {
+            return {
+                WasapiWorkerClockOutcome::noSample,
+                E_PENDING,
+                currentGeneration_,
+            };
+        }
+        return {
+            WasapiWorkerClockOutcome::available,
+            S_OK,
+            currentGeneration_,
+            true,
+            *latestClockSample_,
+        };
+    }
+
     WasapiWorkerPcmReceipt submit(
         PcmPayload payload,
         std::stop_token stopToken
@@ -492,11 +555,13 @@ private:
                     configuration_->outcome =
                         WasapiWorkerConfigurationOutcome::failed;
                     configuration_->hresult = value.hresult;
+                    latestClockSample_.reset();
                 } else if (configuration_.has_value()
                     && value.currentState == WasapiOutputState::invalidated) {
                     configuration_->outcome =
                         WasapiWorkerConfigurationOutcome::unavailable;
                     configuration_->hresult = value.hresult;
+                    latestClockSample_.reset();
                 }
                 const auto existing = std::find_if(
                     terminalHistory_.begin(),
@@ -882,6 +947,9 @@ private:
                     if (configuration_.has_value()) {
                         configuration_->generation = value.generation;
                     }
+                    if (value.hasClockSample) {
+                        latestClockSample_ = value.clockSample;
+                    }
                 }
                 if ((controlCommand->kind == ControlKind::discardGeneration
                         || controlCommand->kind == ControlKind::installGeneration)
@@ -889,6 +957,7 @@ private:
                     nextOutputSample_.reset();
                     {
                         std::lock_guard lock(mutex_);
+                        latestClockSample_.reset();
                         if (controlCommand->kind
                             == ControlKind::discardGeneration) {
                             terminalHistory_.erase(
@@ -943,6 +1012,9 @@ private:
             {
                 std::lock_guard lock(mutex_);
                 renderWaitActive_ = false;
+                if (value.hasClockSample) {
+                    latestClockSample_ = value.clockSample;
+                }
             }
             if (value.outcome != WasapiOutputOutcome::cancelled) {
                 recordTerminal(value);
@@ -958,6 +1030,7 @@ private:
     std::deque<WasapiOutputReceipt> terminalHistory_;
     std::optional<WasapiOutputReceipt> closeReceipt_;
     std::optional<WasapiWorkerConfiguration> configuration_;
+    std::optional<AudioClockSample> latestClockSample_;
     std::optional<std::uint64_t> nextOutputSample_;
     std::uint64_t currentGeneration_{};
     std::stop_source renderCancellation_;
@@ -1037,6 +1110,12 @@ WasapiOutputReceipt WasapiOutputWorker::waitForTerminal(
     std::stop_token stopToken
 ) {
     return impl_->waitForTerminal(generation, stopToken);
+}
+
+WasapiWorkerClockReceipt WasapiOutputWorker::clockPosition(
+    std::uint64_t expectedGeneration
+) const {
+    return impl_->clockPosition(expectedGeneration);
 }
 
 WasapiOutputReceipt WasapiOutputWorker::close() {

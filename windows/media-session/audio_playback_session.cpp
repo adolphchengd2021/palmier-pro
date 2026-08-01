@@ -45,6 +45,11 @@ struct Command final {
     std::shared_ptr<CommandCompletion> completion;
 };
 
+struct PlaybackSourceAnchor final {
+    std::int64_t presentationTimestamp{};
+    Rational timeBase;
+};
+
 void complete(
     const std::shared_ptr<CommandCompletion>& completion,
     AudioPlaybackReceipt value
@@ -128,6 +133,96 @@ public:
     AudioPlaybackReceipt snapshot() const {
         std::lock_guard lock(mutex_);
         return snapshot_;
+    }
+
+    AudioPlaybackPositionReceipt position(
+        std::uint64_t expectedGeneration
+    ) const {
+        const auto current = snapshot();
+        AudioPlaybackPositionReceipt value;
+        value.generation = current.generation;
+        value.state = current.state;
+        value.failure = current.failure;
+        value.hresult = current.hresult;
+        value.hasClockAnchor = current.hasClockAnchor;
+        value.clockAnchor = current.clockAnchor;
+        if (expectedGeneration == 0
+            || expectedGeneration != current.generation) {
+            value.outcome = AudioPlaybackOutcome::refused;
+            value.failure = AudioPlaybackFailureCode::invalidRequest;
+            value.hresult = E_INVALIDARG;
+            return value;
+        }
+        if (current.state == AudioPlaybackState::cancelled) {
+            value.outcome = AudioPlaybackOutcome::cancelled;
+            return value;
+        }
+        if (current.state == AudioPlaybackState::invalidated) {
+            value.outcome = AudioPlaybackOutcome::invalidated;
+            return value;
+        }
+        if (current.state == AudioPlaybackState::failed) {
+            value.outcome = AudioPlaybackOutcome::failed;
+            return value;
+        }
+        if (current.state == AudioPlaybackState::closed) {
+            value.outcome = AudioPlaybackOutcome::noOp;
+            return value;
+        }
+        if (!current.hasClockAnchor) {
+            value.outcome = AudioPlaybackOutcome::noOp;
+            value.hresult = E_PENDING;
+            return value;
+        }
+
+        const auto clock = output_->clockPosition(expectedGeneration);
+        value.generation = clock.generation;
+        value.hresult = clock.hresult;
+        switch (clock.outcome) {
+        case audio::WasapiWorkerClockOutcome::available:
+            if (!clock.hasSample
+                || clock.generation != expectedGeneration
+                || clock.sample.generation != expectedGeneration
+                || clock.sample.devicePosition
+                    < current.clockAnchor.value.devicePosition) {
+                value.state = AudioPlaybackState::failed;
+                value.outcome = AudioPlaybackOutcome::failed;
+                value.failure = AudioPlaybackFailureCode::invariantFailure;
+                value.hresult = E_UNEXPECTED;
+                return value;
+            }
+            value.outcome = AudioPlaybackOutcome::noOp;
+            value.hasClockSample = true;
+            value.clockSample = clock.sample;
+            return value;
+        case audio::WasapiWorkerClockOutcome::noSample:
+            value.outcome = AudioPlaybackOutcome::noOp;
+            return value;
+        case audio::WasapiWorkerClockOutcome::refused:
+            value.outcome = AudioPlaybackOutcome::refused;
+            value.failure = AudioPlaybackFailureCode::invalidRequest;
+            return value;
+        case audio::WasapiWorkerClockOutcome::unavailable:
+            value.state = AudioPlaybackState::invalidated;
+            value.outcome = AudioPlaybackOutcome::invalidated;
+            value.failure = AudioPlaybackFailureCode::deviceUnavailable;
+            return value;
+        case audio::WasapiWorkerClockOutcome::failed:
+            value.state = AudioPlaybackState::failed;
+            value.outcome = AudioPlaybackOutcome::failed;
+            value.failure = AudioPlaybackFailureCode::deviceFailure;
+            return value;
+        case audio::WasapiWorkerClockOutcome::closed:
+            value.state = AudioPlaybackState::closed;
+            value.outcome = AudioPlaybackOutcome::refused;
+            value.failure = AudioPlaybackFailureCode::outputFailure;
+            return value;
+        }
+        value.state = AudioPlaybackState::failed;
+        value.outcome = AudioPlaybackOutcome::failed;
+        value.failure = AudioPlaybackFailureCode::invariantFailure;
+        value.hresult = E_UNEXPECTED;
+        return value;
     }
 
     AudioPlaybackReceipt waitForTerminal(
@@ -496,6 +591,10 @@ private:
                 }
 
                 if (destination->format != next.format
+                    || destination->sourceTimeBase.numerator
+                        != next.sourceTimeBase.numerator
+                    || destination->sourceTimeBase.denominator
+                        != next.sourceTimeBase.denominator
                     || destination->frameCount
                         > maximumFrames - next.frameCount
                     || destination->startOutputSample
@@ -538,7 +637,17 @@ private:
         std::stop_token stopToken,
         AudioPlaybackReceipt& failure
     ) {
-        if (block.format != configuration_->pcmFormat || block.frameCount == 0) {
+        const bool firstBlock = !sourceCursor_.has_value();
+        if (block.format != configuration_->pcmFormat
+            || block.frameCount == 0
+            || block.sourceTimeBase.numerator <= 0
+            || block.sourceTimeBase.denominator <= 0
+            || (!firstBlock
+                && (!sourceAnchor_.has_value()
+                    || sourceAnchor_->timeBase.numerator
+                        != block.sourceTimeBase.numerator
+                    || sourceAnchor_->timeBase.denominator
+                        != block.sourceTimeBase.denominator))) {
             failure = failureReceipt(
                 AudioPlaybackStage::pcmHandoff,
                 AudioPlaybackFailureCode::invariantFailure,
@@ -546,13 +655,13 @@ private:
             );
             return false;
         }
-        if (!sourceCursor_.has_value()) {
-            sourceCursor_ = block.startOutputSample;
-        }
-        if (block.startOutputSample != *sourceCursor_
+        const auto expectedSourceSample = firstBlock
+            ? block.startOutputSample
+            : *sourceCursor_;
+        if (block.startOutputSample != expectedSourceSample
             || block.frameCount
                 > (std::numeric_limits<std::uint64_t>::max)() - outputCursor_
-            || *sourceCursor_
+            || expectedSourceSample
                 > (std::numeric_limits<std::int64_t>::max)()
                     - static_cast<std::int64_t>(block.frameCount)) {
             failure = failureReceipt(
@@ -573,6 +682,13 @@ private:
             stopToken
         );
         if (result.outcome == audio::WasapiWorkerPcmOutcome::accepted) {
+            if (firstBlock) {
+                sourceCursor_ = block.startOutputSample;
+                sourceAnchor_ = PlaybackSourceAnchor{
+                    block.sourcePresentationTimestamp,
+                    block.sourceTimeBase,
+                };
+            }
             outputCursor_ += block.frameCount;
             *sourceCursor_ += static_cast<std::int64_t>(block.frameCount);
             return true;
@@ -843,6 +959,7 @@ private:
         input_ = commandValue.input;
         timelineFrame_ = commandValue.timelineFrame;
         sourceCursor_.reset();
+        sourceAnchor_.reset();
         outputCursor_ = 0;
         eosSubmitted_ = false;
         clockAnchor_.reset();
@@ -903,6 +1020,15 @@ private:
             return terminateActiveFailure(value);
         }
 
+        if (!sourceAnchor_.has_value()) {
+            auto value = failureReceipt(
+                AudioPlaybackStage::startDevice,
+                AudioPlaybackFailureCode::invariantFailure,
+                E_UNEXPECTED
+            );
+            value.generation = generation_;
+            return terminateActiveFailure(value);
+        }
         clockAnchor_ = AudioPlaybackClockAnchor{
             {
                 generation_,
@@ -910,6 +1036,9 @@ private:
                 device.clockFrequency,
                 timelineFrame_,
             },
+            sourceAnchor_->presentationTimestamp,
+            sourceAnchor_->timeBase.numerator,
+            sourceAnchor_->timeBase.denominator,
             started.clockSample.qpc100Nanoseconds,
             started.clockSample.precisionDegraded,
         };
@@ -1290,6 +1419,7 @@ private:
     std::uint64_t generation_{};
     std::int64_t timelineFrame_{};
     std::optional<std::int64_t> sourceCursor_;
+    std::optional<PlaybackSourceAnchor> sourceAnchor_;
     std::uint64_t outputCursor_{};
     bool eosSubmitted_{};
     std::optional<AudioPlaybackClockAnchor> clockAnchor_;
@@ -1322,6 +1452,12 @@ AudioPlaybackReceipt AudioPlaybackSession::waitForTerminal(
     std::stop_token stopToken
 ) {
     return impl_->waitForTerminal(generation, stopToken);
+}
+
+AudioPlaybackPositionReceipt AudioPlaybackSession::position(
+    std::uint64_t expectedGeneration
+) const {
+    return impl_->position(expectedGeneration);
 }
 
 AudioPlaybackReceipt AudioPlaybackSession::snapshot() const {

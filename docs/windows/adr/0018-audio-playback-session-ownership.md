@@ -28,15 +28,22 @@ committed receipt. Decode proceeds in bounded fills without polling or sleeps.
 Device configuration, reader open, prebuffer fills, and pre-start PCM admission
 share that command token. Decode, handoff, and EOS failure discards the active
 generation before its terminal receipt, so the device cannot continue rendering
-silence behind a failed session.
-The first source sample is rebased to output sample zero, and later blocks must
-remain contiguous in both domains with checked arithmetic.
+silence behind a failed session. The first admitted source sample is rebased to output sample zero,
+and later blocks must remain contiguous in both domains
+with checked arithmetic. Coalescing also rejects a time-base change between
+constituent blocks. The session preserves that first block's source
+presentation timestamp and time base as the common media origin; a cancelled
+or refused handoff cannot publish an anchor for PCM the device never accepted.
 
 EOS uses the ordered PCM lane and names the exact final output sample. Session
 completion is published only after the device queue and endpoint padding drain.
 Successful device Start must return a generation-matched clock sample. The
 session anchors that device position and frequency to the requested integer
-timeline frame and preserves correlated QPC and precision metadata.
+timeline frame and preserves correlated QPC and precision metadata. A
+generation-checked position query combines this immutable anchor with the
+latest clock sample already cached by the device worker. It does not call the
+native clock from the session executor, and terminal queries preserve their
+cancelled, invalidated, or failed outcome.
 
 Close cancels decode ownership and records a separate cancellation terminal for
 an active generation, then closes and joins the device worker before publishing
@@ -50,7 +57,9 @@ The injected end-to-end test decodes the fixed patterned PCM WAV through the
 real FFmpeg reader and decode pump, crosses the production worker handoff, and
 compares captured device bytes with an independent canonical decode. It proves
 1,536 accepted output frames, exact EOS completion, a generation-matched clock
-anchor, and same-thread native construction, calls, close, and destruction.
+anchor, and same-thread native construction, calls, close, and destruction. It
+also proves source-media anchor preservation, non-regressing cached position
+reads, stale-generation refusal, and cache clearing across device generations.
 
 Replacement tests hold an active device wait without sleeps. A missing
 candidate preserves generation 1 and remains playing. A successful different
@@ -63,7 +72,8 @@ concurrent close callers observe one native teardown.
 ## Evidence boundary
 
 A green MSVC build and injected CTest prove executor ownership, generation
-barriers, canonical PCM transport, clock-anchor receipts, cancellation,
+barriers, canonical PCM transport, source-aware clock-anchor receipts, cached
+running-position reads, cancellation,
 replacement, terminal query, and close ordering against the scripted device.
 They do not prove audible output, physical endpoint latency, Windows 10 build
 19045 behavior, default-device migration, long-run drift, A/V frame selection,

@@ -58,6 +58,7 @@
     "nativeOwnership": "construct, call, close, and destroy the stream on one persistent device thread",
     "controlLane": "a bounded set of generation and lifecycle commands has priority and interrupts the active render wait",
     "pcmLane": "one bounded generation-tagged handoff; exact PCM identity and contiguous output samples",
+    "clockRead": "publish only the latest generation-matched clock sample already observed by the device thread; terminal failure or invalidation clears the sample and preserves its HRESULT; callers never invoke the native clock",
     "terminal": "end of stream becomes terminal only after queued PCM and endpoint padding drain"
   },
   "nativeSmoke": {

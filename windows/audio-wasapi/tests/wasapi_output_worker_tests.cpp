@@ -38,6 +38,7 @@ using palmier::audio::WasapiWorkerPcmBlock;
 using palmier::audio::WasapiWorkerPcmOutcome;
 using palmier::audio::WasapiWorkerPcmStage;
 using palmier::audio::WasapiWorkerConfigurationOutcome;
+using palmier::audio::WasapiWorkerClockOutcome;
 using palmier::audio::waitForWasapiRenderEvent;
 
 class HandleOwner final {
@@ -222,6 +223,18 @@ void controlPreemptsRenderWaitAndKeepsNativeOwnership() {
         const auto started = worker.start(1);
         require(started.outcome == WasapiOutputOutcome::changed, "worker start failed");
         require(started.currentState == WasapiOutputState::running, "worker not running");
+        const auto initialClock = worker.clockPosition(1);
+        require(
+            initialClock.outcome == WasapiWorkerClockOutcome::available,
+            "worker did not publish its start clock"
+        );
+        require(initialClock.hasSample, "worker start clock sample was absent");
+        require(initialClock.sample.generation == 1, "worker clock generation changed");
+        require(initialClock.sample.devicePosition == 240, "worker clock position changed");
+        require(
+            worker.clockPosition(2).outcome == WasapiWorkerClockOutcome::refused,
+            "stale clock read was accepted"
+        );
         require(
             WaitForSingleObject(state->enteredWait.get(), 1'000) == WAIT_OBJECT_0,
             "worker did not enter its render wait"
@@ -249,6 +262,10 @@ void controlPreemptsRenderWaitAndKeepsNativeOwnership() {
         const auto installed = worker.installGeneration(1, 42);
         require(installed.outcome == WasapiOutputOutcome::changed, "install failed");
         require(installed.generation == 42, "worker invented a generation");
+        require(
+            worker.clockPosition(42).outcome == WasapiWorkerClockOutcome::noSample,
+            "generation install retained the old clock sample"
+        );
         const auto oldTerminal = worker.waitForTerminal(1);
         require(
             oldTerminal.outcome == WasapiOutputOutcome::refused,
@@ -259,6 +276,10 @@ void controlPreemptsRenderWaitAndKeepsNativeOwnership() {
             "replaced generation waiter lost its reason"
         );
         require(worker.close().outcome == WasapiOutputOutcome::changed, "close failed");
+        require(
+            worker.clockPosition(42).outcome == WasapiWorkerClockOutcome::closed,
+            "closed worker returned a clock sample"
+        );
     }
 
     require(state->constructedThread != 0, "stream construction was not observed");
@@ -502,12 +523,23 @@ void setupFailureReturnsReceiptsWithoutStartingNativeOutput() {
 
 void terminalInvalidationMakesConfigurationUnavailable() {
     auto state = std::make_shared<StreamState>();
-    state->paddingResult.store(AUDCLNT_E_DEVICE_INVALIDATED);
     WasapiOutputWorker worker([state] {
         return std::make_unique<ScriptedWorkerStream>(state);
     });
     const auto started = worker.start(1);
-    require(started.outcome == WasapiOutputOutcome::invalidated, "invalidation was hidden");
+    require(started.outcome == WasapiOutputOutcome::changed, "worker start failed");
+    require(
+        worker.clockPosition(1).outcome == WasapiWorkerClockOutcome::available,
+        "start clock was unavailable"
+    );
+    require(
+        WaitForSingleObject(state->enteredWait.get(), 1'000) == WAIT_OBJECT_0,
+        "worker did not enter its render wait"
+    );
+    state->paddingResult.store(AUDCLNT_E_DEVICE_INVALIDATED);
+    require(SetEvent(state->renderEvent.get()) != FALSE, "render event failed");
+    const auto terminal = worker.waitForTerminal(1);
+    require(terminal.outcome == WasapiOutputOutcome::invalidated, "invalidation was hidden");
     const auto configuration = worker.configuration();
     require(
         configuration.outcome == WasapiWorkerConfigurationOutcome::unavailable,
@@ -516,6 +548,15 @@ void terminalInvalidationMakesConfigurationUnavailable() {
     require(
         configuration.hresult == AUDCLNT_E_DEVICE_INVALIDATED,
         "configuration lost invalidation HRESULT"
+    );
+    const auto clock = worker.clockPosition(1);
+    require(
+        clock.outcome == WasapiWorkerClockOutcome::unavailable,
+        "invalidated worker exposed its stale clock"
+    );
+    require(
+        clock.hresult == AUDCLNT_E_DEVICE_INVALIDATED,
+        "clock query lost invalidation HRESULT"
     );
     require(worker.close().outcome == WasapiOutputOutcome::changed, "close failed");
 }

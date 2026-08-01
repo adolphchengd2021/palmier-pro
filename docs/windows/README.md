@@ -102,11 +102,15 @@ See ADR 0011.
 
 The separate WASAPI output prototype adds a bounded PCM queue, transactional
 same-thread buffer leases, prime-before-start ordering, event-driven refill,
-pause/reset generation rules, invalidation receipts, and clock samples. Its
+pause/reset generation rules, invalidation receipts, and generation-checked
+cached clock samples. Its
 serial native smoke writes silence only, waits at most two seconds for one
 render event, then stops and resets. An unavailable CI endpoint remains a
 classified diagnostic, not output evidence. It does not yet provide media PCM,
-format conversion, automatic device recovery, audible playback, or A/V sync.
+format conversion, automatic device recovery, audible playback, or A/V frame
+selection. The media-session layer now preserves the first admitted source PTS
+and time base alongside its device clock anchor, but does not yet consume that
+mapping to select video frames.
 See ADR 0013 and `contracts/audio/v1/wasapi-output.json`.
 
 The first Qt target is an optional read-only project shell:

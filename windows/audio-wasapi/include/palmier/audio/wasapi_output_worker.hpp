@@ -70,6 +70,23 @@ struct WasapiWorkerPcmReceipt final {
     bool endOfStream{};
 };
 
+enum class WasapiWorkerClockOutcome {
+    available,
+    noSample,
+    refused,
+    unavailable,
+    failed,
+    closed,
+};
+
+struct WasapiWorkerClockReceipt final {
+    WasapiWorkerClockOutcome outcome{WasapiWorkerClockOutcome::failed};
+    HRESULT hresult{S_OK};
+    std::uint64_t generation{};
+    bool hasSample{};
+    AudioClockSample sample;
+};
+
 class WasapiOutputWorker final {
 public:
     WasapiOutputWorker();
@@ -100,6 +117,9 @@ public:
         std::uint64_t generation,
         std::stop_token stopToken = {}
     );
+    WasapiWorkerClockReceipt clockPosition(
+        std::uint64_t expectedGeneration
+    ) const;
     WasapiOutputReceipt close();
 
 private:

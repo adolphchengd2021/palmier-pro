@@ -58,8 +58,23 @@ enum class AudioPlaybackFailureCode {
 
 struct AudioPlaybackClockAnchor final {
     audio::AudioClockAnchor value;
+    std::int64_t sourcePresentationTimestamp{};
+    std::int32_t sourceTimeBaseNumerator{};
+    std::int32_t sourceTimeBaseDenominator{1};
     std::uint64_t qpc100Nanoseconds{};
     bool precisionDegraded{};
+};
+
+struct AudioPlaybackPositionReceipt final {
+    std::uint64_t generation{};
+    AudioPlaybackState state{AudioPlaybackState::idle};
+    AudioPlaybackOutcome outcome{AudioPlaybackOutcome::noOp};
+    AudioPlaybackFailureCode failure{AudioPlaybackFailureCode::none};
+    HRESULT hresult{S_OK};
+    bool hasClockAnchor{};
+    AudioPlaybackClockAnchor clockAnchor;
+    bool hasClockSample{};
+    audio::AudioClockSample clockSample;
 };
 
 struct AudioPlaybackReceipt final {
@@ -95,6 +110,9 @@ public:
         std::uint64_t generation,
         std::stop_token stopToken = {}
     );
+    AudioPlaybackPositionReceipt position(
+        std::uint64_t expectedGeneration
+    ) const;
     AudioPlaybackReceipt snapshot() const;
     AudioPlaybackReceipt close();
 

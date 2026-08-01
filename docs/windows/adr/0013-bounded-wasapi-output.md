@@ -60,6 +60,13 @@ stale generations, format drift, non-contiguous samples, invalid sizes, and
 overflow before queue admission. End of stream shares the ordered PCM lane and
 must name the exact final output sample.
 
+The device thread publishes its latest generation-matched clock sample after
+Start and render work. Read-only clock queries return that cached value under
+the worker mutex. They never call `IAudioClock` from the caller's executor, and
+a generation install or discard clears the cache before acknowledgement.
+Runtime failure or invalidation also clears it, and subsequent reads preserve
+the terminal classification and HRESULT instead of returning an old sample.
+
 ## Tests
 
 Injected tests prove prime-before-start order, checked padding subtraction,
@@ -74,7 +81,9 @@ commands cannot mutate a generation, PCM sample discontinuities are refused,
 ordered PCM and end of stream produce one terminal completion, setup failures
 remain observable, cancellation retracts an unadmitted handoff, concurrent
 close joins exactly once, and all stream calls plus construction and
-destruction stay on the device thread.
+destruction stay on the device thread. They also prove that cached clock reads
+reject stale generations, clear across generation installation, and remain
+unavailable after worker close.
 
 A separate serial CTest performs one bounded native silent cycle: setup, prime,
 start, wait up to two seconds for a render event, sample the clock, stop, reset,
