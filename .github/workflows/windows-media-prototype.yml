@@ -23,13 +23,23 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Resolve runner image cache identity
+        id: runner-image
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ImageVersion)) {
+            throw "ImageVersion is required for the vcpkg ABI cache key"
+          }
+          $imageVersion = $env:ImageVersion -replace '[^0-9A-Za-z._-]', '-'
+          "version=$imageVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Restore vcpkg caches
         uses: actions/cache@v4
         with:
           path: |
             ${{ runner.temp }}\vcpkg-downloads
             ${{ runner.temp }}\vcpkg-binary-cache
-          key: windows-vcpkg-v2-x64-msvc-14.44-${{ hashFiles('vcpkg.json') }}
+          key: windows-vcpkg-v3-${{ steps.runner-image.outputs.version }}-x64-msvc-14.44-${{ hashFiles('vcpkg.json') }}
 
       - name: Bootstrap locked vcpkg
         shell: pwsh

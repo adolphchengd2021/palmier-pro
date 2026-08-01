@@ -120,6 +120,7 @@ struct PlaybackState final {
     bool playCancellationObserved{};
     bool failClose{};
     bool failCancel{};
+    std::int64_t targetTimelineFrame{};
     std::function<void()> afterTick;
     std::mutex mutex;
     std::condition_variable condition;
@@ -212,12 +213,15 @@ public:
                 HeadlessAvPlaybackOutcome::noOp
             );
             value.hasTargetTimelineFrame = true;
-            value.targetTimelineFrame = 0;
+            value.targetTimelineFrame = state_->targetTimelineFrame;
             return value;
         }
         auto value = std::move(state_->ticks.front());
         state_->ticks.pop_front();
         state_->state = value.state;
+        if (value.hasTargetTimelineFrame) {
+            state_->targetTimelineFrame = value.targetTimelineFrame;
+        }
         if (state_->afterTick) {
             state_->afterTick();
         }
