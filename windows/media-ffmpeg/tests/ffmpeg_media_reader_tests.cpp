@@ -405,6 +405,33 @@ void decodesPlayableAac(const std::filesystem::path& input) {
     require(!reader.nextBlock().has_value(), "AAC EOF is not stable");
 }
 
+void decodesPlayableH264(const std::filesystem::path& input) {
+    const auto frame = FfmpegMediaReader::decodeFirstVideoFrame(input);
+    require(frame.width == 16 && frame.height == 16, "H.264 dimensions changed");
+    require(frame.rowBytes == 64, "H.264 decoded stride changed");
+    require(frame.presentationTimestamp == 0, "H.264 first timestamp changed");
+    require(frame.alphaMode == AlphaMode::opaque, "H.264 alpha is not opaque");
+    require(
+        palmier::media::isPrototypeSrgbColor(frame.color),
+        "H.264 color metadata left the sRGB prototype contract"
+    );
+    require(
+        frame.rgba8[0] == 253 && frame.rgba8[1] == 0
+            && frame.rgba8[2] == 0 && frame.rgba8[3] == 255,
+        "H.264 decoded pixel changed"
+    );
+    const auto source = palmier::media::makeRenderSourceFrame(frame);
+    require(source.width == 16 && source.height == 16, "H.264 render size changed");
+    require(source.pixels.size() == 256, "H.264 render pixels changed");
+    require(
+        source.pixels.front().red > 0.99F
+            && source.pixels.front().green == 0
+            && source.pixels.front().blue == 0
+            && source.pixels.front().alpha == 1,
+        "H.264 render pixel changed"
+    );
+}
+
 void audioCursorCancellationIsTerminal(const std::filesystem::path& input) {
     const PcmFormat format{
         24'000,
@@ -591,6 +618,7 @@ int main() {
         );
         dependencyContract();
         probesH264AndAac(h264Aac);
+        decodesPlayableH264(h264Aac);
         decodesPlayableAac(h264Aac);
         decodesStraightAlphaAndRotation(qtrle);
         decodesPresentationOrderedFrames(opaqueThreeFrames);
