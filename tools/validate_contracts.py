@@ -2209,6 +2209,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "qt_add_qml_module(palmier_qt_shell",
         "include/palmier/windows/project_load_coordinator.hpp",
         "include/palmier/windows/read_only_timeline_model.hpp",
+        "set_target_properties(palmier_qt_shell_tests PROPERTIES WIN32_EXECUTABLE FALSE)",
         "PROPERTIES ENVIRONMENT \"QT_QPA_PLATFORM=offscreen\" TIMEOUT 30",
         "add_palmier_qt_shell_test(reader_maps_current_project readerMapsCurrentProject)",
         "add_palmier_qt_shell_test(model_publishes_track_layout modelPublishesReadOnlyTrackLayout)",

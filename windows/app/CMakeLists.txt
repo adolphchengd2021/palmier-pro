@@ -49,6 +49,7 @@ if(BUILD_TESTING)
     qt_add_executable(palmier_qt_shell_tests
         tests/qt_shell_tests.cpp
     )
+    set_target_properties(palmier_qt_shell_tests PROPERTIES WIN32_EXECUTABLE FALSE)
     target_link_libraries(
         palmier_qt_shell_tests
         PRIVATE
