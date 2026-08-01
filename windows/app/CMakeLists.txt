@@ -71,8 +71,30 @@ if(BUILD_TESTING)
         PRIVATE /W4 /WX /permissive- /Zc:__cplusplus /utf-8
     )
     add_dependencies(palmier_qt_shell_tests palmier_qt_shell)
-    add_test(NAME qt_shell.reader_model_qml COMMAND palmier_qt_shell_tests -v1)
-    set_tests_properties(qt_shell.reader_model_qml PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    function(add_palmier_qt_shell_test test_name test_function)
+        add_test(
+            NAME qt_shell.${test_name}
+            COMMAND palmier_qt_shell_tests ${test_function} -v1
+        )
+        set_tests_properties(
+            qt_shell.${test_name}
+            PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30
+        )
+    endfunction()
+    add_palmier_qt_shell_test(reader_maps_current_project readerMapsCurrentProject)
+    add_palmier_qt_shell_test(model_publishes_track_layout modelPublishesReadOnlyTrackLayout)
+    add_palmier_qt_shell_test(failure_preserves_model failurePreservesPreviousModel)
+    add_palmier_qt_shell_test(stale_generation_is_rejected staleGenerationCannotReplaceNewerProject)
+    add_palmier_qt_shell_test(consecutive_opens_keep_latest consecutiveOpensKeepOnlyLatestPendingRequest)
+    add_palmier_qt_shell_test(cancellation_reaches_reader cancellationReachesReader)
+    add_palmier_qt_shell_test(late_cancellation_rejects_result cancellationAfterWorkBeforeCommitRejectsResult)
+    add_palmier_qt_shell_test(shutdown_waits_for_worker shutdownWaitsForAdmittedWorker)
+    add_palmier_qt_shell_test(unsafe_clip_is_skipped unsafeClipIsSkippedWithoutRejectingProject)
+    add_palmier_qt_shell_test(dense_timeline_is_rejected denseTimelineIsExplicitlyRejected)
+    add_palmier_qt_shell_test(structured_errors_preserve_details structuredErrorsPreserveStableDetails)
+    add_palmier_qt_shell_test(diagnostics_publish_warnings diagnosticsProduceLoadedWithWarnings)
+    add_palmier_qt_shell_test(qml_loads_offscreen qmlLoadsOffscreen)
+    add_palmier_qt_shell_test(qml_close_waits_for_worker qmlCloseWaitsForActiveWorker)
     add_test(NAME qt_shell.module_smoke COMMAND palmier_qt_shell --smoke-test)
     set_tests_properties(qt_shell.module_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
