@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "owner": "windows/media-session",
+  "stateOwner": "one serial media worker",
+  "operations": [
+    "start",
+    "enqueue",
+    "dequeue",
+    "cancel"
+  ],
+  "outcomes": [
+    "changed",
+    "noOp",
+    "stale",
+    "cancelled",
+    "refused"
+  ],
+  "reasons": [
+    "none",
+    "staleGeneration",
+    "stateChanged",
+    "operationCancelled",
+    "generationCancelled",
+    "frameCapacity",
+    "byteCapacity"
+  ],
+  "receiptFields": [
+    "operation",
+    "outcome",
+    "reason",
+    "generation",
+    "revision",
+    "queuedFrames",
+    "queuedBytes"
+  ],
+  "limits": {
+    "maximumFrames": 8,
+    "maximumBytes": 268435456
+  },
+  "errors": [
+    "invalidLimits",
+    "invalidAdapter",
+    "invalidAdapterResult",
+    "revisionOverflow",
+    "invalidGeneration",
+    "missingPresentationTimestamp",
+    "invalidTimeBase",
+    "changedTimeBase",
+    "nonIncreasingTimestamp",
+    "invalidFrameDimensions",
+    "frameByteOverflow"
+  ],
+  "invariants": {
+    "generation": "positive and monotonically increasing",
+    "presentationTimestamp": "required and strictly increasing within one generation",
+    "timeBase": "positive and constant within one generation",
+    "capacity": "refuse before adaptation when either frame or byte budget would be exceeded",
+    "cancellation": "operation cancellation rejects one enqueue; generation cancellation clears the queue and rejects every late frame",
+    "staleResult": "a result for any non-current generation or changed revision never mutates the buffer",
+    "dequeue": "frames leave in accepted presentation order"
+  },
+  "excluded": [
+    "file I/O or decode",
+    "thread creation",
+    "audio synchronization",
+    "seek or rate conversion",
+    "interactive presentation",
+    "cache eviction",
+    "Windows 10 runtime certification"
+  ]
+}

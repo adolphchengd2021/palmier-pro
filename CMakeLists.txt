@@ -25,6 +25,7 @@ option(PALMIER_ENABLE_FFMPEG_PROTOTYPE "Build the FFmpeg media prototype" OFF)
 if(PALMIER_ENABLE_FFMPEG_PROTOTYPE)
     add_subdirectory(windows/media-ffmpeg)
     add_subdirectory(windows/media-render)
+    add_subdirectory(windows/media-session)
 endif()
 
 option(PALMIER_ENABLE_QT_SHELL "Build the optional Qt/QML read-only shell" OFF)

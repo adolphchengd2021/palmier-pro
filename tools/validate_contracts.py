@@ -782,6 +782,52 @@ def swift_enum_cases(relative_path: str, name: str) -> list[str]:
     ]
 
 
+def cpp_type_body(source: str, kind: str, name: str) -> str:
+    declaration = re.search(
+        rf"\b{re.escape(kind)}\s+{re.escape(name)}\b[^{{]*{{",
+        source,
+    )
+    if declaration is None:
+        raise ContractError(f"C++ {kind} {name} not found")
+    opening = source.find("{", declaration.start())
+    depth = 0
+    for index in range(opening, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[opening + 1:index]
+    raise ContractError(f"C++ {kind} {name} is not closed")
+
+
+def cpp_enum_cases(source: str, name: str) -> list[str]:
+    body = cpp_type_body(source, "enum class", name)
+    cases = [
+        value.split("=", 1)[0].strip()
+        for value in body.split(",")
+        if value.strip()
+    ]
+    if not cases:
+        raise ContractError(f"C++ enum class {name} has no cases")
+    return cases
+
+
+def cpp_stored_fields(source: str, name: str) -> list[str]:
+    body = cpp_type_body(source, "struct", name)
+    fields: list[str] = []
+    for line in body.splitlines():
+        match = re.match(
+            r"^\s*[\w:<>]+\s+(\w+)(?:\{[^;]*\}|\s*=\s*[^;]+)?;\s*$",
+            line,
+        )
+        if match:
+            fields.append(match.group(1))
+    if not fields:
+        raise ContractError(f"C++ struct {name} has no stored fields")
+    return fields
+
+
 def schema_allows_null(
     schema: dict[str, Any],
     root_schema: dict[str, Any],
@@ -1874,6 +1920,294 @@ def windows_media_render_adapter_contract() -> None:
             raise ContractError(f"media-render ADR missing token {token!r}")
 
 
+def validate_presentation_video_contract(contract: dict[str, Any]) -> None:
+    require_equal("presentation-video version", contract.get("version"), 1)
+    require_equal(
+        "presentation-video owner",
+        contract.get("owner"),
+        "windows/media-session",
+    )
+    require_equal(
+        "presentation-video state owner",
+        contract.get("stateOwner"),
+        "one serial media worker",
+    )
+    require_equal(
+        "presentation-video operations",
+        contract.get("operations"),
+        ["start", "enqueue", "dequeue", "cancel"],
+    )
+    require_equal(
+        "presentation-video outcomes",
+        contract.get("outcomes"),
+        ["changed", "noOp", "stale", "cancelled", "refused"],
+    )
+    require_equal(
+        "presentation-video reasons",
+        contract.get("reasons"),
+        [
+            "none",
+            "staleGeneration",
+            "stateChanged",
+            "operationCancelled",
+            "generationCancelled",
+            "frameCapacity",
+            "byteCapacity",
+        ],
+    )
+    require_equal(
+        "presentation-video receipt fields",
+        contract.get("receiptFields"),
+        [
+            "operation",
+            "outcome",
+            "reason",
+            "generation",
+            "revision",
+            "queuedFrames",
+            "queuedBytes",
+        ],
+    )
+    require_equal(
+        "presentation-video limits",
+        contract.get("limits"),
+        {"maximumFrames": 8, "maximumBytes": 268435456},
+    )
+    require_equal(
+        "presentation-video errors",
+        contract.get("errors"),
+        [
+            "invalidLimits",
+            "invalidAdapter",
+            "invalidAdapterResult",
+            "revisionOverflow",
+            "invalidGeneration",
+            "missingPresentationTimestamp",
+            "invalidTimeBase",
+            "changedTimeBase",
+            "nonIncreasingTimestamp",
+            "invalidFrameDimensions",
+            "frameByteOverflow",
+        ],
+    )
+    require_equal(
+        "presentation-video invariants",
+        contract.get("invariants"),
+        {
+            "generation": "positive and monotonically increasing",
+            "presentationTimestamp": "required and strictly increasing within one generation",
+            "timeBase": "positive and constant within one generation",
+            "capacity": "refuse before adaptation when either frame or byte budget would be exceeded",
+            "cancellation": "operation cancellation rejects one enqueue; generation cancellation clears the queue and rejects every late frame",
+            "staleResult": "a result for any non-current generation or changed revision never mutates the buffer",
+            "dequeue": "frames leave in accepted presentation order",
+        },
+    )
+    require_equal(
+        "presentation-video exclusions",
+        contract.get("excluded"),
+        [
+            "file I/O or decode",
+            "thread creation",
+            "audio synchronization",
+            "seek or rate conversion",
+            "interactive presentation",
+            "cache eviction",
+            "Windows 10 runtime certification",
+        ],
+    )
+
+
+def windows_presentation_video_buffer_contract() -> None:
+    root_cmake = read_text("CMakeLists.txt")
+    session_cmake = read_text("windows/media-session/CMakeLists.txt")
+    header = read_text(
+        "windows/media-session/include/palmier/media/presentation_video_buffer.hpp"
+    )
+    source = read_text("windows/media-session/presentation_video_buffer.cpp")
+    test_access = read_text(
+        "windows/media-session/internal/presentation_video_buffer_testing.hpp"
+    )
+    tests = read_text(
+        "windows/media-session/tests/presentation_video_buffer_tests.cpp"
+    )
+    contract = load_json("contracts/media/v1/presentation-video-buffer.json")
+
+    if "add_subdirectory(windows/media-session)" not in root_cmake:
+        raise ContractError("root CMake missing media-session target")
+    for token in [
+        "palmier_media_session",
+        "palmier_media_render",
+        "media_session.presentation_video_buffer",
+        "PROPERTIES TIMEOUT 30",
+        '"${CMAKE_CURRENT_SOURCE_DIR}/../media-render"',
+        '"${CMAKE_CURRENT_SOURCE_DIR}"',
+        "/W4 /WX /permissive- /Zc:__cplusplus /utf-8",
+    ]:
+        if token not in session_cmake:
+            raise ContractError(f"media-session CMake missing token {token!r}")
+    for token in [
+        "PresentationVideoBufferLimits",
+        "PresentationVideoOperation",
+        "PresentationVideoOutcome",
+        "PresentationVideoReason",
+        "PresentationVideoReceipt",
+        "PresentedVideoFrame",
+        "PresentationVideoTake",
+        "class PresentationVideoBuffer final",
+        "using FrameAdapter = std::function<render::SourceFrame(",
+        "using AdaptedFrameCheckpoint = std::function<void()>;",
+        "PresentationVideoBuffer(const PresentationVideoBuffer&) = delete;",
+        "PresentationVideoBuffer(PresentationVideoBuffer&&) = delete;",
+        "maximumFrames{8}",
+        "maximumBytes{256ULL * 1024ULL * 1024ULL}",
+        "std::stop_token cancellation",
+    ]:
+        if token not in header:
+            raise ContractError(f"presentation-video API missing token {token!r}")
+    for token in [
+        "requireValidGeneration(generation)",
+        "generation != generation_",
+        "decoded.presentationTimestamp",
+        "sameTimeBase(*timeBase_, decoded.timeBase)",
+        "*decoded.presentationTimestamp <= *lastAcceptedTimestamp_",
+        "frames_.size() >= limits_.maximumFrames",
+        "frameBytes > limits_.maximumBytes - queuedBytes_",
+        "frameAdapter_(decoded, cancellation)",
+        "adaptedFrameCheckpoint_",
+        "validateAdapterResult(decoded, *source, frameBytes)",
+        "render::validateSourceFrame(source, \"/source\")",
+        "revalidationReceipt(generation, expectedRevision)",
+        "revision_ != expectedRevision",
+        "requireRevisionCapacity()",
+        'error.code == "cancelled"',
+        "frames_.clear()",
+    ]:
+        if token not in source:
+            raise ContractError(f"presentation-video source missing token {token!r}")
+    for token in [
+        "validatesLimitsAndGenerations",
+        "revisionOverflowPreservesState",
+        "ordersAndDequeuesFrames",
+        "validatesTimestampAndTimeBaseBeforeMutation",
+        "enforcesCapacityBeforeAdaptation",
+        "adapterFailurePreservesQueue",
+        "invalidAdapterResultPreservesQueue",
+        "cancellationDuringAndAfterAdaptationPreservesQueue",
+        "reentrantGenerationChangeRejectsOuterCommit",
+        "adapterReentrancyRejectsOuterCommit",
+        "reentrantCancellationRejectsOuterCommit",
+        "reentrantRevisionChangeRejectsOuterCommit",
+        "rejectsStaleAndCancelledResultsBeforeValidation",
+        "RenderSourceAdapterHooks",
+        "stopDuringOnce",
+        "stopAfterOnce",
+        "static_assert(!std::is_copy_constructible_v<PresentationVideoBuffer>)",
+        "PresentationVideoBufferTestAccess::setRevision",
+        "PresentationVideoErrorCode::revisionOverflow",
+        "PresentationVideoReason::frameCapacity",
+        "PresentationVideoReason::byteCapacity",
+        "PresentationVideoReason::stateChanged",
+        "PresentationVideoOutcome::stale",
+        "PresentationVideoOutcome::cancelled",
+    ]:
+        if token not in tests:
+            raise ContractError(f"presentation-video tests missing token {token!r}")
+
+    for token in [
+        "class PresentationVideoBufferTestAccess final",
+        "return PresentationVideoBuffer(",
+        "buffer.revision_ = revision",
+    ]:
+        if token not in test_access:
+            raise ContractError(f"presentation-video test access missing token {token!r}")
+
+    if source.count("cancellation.stop_requested()") < 2:
+        raise ContractError("presentation-video source lost a cancellation checkpoint")
+    def validate_header_shape(candidate: str) -> None:
+        enum_contracts = {
+            "PresentationVideoOperation": contract.get("operations", []),
+            "PresentationVideoOutcome": contract.get("outcomes", []),
+            "PresentationVideoReason": contract.get("reasons", []),
+            "PresentationVideoErrorCode": contract.get("errors", []),
+        }
+        for enum_name, expected in enum_contracts.items():
+            require_equal(
+                f"presentation-video C++ {enum_name}",
+                cpp_enum_cases(candidate, enum_name),
+                expected,
+            )
+        require_equal(
+            "presentation-video C++ receipt fields",
+            cpp_stored_fields(candidate, "PresentationVideoReceipt"),
+            contract.get("receiptFields", []),
+        )
+
+    validate_header_shape(header)
+    extra_reason = header.replace(
+        "enum class PresentationVideoReason {",
+        "enum class PresentationVideoReason {\n    inventedReason,",
+        1,
+    )
+    expect_failure(
+        "presentation-video C++ extra reason",
+        lambda: validate_header_shape(extra_reason),
+    )
+    extra_receipt = header.replace(
+        "struct PresentationVideoReceipt final {",
+        "struct PresentationVideoReceipt final {\n    std::uint64_t inventedField;",
+        1,
+    )
+    expect_failure(
+        "presentation-video C++ extra receipt field",
+        lambda: validate_header_shape(extra_receipt),
+    )
+
+    validate_presentation_video_contract(contract)
+    invalid_owner = dict(contract)
+    invalid_owner["stateOwner"] = "concurrent callers"
+    expect_failure(
+        "presentation-video state owner",
+        lambda: validate_presentation_video_contract(invalid_owner),
+    )
+    invalid_receipts = dict(contract)
+    invalid_receipts["receiptFields"] = contract["receiptFields"][:-1]
+    expect_failure(
+        "presentation-video receipt fields",
+        lambda: validate_presentation_video_contract(invalid_receipts),
+    )
+    invalid_reasons = dict(contract)
+    invalid_reasons["reasons"] = [
+        value for value in contract["reasons"] if value != "stateChanged"
+    ]
+    expect_failure(
+        "presentation-video state-change reason",
+        lambda: validate_presentation_video_contract(invalid_reasons),
+    )
+    invalid_errors = dict(contract)
+    invalid_errors["errors"] = [
+        value for value in contract["errors"] if value != "revisionOverflow"
+    ]
+    expect_failure(
+        "presentation-video revision overflow",
+        lambda: validate_presentation_video_contract(invalid_errors),
+    )
+
+    adr = read_text("docs/windows/adr/0015-presentation-video-buffer.md")
+    for token in [
+        "media worker owns a `PresentationVideoBuffer`",
+        "receipt without validation, allocation, or mutation",
+        "strictly increasing PTS values",
+        "normalized RGBA32F byte budgets",
+        "single-owner and unsynchronized",
+        "Every mutation advances a checked revision",
+        "revalidates generation, admission state, and revision",
+        "does not yet decode multiple real frames",
+    ]:
+        if token not in adr:
+            raise ContractError(f"presentation-video ADR missing token {token!r}")
+
+
 def windows_audio_wasapi_contract() -> None:
     root_cmake = read_text("CMakeLists.txt")
     audio_cmake = read_text("windows/audio-wasapi/CMakeLists.txt")
@@ -2366,6 +2700,7 @@ def main() -> int:
         ("Windows read-only project reader", windows_project_reader_contract),
         ("Windows render plan and D3D11 WARP", windows_render_plan_contract),
         ("Windows decoded-frame render adapter", windows_media_render_adapter_contract),
+        ("Windows presentation video buffer", windows_presentation_video_buffer_contract),
         ("Windows WASAPI clock and environment probe", windows_audio_wasapi_contract),
         ("Windows bounded WASAPI output", windows_wasapi_output_contract),
         ("Windows Qt read-only project shell", windows_qt_read_only_shell_contract),
