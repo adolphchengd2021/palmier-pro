@@ -75,7 +75,7 @@ if(BUILD_TESTING)
     function(add_palmier_qt_shell_test test_name test_function)
         add_test(
             NAME qt_shell.${test_name}
-            COMMAND palmier_qt_shell_tests ${test_function} -v1
+            COMMAND palmier_qt_shell_tests ${test_function} -v1 -o -,txt
         )
         set_tests_properties(
             qt_shell.${test_name}
