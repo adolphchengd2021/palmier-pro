@@ -806,7 +806,10 @@ void saveAsPreservesPackageAndAdoptsCommittedIdentity(
     require(result.write.runtimeAcknowledged, "Save As was not acknowledged");
     require(!result.write.runtimeDirty, "Save As left the committed state dirty");
     require(result.identityAdopted && result.identity.has_value(), "Save As identity was not adopted");
-    require(result.identity->path == destination.path(), "Save As adopted the wrong destination");
+    require(
+        result.identity->path == std::filesystem::weakly_canonical(destination.path()),
+        "Save As adopted the wrong destination"
+    );
     require(result.package.copiedFileCount == 3, "Save As copied the wrong file count");
     require(
         result.package.copiedBytes
