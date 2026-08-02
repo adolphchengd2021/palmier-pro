@@ -98,7 +98,7 @@ jobs:
         run: cmake --preset windows-msvc-x64-qt-shell
 
       - name: Build
-        run: cmake --build --preset windows-msvc-x64-qt-shell-release --parallel
+        run: cmake --build --preset windows-msvc-x64-qt-shell-release --parallel 2
 
       - name: Test offscreen shell
         shell: pwsh

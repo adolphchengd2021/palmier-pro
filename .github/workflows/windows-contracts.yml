@@ -67,7 +67,7 @@ jobs:
         run: cmake --preset windows-msvc-x64
 
       - name: Build
-        run: cmake --build --preset windows-msvc-x64-release --parallel
+        run: cmake --build --preset windows-msvc-x64-release --parallel 2
 
       - name: Test
         run: ctest --preset windows-msvc-x64-release
