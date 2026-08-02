@@ -59,6 +59,17 @@ struct ProjectProjection final {
     ProjectPreviewProjection preview;
 };
 
+struct ProjectLoadCandidate final {
+    std::optional<palmier::project::ProjectDocument> document;
+    ProjectProjection projection;
+
+    ProjectLoadCandidate(ProjectProjection value);
+    ProjectLoadCandidate(
+        palmier::project::ProjectDocument documentValue,
+        ProjectProjection projectionValue
+    );
+};
+
 class ProjectProjectionError final : public std::runtime_error {
 public:
     ProjectProjectionError(std::string code, std::string detail);
@@ -67,6 +78,10 @@ public:
 };
 
 ProjectProjection loadProjectProjection(
+    const std::filesystem::path& packagePath,
+    std::stop_token cancellation
+);
+ProjectLoadCandidate loadProjectCandidate(
     const std::filesystem::path& packagePath,
     std::stop_token cancellation
 );

@@ -3917,6 +3917,8 @@ def windows_qt_read_only_shell_contract() -> None:
     presets = load_json("CMakePresets.json")
     app_cmake = read_text("windows/app/CMakeLists.txt")
     coordinator = read_text("windows/app/src/project_load_coordinator.cpp")
+    runtime_mailbox = read_text("windows/app/src/project_runtime_mailbox.cpp")
+    runtime_bridge = read_text("windows/app/src/project_runtime_projection_bridge.cpp")
     projection = read_text("windows/app/src/project_projection_loader.cpp")
     timeline_model = read_text("windows/app/src/read_only_timeline_model.cpp")
     qml = read_text("windows/app/qml/Main.qml")
@@ -3958,6 +3960,8 @@ def windows_qt_read_only_shell_contract() -> None:
         "qt_add_executable(palmier_qt_shell",
         "qt_add_qml_module(palmier_qt_shell",
         "include/palmier/windows/project_load_coordinator.hpp",
+        "include/palmier/windows/project_runtime_mailbox.hpp",
+        "include/palmier/windows/project_runtime_projection_bridge.hpp",
         "include/palmier/windows/read_only_timeline_model.hpp",
         "set_target_properties(palmier_qt_shell_tests PROPERTIES WIN32_EXECUTABLE FALSE)",
         'set(test_log "${CMAKE_CURRENT_BINARY_DIR}/qt-test-${test_name}.txt")',
@@ -3987,6 +3991,11 @@ def windows_qt_read_only_shell_contract() -> None:
         "add_palmier_qt_shell_test(qml_loads_offscreen qmlLoadsOffscreen)",
         "add_palmier_qt_shell_test(qml_close_waits_for_worker qmlCloseWaitsForActiveWorker)",
         "qt_shell.module_smoke",
+        "runtimeMailboxPublishesUndoAndPersistenceIdentity",
+        "runtimeMutationRefreshesQtProjectionAndInvalidatesPreview",
+        "cancellationAfterRuntimeInstallCannotRollbackCommit",
+        "persistencePublicationRetagsInFlightProjection",
+        "supersededInstalledProjectWaitsForLatestLoadOutcome",
     ]:
         if token not in app_cmake:
             raise ContractError(f"Qt shell CMake missing token {token!r}")
@@ -3994,16 +4003,35 @@ def windows_qt_read_only_shell_contract() -> None:
         "std::stop_source",
         "request_stop()",
         "requestGeneration == generation_",
-        "result.cancelled || cancellation.stop_requested()",
+        "cancellation.stop_requested() && runtime_ == nullptr",
         "pendingLoad_",
         "setMaxThreadCount(1)",
         "requestShutdown()",
         "emit shutdownReady()",
         "resultDeliveryCheckpoint",
         "errorPointer",
+        "restoreCommittedPresentation()",
+        "committedErrorMessage_ = update.errorMessage",
     ]:
         if token not in coordinator:
             raise ContractError(f"Qt load coordinator missing token {token!r}")
+    for token in [
+        "sequence_.fetch_add(1",
+        "after / 2",
+        "session_.store(state.session",
+        "before == after",
+    ]:
+        if token not in runtime_mailbox:
+            raise ContractError(f"Qt runtime mailbox missing token {token!r}")
+    for token in [
+        "setMaxThreadCount(1)",
+        "scheduledStateId_ == latest->session->stateId",
+        "projectionStopSource_.request_stop()",
+        "latest->token == result.publication.token",
+        "PreviewCandidateAvailability::invalidated",
+    ]:
+        if token not in runtime_bridge:
+            raise ContractError(f"Qt runtime projection bridge missing token {token!r}")
     for token in [
         "checkCancellation(cancellation)",
         "checkedClipEnd",
@@ -4082,6 +4110,11 @@ def windows_qt_read_only_shell_contract() -> None:
         "qmlLoadsOffscreen",
         "qmlCloseWaitsForActiveWorker",
         "previewViewport",
+        "runtimeMailboxPublishesUndoAndPersistenceIdentity",
+        "runtimeMutationRefreshesQtProjectionAndInvalidatesPreview",
+        "cancellationAfterRuntimeInstallCannotRollbackCommit",
+        "persistencePublicationRetagsInFlightProjection",
+        "supersededInstalledProjectWaitsForLatestLoadOutcome",
     ]:
         if token not in qt_tests:
             raise ContractError(f"Qt shell test missing token {token!r}")
@@ -4123,6 +4156,18 @@ def windows_qt_read_only_shell_contract() -> None:
     ]:
         if token not in adr:
             raise ContractError(f"Qt shell ADR missing token {token!r}")
+    runtime_adr = read_text("docs/windows/adr/0029-qt-shared-project-runtime.md")
+    for token in [
+        "one `ProjectRuntime`",
+        "publication token",
+        "undo can restore a lower state ID",
+        "Persistence-only publications do not rebuild",
+        "Once install returns, its publication is authoritative",
+        "joins MCP and the",
+        "runtime off the GUI thread",
+    ]:
+        if token not in runtime_adr:
+            raise ContractError(f"Qt shared runtime ADR missing token {token!r}")
 
 
 def windows_qt_preview_host_contract() -> None:

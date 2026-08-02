@@ -91,6 +91,11 @@ public:
         std::uint64_t projectGeneration,
         ProjectPreviewProjection preview
     );
+    void replaceProjectPreview(
+        std::uint64_t projectGeneration,
+        std::uint64_t projectRevision,
+        ProjectPreviewProjection preview
+    );
     Q_INVOKABLE bool requestShutdown();
 
 signals:
@@ -112,6 +117,7 @@ private:
     struct PendingPreview final {
         std::uint64_t sourceSerial{};
         std::uint64_t projectGeneration{};
+        std::uint64_t projectRevision{};
         ProjectPreviewProjection preview;
     };
 

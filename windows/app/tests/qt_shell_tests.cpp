@@ -8,20 +8,24 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QSemaphore>
+#include <QSemaphoreReleaser>
 #include <QSignalSpy>
 #include <QTest>
 #include <QVariantMap>
 #include <QWindow>
 
 #include <condition_variable>
+#include <atomic>
 #include <cstddef>
 #include <cstdio>
 #include <exception>
 #include <filesystem>
 #include <mutex>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -132,6 +136,362 @@ class QtShellTests final : public QObject {
     Q_OBJECT
 
 private slots:
+    void runtimeMailboxPublishesUndoAndPersistenceIdentity() {
+        constexpr auto source = R"({"timelines":[{"id":"timeline","name":"Timeline","fps":30,"width":1920,"height":1080,"tracks":[{"id":"track","type":"video","clips":[{"id":"clip","mediaRef":"media","startFrame":0,"durationFrames":20}]}]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]})";
+        auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
+        palmier::project::ProjectRuntime runtime(mailbox);
+        auto document = palmier::project::readProject(
+            source,
+            [] { return std::string("generated"); }
+        );
+        const auto installed = runtime.install(
+            std::move(document),
+            1,
+            [] { return std::string("split-generated"); }
+        );
+        auto publication = mailbox->latest();
+        QVERIFY(publication.has_value());
+        QCOMPARE(publication->token, std::uint64_t{1});
+        QCOMPARE(publication->session.get(), installed.session.get());
+
+        const auto split = runtime.splitClips({
+            std::vector<palmier::project::SplitPoint>{{"clip", 10}},
+            std::nullopt,
+            std::nullopt,
+        });
+        publication = mailbox->latest();
+        QVERIFY(publication.has_value());
+        QCOMPARE(publication->token, std::uint64_t{2});
+        QCOMPARE(publication->session->revision, std::uint64_t{1});
+        QCOMPARE(publication->session->stateId, std::uint64_t{1});
+        QCOMPARE(publication->session->persistedStateId, std::uint64_t{0});
+
+        static_cast<void>(runtime.markPersisted(split.session->stateId));
+        publication = mailbox->latest();
+        QVERIFY(publication.has_value());
+        QCOMPARE(publication->token, std::uint64_t{3});
+        QCOMPARE(publication->session->revision, std::uint64_t{1});
+        QCOMPARE(publication->session->stateId, std::uint64_t{1});
+        QCOMPARE(publication->session->persistedStateId, std::uint64_t{1});
+
+        static_cast<void>(runtime.undo());
+        publication = mailbox->latest();
+        QVERIFY(publication.has_value());
+        QCOMPARE(publication->token, std::uint64_t{4});
+        QCOMPARE(publication->session->revision, std::uint64_t{2});
+        QCOMPARE(publication->session->stateId, std::uint64_t{0});
+        QCOMPARE(publication->session->persistedStateId, std::uint64_t{1});
+    }
+
+    void runtimeMutationRefreshesQtProjectionAndInvalidatesPreview() {
+        auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
+        palmier::project::ProjectRuntime runtime(mailbox);
+        palmier::windows::ProjectRuntimeProjectionBridge bridge(mailbox);
+        palmier::windows::ProjectLoadCoordinator coordinator(
+            runtime,
+            mailbox,
+            [] { return std::string("qt-runtime-generated"); },
+            nullptr
+        );
+        connect(
+            &bridge,
+            &palmier::windows::ProjectRuntimeProjectionBridge::publicationObserved,
+            &coordinator,
+            [&] {
+                const auto publication = bridge.takeObservedPublication();
+                if (publication) coordinator.observeRuntimePublication(*publication);
+            }
+        );
+        connect(
+            &bridge,
+            &palmier::windows::ProjectRuntimeProjectionBridge::projectionReady,
+            &coordinator,
+            [&] {
+                auto update = bridge.takeReadyUpdateIfCurrent();
+                if (update) coordinator.applyRuntimeProjection(std::move(*update));
+            }
+        );
+        coordinator.openFolder(QUrl::fromLocalFile(QString::fromStdWString(
+            fixture("current-multitimeline.palmier").wstring()
+        )));
+        QTRY_COMPARE_WITH_TIMEOUT(coordinator.state(), QStringLiteral("loaded"), 5000);
+        QCOMPARE(coordinator.committedGeneration(), std::uint64_t{1});
+        QCOMPARE(coordinator.committedRevision(), std::uint64_t{0});
+
+        std::exception_ptr mutationFailure;
+        std::jthread mutation([&] {
+            try {
+                static_cast<void>(runtime.splitClips({
+                    std::vector<palmier::project::SplitPoint>{{"clip-main-1", 75}},
+                    std::nullopt,
+                    std::nullopt,
+                }));
+            } catch (...) {
+                mutationFailure = std::current_exception();
+            }
+        });
+        QTRY_COMPARE_WITH_TIMEOUT(coordinator.committedRevision(), std::uint64_t{1}, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            coordinator.committedPreview().availability,
+            palmier::windows::PreviewCandidateAvailability::invalidated,
+            5000
+        );
+        QTRY_COMPARE_WITH_TIMEOUT(coordinator.model()->rowCount(), 1, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            coordinator.model()->data(
+                coordinator.model()->index(0, 0),
+                palmier::windows::ReadOnlyTimelineModel::ClipItemsRole
+            ).toList().size(),
+            2,
+            5000
+        );
+        mutation.join();
+        if (mutationFailure) std::rethrow_exception(mutationFailure);
+        QVERIFY(coordinator.requestShutdown());
+        QVERIFY(bridge.requestShutdown());
+    }
+
+    void cancellationAfterRuntimeInstallCannotRollbackCommit() {
+        palmier::windows::ProjectLoadCoordinator* coordinatorPointer = nullptr;
+        std::atomic<bool> checkpointFired{};
+        auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>([&] {
+            if (checkpointFired.exchange(true)) return;
+            QMetaObject::invokeMethod(
+                coordinatorPointer,
+                [coordinatorPointer] { coordinatorPointer->cancelLoading(); },
+                Qt::BlockingQueuedConnection
+            );
+        });
+        palmier::project::ProjectRuntime runtime(mailbox);
+        palmier::windows::ProjectLoadCoordinator coordinator(
+            runtime,
+            mailbox,
+            [] { return std::string("qt-runtime-generated"); },
+            nullptr
+        );
+        coordinatorPointer = &coordinator;
+        coordinator.openFolder(QUrl::fromLocalFile(QString::fromStdWString(
+            fixture("current-multitimeline.palmier").wstring()
+        )));
+        QTRY_VERIFY_WITH_TIMEOUT(checkpointFired.load(), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(coordinator.state(), QStringLiteral("loaded"), 5000);
+        QCOMPARE(coordinator.committedGeneration(), std::uint64_t{1});
+        const auto publication = mailbox->latest();
+        QVERIFY(publication.has_value());
+        QCOMPARE(publication->projectGeneration, std::uint64_t{1});
+        QCOMPARE(
+            coordinator.model()->project().activeTimelineId,
+            std::string("timeline-main")
+        );
+        QVERIFY(coordinator.requestShutdown());
+    }
+
+    void persistencePublicationRetagsInFlightProjection() {
+        constexpr auto source = R"({"timelines":[{"id":"timeline","name":"Timeline","fps":30,"width":1920,"height":1080,"tracks":[{"id":"track","type":"video","clips":[{"id":"clip","mediaRef":"media","startFrame":0,"durationFrames":20}]}]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]})";
+        QSemaphore projectionEntered;
+        QSemaphore projectionGate;
+        QSemaphoreReleaser releaseGateOnExit(projectionGate);
+        auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
+        palmier::project::ProjectRuntime runtime(mailbox);
+        palmier::windows::ProjectRuntimeProjectionBridge bridge(
+            mailbox,
+            [&](const palmier::windows::ProjectRuntimePublication& publication) {
+                if (
+                    publication.session
+                    && publication.session->revision == 1
+                    && publication.session->persistedStateId == 0
+                ) {
+                    projectionEntered.release();
+                    projectionGate.acquire();
+                }
+            },
+            nullptr
+        );
+        QSignalSpy projectionReady(
+            &bridge,
+            &palmier::windows::ProjectRuntimeProjectionBridge::projectionReady
+        );
+        auto document = palmier::project::readProject(
+            source,
+            [] { return std::string("generated"); }
+        );
+        static_cast<void>(runtime.install(
+            std::move(document),
+            1,
+            [] { return std::string("split-generated"); }
+        ));
+        QTRY_COMPARE_WITH_TIMEOUT(projectionReady.count(), 1, 5000);
+        QVERIFY(bridge.takeReadyUpdateIfCurrent().has_value());
+        projectionReady.clear();
+
+        std::exception_ptr mutationFailure;
+        std::uint64_t splitStateId{};
+        std::jthread mutation([&] {
+            try {
+                const auto split = runtime.splitClips({
+                    std::vector<palmier::project::SplitPoint>{{"clip", 10}},
+                    std::nullopt,
+                    std::nullopt,
+                });
+                splitStateId = split.session->stateId;
+            } catch (...) {
+                mutationFailure = std::current_exception();
+            }
+        });
+        mutation.join();
+        if (mutationFailure) std::rethrow_exception(mutationFailure);
+        QTRY_COMPARE_WITH_TIMEOUT(projectionEntered.available(), 1, 5000);
+
+        std::exception_ptr persistenceFailure;
+        std::jthread persistence([&] {
+            try {
+                static_cast<void>(runtime.markPersisted(splitStateId));
+            } catch (...) {
+                persistenceFailure = std::current_exception();
+            }
+        });
+        persistence.join();
+        if (persistenceFailure) std::rethrow_exception(persistenceFailure);
+        const auto latest = mailbox->latest();
+        QVERIFY(latest.has_value());
+        QCOMPARE(latest->token, std::uint64_t{3});
+        QCOMPARE(latest->session->persistedStateId, splitStateId);
+
+        projectionGate.release();
+        static_cast<void>(releaseGateOnExit.cancel());
+        QTRY_COMPARE_WITH_TIMEOUT(projectionReady.count(), 1, 5000);
+        const auto update = bridge.takeReadyUpdateIfCurrent();
+        QVERIFY(update.has_value());
+        QCOMPARE(update->publication.token, latest->token);
+        QCOMPARE(update->publication.session->persistedStateId, splitStateId);
+        QVERIFY(update->project.has_value());
+        QCOMPARE(update->project->timelines.front().tracks.front().clips.size(), std::size_t{2});
+        QVERIFY(bridge.requestShutdown());
+    }
+
+    void supersededInstalledProjectWaitsForLatestLoadOutcome_data() {
+        QTest::addColumn<bool>("projectionFails");
+        QTest::newRow("projection succeeds") << false;
+        QTest::newRow("projection fails") << true;
+    }
+
+    void supersededInstalledProjectWaitsForLatestLoadOutcome() {
+        QFETCH(bool, projectionFails);
+        palmier::windows::ProjectLoadCoordinator* coordinatorPointer = nullptr;
+        std::atomic<bool> openedReplacement{};
+        QSemaphore replacementEntered;
+        QSemaphore replacementGate;
+        QSemaphoreReleaser releaseReplacementOnExit(replacementGate);
+        auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>([&] {
+            if (openedReplacement.exchange(true)) return;
+            QMetaObject::invokeMethod(
+                coordinatorPointer,
+                [coordinatorPointer] {
+                    coordinatorPointer->openFolder(
+                        QUrl::fromLocalFile(QStringLiteral("C:/replacement.palmier"))
+                    );
+                },
+                Qt::BlockingQueuedConnection
+            );
+        });
+        palmier::project::ProjectRuntime runtime(mailbox);
+        palmier::windows::ProjectRuntimeProjectionBridge bridge(
+            mailbox,
+            [projectionFails](const palmier::windows::ProjectRuntimePublication&) {
+                if (projectionFails) {
+                    throw std::runtime_error("deferred projection failed");
+                }
+            },
+            nullptr
+        );
+        palmier::windows::ProjectLoadCoordinator coordinator(
+            runtime,
+            mailbox,
+            [] { return std::string("qt-runtime-generated"); },
+            [&](const std::filesystem::path& path, std::stop_token cancellation)
+                -> palmier::windows::ProjectLoadCandidate {
+                if (path.filename() == L"replacement.palmier") {
+                    replacementEntered.release();
+                    replacementGate.acquire();
+                    throw std::runtime_error("replacement failed");
+                }
+                if (path.filename() == L"cancel.palmier") {
+                    waitForCancellation(cancellation);
+                    throw palmier::windows::ProjectProjectionError(
+                        "cancelled",
+                        "cancelled"
+                    );
+                }
+                return palmier::windows::loadProjectCandidate(
+                    fixture("current-multitimeline.palmier"),
+                    cancellation
+                );
+            },
+            nullptr
+        );
+        coordinatorPointer = &coordinator;
+        connect(
+            &bridge,
+            &palmier::windows::ProjectRuntimeProjectionBridge::publicationObserved,
+            &coordinator,
+            [&] {
+                const auto publication = bridge.takeObservedPublication();
+                if (publication) coordinator.observeRuntimePublication(*publication);
+            }
+        );
+        connect(
+            &bridge,
+            &palmier::windows::ProjectRuntimeProjectionBridge::projectionReady,
+            &coordinator,
+            [&] {
+                auto update = bridge.takeReadyUpdateIfCurrent();
+                if (update) coordinator.applyRuntimeProjection(std::move(*update));
+            }
+        );
+        QSignalSpy projectCommitted(
+            &coordinator,
+            &palmier::windows::ProjectLoadCoordinator::projectCommitted
+        );
+        QSignalSpy projectionReady(
+            &bridge,
+            &palmier::windows::ProjectRuntimeProjectionBridge::projectionReady
+        );
+        coordinator.openFolder(QUrl::fromLocalFile(QStringLiteral("C:/first.palmier")));
+        QTRY_COMPARE_WITH_TIMEOUT(replacementEntered.available(), 1, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(projectionReady.count(), 1, 5000);
+        QCOMPARE(projectCommitted.count(), 0);
+        QCOMPARE(coordinator.committedGeneration(), std::uint64_t{0});
+
+        replacementGate.release();
+        static_cast<void>(releaseReplacementOnExit.cancel());
+        QTRY_COMPARE_WITH_TIMEOUT(coordinator.state(), QStringLiteral("failed"), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(projectCommitted.count(), 1, 5000);
+        QCOMPARE(coordinator.committedGeneration(), std::uint64_t{1});
+        if (projectionFails) {
+            QCOMPARE(coordinator.model()->rowCount(), 0);
+        } else {
+            QCOMPARE(
+                coordinator.model()->project().activeTimelineId,
+                std::string("timeline-main")
+            );
+        }
+        QCOMPARE(coordinator.errorMessage(), QStringLiteral("replacement failed"));
+        if (projectionFails) {
+            coordinator.openFolder(
+                QUrl::fromLocalFile(QStringLiteral("C:/cancel.palmier"))
+            );
+            QTRY_VERIFY_WITH_TIMEOUT(coordinator.loading(), 5000);
+            coordinator.cancelLoading();
+            QTRY_COMPARE_WITH_TIMEOUT(coordinator.state(), QStringLiteral("failed"), 5000);
+            QCOMPARE(
+                coordinator.errorMessage(),
+                QStringLiteral("deferred projection failed")
+            );
+        }
+        QVERIFY(coordinator.requestShutdown());
+        QVERIFY(bridge.requestShutdown());
+    }
+
     void readerMapsCurrentProject() {
         palmier::windows::ProjectLoadCoordinator coordinator;
         QSignalSpy projectCommitted(

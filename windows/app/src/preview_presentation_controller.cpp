@@ -247,18 +247,33 @@ void PreviewPresentationController::replaceProjectPreview(
     std::uint64_t projectGeneration,
     ProjectPreviewProjection preview
 ) {
+    replaceProjectPreview(projectGeneration, 0, std::move(preview));
+}
+
+void PreviewPresentationController::replaceProjectPreview(
+    std::uint64_t projectGeneration,
+    std::uint64_t projectRevision,
+    ProjectPreviewProjection preview
+) {
     if (shutdownRequested_ || projectGeneration == 0) return;
-    if (
-        desiredPreview_
-        && projectGeneration <= desiredPreview_->projectGeneration
-    ) {
-        return;
+    if (desiredPreview_) {
+        const bool older = projectGeneration < desiredPreview_->projectGeneration
+            || (projectGeneration == desiredPreview_->projectGeneration
+                && projectRevision < desiredPreview_->projectRevision);
+        const bool sameState = projectGeneration == desiredPreview_->projectGeneration
+            && projectRevision == desiredPreview_->projectRevision;
+        const bool resolvesInvalidation = sameState
+            && desiredPreview_->preview.availability
+                == PreviewCandidateAvailability::invalidated
+            && preview.availability != PreviewCandidateAvailability::invalidated;
+        if (older || (sameState && !resolvesInvalidation)) return;
     }
     ++sourceSerial_;
     if (sourceSerial_ == 0) ++sourceSerial_;
     desiredPreview_ = PendingPreview{
         sourceSerial_,
         projectGeneration,
+        projectRevision,
         std::move(preview),
     };
     suppressedPreviewSerial_ = 0;
@@ -318,6 +333,11 @@ void PreviewPresentationController::publishUnavailablePreview(
         setErrorCode(QString::fromStdString(preview.reasonCode));
         if (shutdownRequested_ || shutdownComplete_) return;
         setState(QStringLiteral("unsupported"));
+        break;
+    case PreviewCandidateAvailability::invalidated:
+        setErrorCode(QString::fromStdString(preview.reasonCode));
+        if (shutdownRequested_ || shutdownComplete_) return;
+        setState(QStringLiteral("invalidated"));
         break;
     case PreviewCandidateAvailability::available:
         break;

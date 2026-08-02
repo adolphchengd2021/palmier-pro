@@ -121,12 +121,28 @@ bool supportedClip(const palmier::project::Clip& clip) {
 ProjectProjectionError::ProjectProjectionError(std::string codeValue, std::string detail)
     : std::runtime_error(std::move(detail)), code(std::move(codeValue)) {}
 
+ProjectLoadCandidate::ProjectLoadCandidate(ProjectProjection value)
+    : projection(std::move(value)) {}
+
+ProjectLoadCandidate::ProjectLoadCandidate(
+    palmier::project::ProjectDocument documentValue,
+    ProjectProjection projectionValue
+) : document(std::move(documentValue)), projection(std::move(projectionValue)) {}
+
 ProjectProjection loadProjectProjection(
     const std::filesystem::path& packagePath,
     std::stop_token cancellation
 ) {
+    auto candidate = loadProjectCandidate(packagePath, cancellation);
+    return std::move(candidate.projection);
+}
+
+ProjectLoadCandidate loadProjectCandidate(
+    const std::filesystem::path& packagePath,
+    std::stop_token cancellation
+) {
     std::uint64_t generatedId = 0;
-    const auto document = palmier::project::readProjectPackage(
+    auto document = palmier::project::readProjectPackage(
         packagePath,
         [&generatedId] { return "qt-shell-generated-" + std::to_string(++generatedId); },
         {.cancellation = cancellation}
@@ -153,7 +169,7 @@ ProjectProjection loadProjectProjection(
             std::nullopt,
         };
     }
-    return result;
+    return {std::move(document), std::move(result)};
 }
 
 ProjectPreviewProjection projectPreviewForActiveTimeline(

@@ -10,16 +10,25 @@ set(app_include_dir "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_library(palmier_qt_shell_core STATIC
     include/palmier/windows/project_load_coordinator.hpp
     include/palmier/windows/project_projection_loader.hpp
+    include/palmier/windows/project_runtime_mailbox.hpp
+    include/palmier/windows/project_runtime_projection_bridge.hpp
     include/palmier/windows/preview_source.hpp
     include/palmier/windows/read_only_timeline_model.hpp
     src/project_load_coordinator.cpp
     src/project_projection_loader.cpp
+    src/project_runtime_mailbox.cpp
+    src/project_runtime_projection_bridge.cpp
     src/read_only_timeline_model.cpp
 )
 target_include_directories(palmier_qt_shell_core PUBLIC "${app_include_dir}")
 target_link_libraries(
     palmier_qt_shell_core
-    PUBLIC Qt6::Core Qt6::Concurrent palmier_project_reader palmier_project_render
+    PUBLIC
+        Qt6::Core
+        Qt6::Concurrent
+        palmier_project_reader
+        palmier_project_render
+        palmier_project_runtime
 )
 target_compile_features(palmier_qt_shell_core PUBLIC cxx_std_20)
 
@@ -49,6 +58,7 @@ target_link_libraries(
     PRIVATE
         palmier_qt_shell_core
         palmier_qt_preview
+        palmier_mcp_http
         Qt6::Gui
         Qt6::Qml
         Qt6::Quick
@@ -101,6 +111,26 @@ if(BUILD_TESTING)
         )
     endfunction()
     add_palmier_qt_shell_test(reader_maps_current_project readerMapsCurrentProject)
+    add_palmier_qt_shell_test(
+        runtime_mailbox_identity
+        runtimeMailboxPublishesUndoAndPersistenceIdentity
+    )
+    add_palmier_qt_shell_test(
+        runtime_mutation_refreshes_projection
+        runtimeMutationRefreshesQtProjectionAndInvalidatesPreview
+    )
+    add_palmier_qt_shell_test(
+        late_cancel_preserves_runtime_install
+        cancellationAfterRuntimeInstallCannotRollbackCommit
+    )
+    add_palmier_qt_shell_test(
+        persistence_retags_inflight_projection
+        persistencePublicationRetagsInFlightProjection
+    )
+    add_palmier_qt_shell_test(
+        superseded_install_waits_for_latest_load
+        supersededInstalledProjectWaitsForLatestLoadOutcome
+    )
     add_palmier_qt_shell_test(
         stable_preview_candidate_uses_persisted_ids
         stablePreviewCandidateUsesPersistedIds
@@ -202,6 +232,14 @@ if(BUILD_TESTING)
     add_palmier_qt_preview_test(
         replacement_cancels_gated_tick
         replacementCancelsGatedTickBeforePublishingOffline
+    )
+    add_palmier_qt_preview_test(
+        runtime_revision_invalidates_preview
+        sameProjectRevisionInvalidatesActivePreview
+    )
+    add_palmier_qt_preview_test(
+        resolved_invalidation_publishes_same_revision
+        resolvedInvalidationPublishesSameProjectRevision
     )
     add_palmier_qt_preview_test(
         shutdown_cancels_gated_tick

@@ -736,6 +736,60 @@ private slots:
         root.reset();
     }
 
+    void sameProjectRevisionInvalidatesActivePreview() {
+        auto state = std::make_shared<FakeSessionState>();
+        state->gateTick = true;
+        palmier::windows::PreviewPresentationController controller(
+            [state](HWND) { return std::make_unique<FakeSession>(state); },
+            nullptr
+        );
+        QQmlEngine engine;
+        auto root = createPreviewWindow(engine, controller);
+        QVERIFY(root != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(controller.ready(), 5000);
+
+        controller.replaceProjectPreview(1, 0, availablePreview("media-before-mutation"));
+        QTRY_COMPARE_WITH_TIMEOUT(state->tickEntered.available(), 1, 5000);
+        controller.replaceProjectPreview(1, 1, {
+            palmier::windows::PreviewCandidateAvailability::invalidated,
+            "runtimeStateChanged",
+            std::nullopt,
+        });
+        QTRY_VERIFY_WITH_TIMEOUT(tickCancellationObserved(state), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(cancelCount(state), std::size_t{1}, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.state(), QStringLiteral("invalidated"), 5000);
+        QCOMPARE(controller.errorCode(), QStringLiteral("runtimeStateChanged"));
+
+        static_cast<void>(controller.requestShutdown());
+        QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);
+        root.reset();
+    }
+
+    void resolvedInvalidationPublishesSameProjectRevision() {
+        auto state = std::make_shared<FakeSessionState>();
+        palmier::windows::PreviewPresentationController controller(
+            [state](HWND) { return std::make_unique<FakeSession>(state); },
+            nullptr
+        );
+        QQmlEngine engine;
+        auto root = createPreviewWindow(engine, controller);
+        QVERIFY(root != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(controller.ready(), 5000);
+
+        controller.replaceProjectPreview(1, 0, {
+            palmier::windows::PreviewCandidateAvailability::invalidated,
+            "runtimeStateChanged",
+            std::nullopt,
+        });
+        QTRY_COMPARE_WITH_TIMEOUT(controller.state(), QStringLiteral("invalidated"), 5000);
+        controller.replaceProjectPreview(1, 0, availablePreview("media-after-load"));
+        QTRY_COMPARE_WITH_TIMEOUT(playCount(state), std::size_t{1}, 5000);
+
+        static_cast<void>(controller.requestShutdown());
+        QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);
+        root.reset();
+    }
+
     void shutdownCancelsGatedTickBeforeSessionDestruction() {
         auto state = std::make_shared<FakeSessionState>();
         state->gateTick = true;

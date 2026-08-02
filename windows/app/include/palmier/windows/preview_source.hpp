@@ -14,6 +14,7 @@ enum class PreviewCandidateAvailability {
     noCandidate,
     offline,
     unsupported,
+    invalidated,
 };
 
 struct PreviewMediaCandidateProjection final {

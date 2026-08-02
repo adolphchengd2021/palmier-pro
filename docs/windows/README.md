@@ -73,14 +73,20 @@ integration, project persistence, Windows 10 runtime behavior, or the remaining
 MCP surface. See ADR 0026, ADR 0027, and
 `contracts/mcp/v1/windows-technical-mvp.json`.
 
-The HTTP implementation also exposes a stoppable `HttpServerService` for future
-Qt ownership. It starts off the caller thread, publishes the actual bound
+The HTTP implementation also exposes a stoppable `HttpServerService`, now owned
+by the Qt process and connected to the same `ProjectRuntime` as project loading.
+It starts off the caller thread, publishes the actual bound
 loopback port or a terminal failure, uses a Windows stop event to wake the
 worker-owned listener without polling, bounds an already admitted connection by
 cancellation checks and socket timeouts reduced to the remaining total deadline,
 and joins before destruction. A lifecycle CTest stops a partial request at its
 second receive boundary, releases the port, then stops an idle rebound server.
-Qt sharing and close ordering remain unproved; see ADR 0028.
+An atomic non-Qt mailbox assigns every runtime publication a monotonic token;
+one latest-only background projection refreshes the Qt model, invalidates stale
+playback on edits, and rejects a result unless its token is still current.
+Shutdown drains MCP, project loading, projection, preview, and the runtime
+without joining their workers on the GUI thread. Project persistence and a
+restart proof remain open; see ADR 0028 and ADR 0029.
 
 The render boundary is also compiled in Windows CI.
 `core/render` defines the immutable v1 RenderPlan and CPU oracle;
