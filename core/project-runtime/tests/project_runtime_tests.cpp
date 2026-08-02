@@ -236,7 +236,8 @@ void clipPropertiesPublishOnlyChangedSharedState() {
     require(changed.command.changed && changed.session->revision == 1, "property runtime commit");
     require(changed.session->undoDepth == 1 && changed.session->dirty(), "property runtime history");
     require(observer->publications().size() == 2, "property change should publish once");
-    const auto& clip = runtime.getTimeline().timeline.find("tracks")->array().front()
+    const auto timeline = runtime.getTimeline();
+    const auto& clip = timeline.timeline.find("tracks")->array().front()
         .find("clips")->array().front();
     require(
         clip.find("durationFrames")->number().integer == 60
