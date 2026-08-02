@@ -37,6 +37,7 @@ struct ProjectSessionSnapshot final {
     std::uint64_t revision;
     std::uint64_t stateId;
     std::uint64_t persistedStateId;
+    std::size_t undoDepth;
 
     bool dirty() const noexcept { return stateId != persistedStateId; }
 };

@@ -1,4 +1,5 @@
 #include "palmier/windows/project_load_coordinator.hpp"
+#include "palmier/windows/project_editing_controller.hpp"
 #include "palmier/windows/project_persistence_controller.hpp"
 #include "palmier/windows/project_projection_loader.hpp"
 #include "palmier/windows/preview_presentation_controller.hpp"
@@ -140,6 +141,109 @@ class QtShellTests final : public QObject {
     Q_OBJECT
 
 private slots:
+    void editingControllerSplitsAndUndoesByStableId() {
+        auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
+        auto runtime = std::make_shared<palmier::project::ProjectRuntime>(mailbox);
+        auto document = palmier::project::readProject(
+            splittableProjectJson,
+            [] { return std::string("generated"); }
+        );
+        static_cast<void>(runtime->install(
+            std::move(document),
+            4,
+            [nextId = 0]() mutable {
+                return "ui-generated-" + std::to_string(++nextId);
+            }
+        ));
+        palmier::windows::ProjectEditingController editing(runtime, mailbox, nullptr);
+        editing.activateProject(4);
+        QSignalSpy finished(
+            &editing,
+            &palmier::windows::ProjectEditingController::operationFinished
+        );
+
+        editing.splitClip(QStringLiteral("clip"), QStringLiteral("10"));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 5000);
+        QCOMPARE(finished.at(0).at(0).toBool(), true);
+        QVERIFY(editing.canUndo());
+        auto snapshot = runtime->snapshot(4);
+        QCOMPARE(
+            snapshot.session->document.project().timelines.front().tracks.front().clips.size(),
+            std::size_t{2}
+        );
+        QCOMPARE(snapshot.session->undoDepth, std::size_t{1});
+
+        editing.undo();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 2, 5000);
+        QCOMPARE(finished.at(1).at(0).toBool(), true);
+        QVERIFY(!editing.canUndo());
+        snapshot = runtime->snapshot(4);
+        QCOMPARE(
+            snapshot.session->document.project().timelines.front().tracks.front().clips.size(),
+            std::size_t{1}
+        );
+        QCOMPARE(snapshot.session->undoDepth, std::size_t{0});
+
+        const std::vector<QString> malformedFrames{
+            QStringLiteral("-1"),
+            QStringLiteral("+10"),
+            QStringLiteral(" 10"),
+            QString::fromUtf8("١٠"),
+            QStringLiteral("9223372036854775808"),
+        };
+        for (const auto& frame : malformedFrames) {
+            editing.splitClip(QStringLiteral("clip"), frame);
+            QCOMPARE(finished.last().at(0).toBool(), false);
+            QCOMPARE(editing.errorCode(), QStringLiteral("invalidArguments"));
+        }
+        QCOMPARE(finished.count(), 2 + static_cast<int>(malformedFrames.size()));
+        editing.splitClip(
+            QStringLiteral("clip"),
+            QStringLiteral("9223372036854775807")
+        );
+        QTRY_COMPARE_WITH_TIMEOUT(
+            finished.count(),
+            3 + static_cast<int>(malformedFrames.size()),
+            5000
+        );
+        QCOMPARE(editing.errorCode(), QStringLiteral("invalidSplitFrame"));
+        QCOMPARE(runtime->snapshot(4).session->revision, std::uint64_t{2});
+        QVERIFY(editing.requestShutdown());
+    }
+
+    void persistenceShutdownRefreshesAuthoritativeDirtyState() {
+        auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
+        auto runtime = std::make_shared<palmier::project::ProjectRuntime>(mailbox);
+        auto document = palmier::project::readProject(
+            splittableProjectJson,
+            [] { return std::string("generated"); }
+        );
+        static_cast<void>(runtime->install(
+            std::move(document),
+            6,
+            [nextId = 0]() mutable {
+                return "close-generated-" + std::to_string(++nextId);
+            }
+        ));
+        palmier::windows::ProjectPersistenceController persistence(
+            runtime,
+            mailbox,
+            nullptr
+        );
+        persistence.activateProject(L"C:/close-race.palmier", 6);
+        QVERIFY(!persistence.dirty());
+        static_cast<void>(runtime->splitClips({
+            std::vector<palmier::project::SplitPoint>{{"clip", 10}},
+            std::nullopt,
+            std::nullopt,
+        }));
+        QVERIFY(!persistence.dirty());
+
+        QVERIFY(!persistence.requestShutdown());
+        QVERIFY(persistence.dirty());
+        QCOMPARE(persistence.errorCode(), QStringLiteral("unsavedChanges"));
+    }
+
     void persistenceSaveRunsOffGuiAndShutdownWaits() {
         auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
         auto runtime = std::make_shared<palmier::project::ProjectRuntime>(mailbox);
@@ -462,6 +566,7 @@ private slots:
         QCOMPARE(publication->session->revision, std::uint64_t{1});
         QCOMPARE(publication->session->stateId, std::uint64_t{1});
         QCOMPARE(publication->session->persistedStateId, std::uint64_t{0});
+        QCOMPARE(publication->session->undoDepth, std::size_t{1});
 
         static_cast<void>(runtime.markPersisted(split.session->stateId));
         publication = mailbox->latest();
@@ -470,6 +575,7 @@ private slots:
         QCOMPARE(publication->session->revision, std::uint64_t{1});
         QCOMPARE(publication->session->stateId, std::uint64_t{1});
         QCOMPARE(publication->session->persistedStateId, std::uint64_t{1});
+        QCOMPARE(publication->session->undoDepth, std::size_t{1});
 
         static_cast<void>(runtime.undo());
         publication = mailbox->latest();
@@ -478,6 +584,7 @@ private slots:
         QCOMPARE(publication->session->revision, std::uint64_t{2});
         QCOMPARE(publication->session->stateId, std::uint64_t{0});
         QCOMPARE(publication->session->persistedStateId, std::uint64_t{1});
+        QCOMPARE(publication->session->undoDepth, std::size_t{0});
     }
 
     void runtimeMutationRefreshesQtProjectionAndInvalidatesPreview() {
@@ -1407,8 +1514,17 @@ private slots:
             persistenceMailbox,
             nullptr
         );
+        palmier::windows::ProjectEditingController editingController(
+            persistenceRuntime,
+            persistenceMailbox,
+            nullptr
+        );
         QQmlApplicationEngine engine;
         engine.rootContext()->setContextProperty(QStringLiteral("projectCoordinator"), &coordinator);
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("editingCoordinator"),
+            &editingController
+        );
         engine.rootContext()->setContextProperty(
             QStringLiteral("persistenceCoordinator"),
             &persistenceController
@@ -1472,8 +1588,17 @@ private slots:
             persistenceMailbox,
             nullptr
         );
+        palmier::windows::ProjectEditingController editingController(
+            persistenceRuntime,
+            persistenceMailbox,
+            nullptr
+        );
         QQmlApplicationEngine engine;
         engine.rootContext()->setContextProperty(QStringLiteral("projectCoordinator"), &coordinator);
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("editingCoordinator"),
+            &editingController
+        );
         engine.rootContext()->setContextProperty(
             QStringLiteral("persistenceCoordinator"),
             &persistenceController

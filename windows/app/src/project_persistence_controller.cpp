@@ -192,6 +192,7 @@ void ProjectPersistenceController::save() {
 
 bool ProjectPersistenceController::requestShutdown(bool discardUnsavedChanges) {
     if (shutdownRequested_) return !saving_;
+    refreshFromMailbox();
     if (dirty_ && !discardUnsavedChanges) {
         setErrorCode(QStringLiteral("unsavedChanges"));
         setErrorMessage(QStringLiteral("Save or discard changes before closing."));

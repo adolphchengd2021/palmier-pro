@@ -3,6 +3,7 @@
 #include "palmier/audio/wasapi_environment_probe.hpp"
 #include "palmier/windows/preview_presentation_controller.hpp"
 #include "palmier/windows/project_load_coordinator.hpp"
+#include "palmier/windows/project_editing_controller.hpp"
 #include "palmier/windows/project_persistence_controller.hpp"
 
 #include <QDebug>
@@ -970,10 +971,19 @@ private slots:
             persistenceMailbox,
             nullptr
         );
+        palmier::windows::ProjectEditingController editing(
+            persistenceRuntime,
+            persistenceMailbox,
+            nullptr
+        );
         QQmlApplicationEngine engine;
         engine.rootContext()->setContextProperty(
             QStringLiteral("projectCoordinator"),
             &project
+        );
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("editingCoordinator"),
+            &editing
         );
         engine.rootContext()->setContextProperty(
             QStringLiteral("persistenceCoordinator"),

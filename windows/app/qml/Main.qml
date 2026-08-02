@@ -8,6 +8,8 @@ ApplicationWindow {
     property bool shutdownApproved: false
     property bool discardUnsavedChanges: false
     property bool closeAfterSave: false
+    property bool closeAfterEdit: false
+    property string selectedClipId: ""
     property bool projectShutdownReady: false
     property bool persistenceShutdownReady: false
     property bool previewShutdownReady: false
@@ -20,6 +22,10 @@ ApplicationWindow {
     onClosing: function(closeEvent) {
         if (!shutdownApproved) {
             closeEvent.accepted = false
+            if (editingCoordinator.busy) {
+                closeAfterEdit = true
+                return
+            }
             if (persistenceCoordinator.saving) {
                 closeAfterSave = true
                 return
@@ -28,10 +34,15 @@ ApplicationWindow {
                 unsavedChangesDialog.open()
                 return
             }
-            projectShutdownReady = projectCoordinator.requestShutdown()
             persistenceShutdownReady = persistenceCoordinator.requestShutdown(
                 discardUnsavedChanges
             )
+            if (!persistenceShutdownReady) {
+                if (persistenceCoordinator.dirty) unsavedChangesDialog.open()
+                return
+            }
+            projectShutdownReady = projectCoordinator.requestShutdown()
+            editingCoordinator.requestShutdown()
             previewShutdownReady = previewCoordinator.requestShutdown()
             shutdownApproved = projectShutdownReady
                 && persistenceShutdownReady
@@ -46,6 +57,15 @@ ApplicationWindow {
                 && previewShutdownReady
                 && !shutdownApproved) {
             shutdownApproved = true
+            window.close()
+        }
+    }
+
+    Connections {
+        target: editingCoordinator
+        function onOperationFinished(succeeded) {
+            if (!window.closeAfterEdit) return
+            window.closeAfterEdit = false
             window.close()
         }
     }
@@ -73,6 +93,9 @@ ApplicationWindow {
         function onShutdownReady() {
             window.projectShutdownReady = true
             window.finishShutdownIfReady()
+        }
+        function onProjectCommitted() {
+            window.selectedClipId = ""
         }
     }
 
@@ -113,13 +136,22 @@ ApplicationWindow {
             anchors.verticalCenter: parent.verticalCenter
             Button {
                 text: qsTr("Open Project…")
-                enabled: !persistenceCoordinator.dirty && !persistenceCoordinator.saving
+                enabled: !persistenceCoordinator.dirty
+                    && !persistenceCoordinator.saving
+                    && !editingCoordinator.busy
                 onClicked: projectDialog.open()
             }
             Button {
                 text: qsTr("Save")
-                enabled: persistenceCoordinator.dirty && !persistenceCoordinator.saving
+                enabled: persistenceCoordinator.dirty
+                    && !persistenceCoordinator.saving
+                    && !editingCoordinator.busy
                 onClicked: persistenceCoordinator.save()
+            }
+            Button {
+                text: qsTr("Undo")
+                enabled: editingCoordinator.canUndo && !editingCoordinator.busy
+                onClicked: editingCoordinator.undo()
             }
             Button {
                 text: qsTr("Cancel")
@@ -142,6 +174,45 @@ ApplicationWindow {
         anchors.fill: parent
         anchors.margins: AppTheme.pageMargin
         spacing: AppTheme.itemSpacing
+
+        Row {
+            spacing: AppTheme.itemSpacing
+            Label {
+                text: window.selectedClipId.length > 0
+                    ? qsTr("Selected: ") + window.selectedClipId
+                    : qsTr("Select a clip")
+                color: AppTheme.secondaryText
+            }
+            TextField {
+                id: splitFrame
+                width: AppTheme.editFieldWidth
+                placeholderText: qsTr("Split frame")
+                validator: RegularExpressionValidator { regularExpression: /[0-9]+/ }
+            }
+            Button {
+                text: qsTr("Split")
+                enabled: window.selectedClipId.length > 0
+                    && splitFrame.acceptableInput
+                    && !editingCoordinator.busy
+                onClicked: editingCoordinator.splitClip(
+                    window.selectedClipId,
+                    splitFrame.text
+                )
+            }
+            Label {
+                visible: editingCoordinator.busy
+                text: qsTr("Editing…")
+                color: AppTheme.secondaryText
+            }
+        }
+
+        Label {
+            objectName: "editErrorState"
+            visible: editingCoordinator.errorMessage.length > 0
+            text: editingCoordinator.errorMessage
+            color: AppTheme.errorText
+            wrapMode: Text.Wrap
+        }
 
         Label {
             objectName: "emptyState"
@@ -256,8 +327,15 @@ ApplicationWindow {
                             )
                             height: clipLane.height - AppTheme.clipInset - AppTheme.clipInset
                             color: AppTheme.clipBackground
-                            border.color: AppTheme.clipBorder
                             border.width: AppTheme.borderWidth
+                            border.color: window.selectedClipId === modelData.stableId
+                                ? AppTheme.warningText
+                                : AppTheme.clipBorder
+
+                            MouseArea {
+                                anchors.fill: parent
+                                onClicked: window.selectedClipId = modelData.stableId
+                            }
 
                             Label {
                                 anchors.fill: parent

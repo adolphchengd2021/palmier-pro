@@ -771,6 +771,7 @@ CommandResult ProjectSession::splitClips(
         revisionAfter,
         stateAfter,
         persistedStateId_,
+        undoJournal_.size() + 1,
     });
     CommandResult result{
         true,
@@ -847,6 +848,7 @@ CommandResult ProjectSession::undo(std::stop_token cancellation) {
         revisionAfter,
         pending.beforeStateId,
         persistedStateId_,
+        undoJournal_.size() - 1,
     });
     CommandResult result{
         true,
@@ -877,6 +879,7 @@ ProjectSessionSnapshot ProjectSession::snapshot(std::stop_token cancellation) co
         revision_,
         stateId_,
         persistedStateId_,
+        undoJournal_.size(),
     };
 }
 
@@ -901,6 +904,7 @@ std::shared_ptr<const ProjectSessionSnapshot> ProjectSession::markPersisted(
         revision_,
         stateId_,
         stateId,
+        undoJournal_.size(),
     });
     persistedStateId_ = stateId;
     return publication;

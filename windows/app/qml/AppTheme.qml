@@ -10,6 +10,7 @@ QtObject {
     readonly property int trackHeaderWidth: 150
     readonly property int clipInset: 4
     readonly property int clipMinimumWidth: 18
+    readonly property int editFieldWidth: 140
     readonly property int borderWidth: 1
     readonly property color windowBackground: "#0a0a0a"
     readonly property color surfaceBackground: "#161616"

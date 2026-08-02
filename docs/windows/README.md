@@ -9,9 +9,10 @@ M0 establishes product decisions, compatibility contracts, fixtures, drift
 checks, the compiled MSVC contract probe, and a safe-edit C++ project document.
 It now includes an optional Qt project shell, isolated media/audio prototypes,
 one bounded project-driven H.264 export slice, a three-tool loopback MCP editing
-slice, and an atomic `project.json` edit-save-restart slice with explicit Save
-and dirty-close protection. It does not yet provide direct timeline editing UI,
-autosave, Save As, audio export, integrated export UI, or installer.
+slice, and an atomic `project.json` edit-save-restart slice with stable-ID Split,
+Undo, explicit Save, and dirty-close protection in Qt. It does not yet provide
+general timeline editing, autosave, Save As, audio export, integrated export UI,
+or an installer.
 
 - Requirements: `docs/WINDOWS_10_PORT_REQUIREMENTS.zh-CN.md`
 - Decisions: `docs/windows/adr/`

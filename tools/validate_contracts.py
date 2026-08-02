@@ -3965,6 +3965,12 @@ def windows_qt_read_only_shell_contract() -> None:
     presets = load_json("CMakePresets.json")
     app_cmake = read_text("windows/app/CMakeLists.txt")
     coordinator = read_text("windows/app/src/project_load_coordinator.cpp")
+    editing_header = read_text(
+        "windows/app/include/palmier/windows/project_editing_controller.hpp"
+    )
+    editing_source = read_text(
+        "windows/app/src/project_editing_controller.cpp"
+    )
     persistence_header = read_text(
         "windows/app/include/palmier/windows/project_persistence_controller.hpp"
     )
@@ -4014,6 +4020,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "qt_add_executable(palmier_qt_shell",
         "qt_add_qml_module(palmier_qt_shell",
         "include/palmier/windows/project_load_coordinator.hpp",
+        "include/palmier/windows/project_editing_controller.hpp",
         "include/palmier/windows/project_persistence_controller.hpp",
         "include/palmier/windows/project_runtime_mailbox.hpp",
         "include/palmier/windows/project_runtime_projection_bridge.hpp",
@@ -4056,6 +4063,8 @@ def windows_qt_read_only_shell_contract() -> None:
         "persistenceCommittedWarningRemainsObservable",
         "persistenceWorkerRetainsRuntimeAfterControllerTeardown",
         "dirtyRuntimeRefusesProjectReplacement",
+        "editingControllerSplitsAndUndoesByStableId",
+        "persistenceShutdownRefreshesAuthoritativeDirtyState",
     ]:
         if token not in app_cmake:
             raise ContractError(f"Qt shell CMake missing token {token!r}")
@@ -4075,6 +4084,25 @@ def windows_qt_read_only_shell_contract() -> None:
     ]:
         if token not in coordinator:
             raise ContractError(f"Qt load coordinator missing token {token!r}")
+    for token in [
+        "Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)",
+        "Q_PROPERTY(bool canUndo READ canUndo NOTIFY canUndoChanged)",
+        "splitClip(const QString& clipId, const QString& frameText)",
+        "Q_INVOKABLE void undo()",
+    ]:
+        if token not in editing_header:
+            raise ContractError(f"Qt editing API missing token {token!r}")
+    for token in [
+        "setMaxThreadCount(1)",
+        "frameText.toLongLong(&frameIsValid, 10)",
+        "^[0-9]+$",
+        "runtime->splitClips(",
+        "runtime->undo(generation, cancellation)",
+        "publication.session->undoDepth > 0",
+        "if (shutdownRequested_) emit shutdownReady()",
+    ]:
+        if token not in editing_source:
+            raise ContractError(f"Qt editing invariant missing token {token!r}")
     for token in [
         "Q_PROPERTY(bool dirty READ dirty NOTIFY dirtyChanged)",
         "Q_PROPERTY(bool saving READ saving NOTIFY savingChanged)",
@@ -4154,6 +4182,9 @@ def windows_qt_read_only_shell_contract() -> None:
         "persistenceCoordinator.save()",
         "MessageDialog.Save | MessageDialog.Discard | MessageDialog.Cancel",
         "persistenceShutdownReady",
+        "editingCoordinator.splitClip(",
+        "editingCoordinator.undo()",
+        "modelData.stableId",
         "clip: true",
     ]:
         if token not in qml:
@@ -4204,6 +4235,8 @@ def windows_qt_read_only_shell_contract() -> None:
         "persistenceCommittedWarningRemainsObservable",
         "persistenceWorkerRetainsRuntimeAfterControllerTeardown",
         "dirtyRuntimeRefusesProjectReplacement",
+        "editingControllerSplitsAndUndoesByStableId",
+        "persistenceShutdownRefreshesAuthoritativeDirtyState",
     ]:
         if token not in qt_tests:
             raise ContractError(f"Qt shell test missing token {token!r}")
@@ -4268,6 +4301,17 @@ def windows_qt_read_only_shell_contract() -> None:
     ]:
         if token not in persistence_adr:
             raise ContractError(f"Qt persistence ADR missing token {token!r}")
+    editing_adr = read_text("docs/windows/adr/0032-qt-safe-edit-controls.md")
+    for token in [
+        "stable clip ID",
+        "non-empty ASCII decimal digits",
+        "directly from the runtime mailbox",
+        "authoritative `undoDepth`",
+        "Save, Discard, or Cancel",
+        "manual Windows UI verification",
+    ]:
+        if token not in editing_adr:
+            raise ContractError(f"Qt editing ADR missing token {token!r}")
 
 
 def windows_qt_preview_host_contract() -> None:
@@ -4719,6 +4763,7 @@ def windows_mcp_project_session_contract() -> None:
     for token in [
         "class ProjectSession final",
         "ProjectSessionSnapshot",
+        "std::size_t undoDepth",
         "ProjectSaveSnapshot",
         "TimelineQuery",
         "SplitClipsCommand",
@@ -4738,6 +4783,8 @@ def windows_mcp_project_session_contract() -> None:
         "linkedSplitMismatch",
         "unsupportedClipSemantics",
         "undoJournal_.push_back",
+        "undoJournal_.size() + 1",
+        "undoJournal_.size() - 1",
         "project_ = std::move(planned)",
         "source_.swap(plannedSource)",
         "stateId_ = pending.beforeStateId",

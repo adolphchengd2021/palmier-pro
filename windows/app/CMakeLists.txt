@@ -9,6 +9,7 @@ set(app_include_dir "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 add_library(palmier_qt_shell_core STATIC
     include/palmier/windows/project_load_coordinator.hpp
+    include/palmier/windows/project_editing_controller.hpp
     include/palmier/windows/project_persistence_controller.hpp
     include/palmier/windows/project_projection_loader.hpp
     include/palmier/windows/project_runtime_mailbox.hpp
@@ -16,6 +17,7 @@ add_library(palmier_qt_shell_core STATIC
     include/palmier/windows/preview_source.hpp
     include/palmier/windows/read_only_timeline_model.hpp
     src/project_load_coordinator.cpp
+    src/project_editing_controller.cpp
     src/project_persistence_controller.cpp
     src/project_projection_loader.cpp
     src/project_runtime_mailbox.cpp
@@ -115,8 +117,16 @@ if(BUILD_TESTING)
     endfunction()
     add_palmier_qt_shell_test(reader_maps_current_project readerMapsCurrentProject)
     add_palmier_qt_shell_test(
+        editing_controller_split_undo
+        editingControllerSplitsAndUndoesByStableId
+    )
+    add_palmier_qt_shell_test(
         persistence_save_waits_for_shutdown
         persistenceSaveRunsOffGuiAndShutdownWaits
+    )
+    add_palmier_qt_shell_test(
+        persistence_shutdown_refreshes_dirty
+        persistenceShutdownRefreshesAuthoritativeDirtyState
     )
     add_palmier_qt_shell_test(
         persistence_failure_preserves_dirty
