@@ -583,7 +583,7 @@ FILE_ID_INFO requireFileIdentity(HANDLE handle, std::string_view message) {
                 &identity,
                 static_cast<DWORD>(sizeof(identity))
             ) != FALSE,
-        message
+        std::string(message)
     );
     return identity;
 }
