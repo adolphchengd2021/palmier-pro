@@ -103,7 +103,7 @@ private:
         std::uint64_t beforeStateId;
     };
 
-    palmier::json::Value source_;
+    std::unique_ptr<palmier::json::Value> source_;
     RootKind rootKind_;
     Project project_;
     std::vector<Diagnostic> diagnostics_;

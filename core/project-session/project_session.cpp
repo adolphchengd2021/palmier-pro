@@ -383,7 +383,7 @@ CommandError::CommandError(std::string codeValue, std::string detail)
     : std::runtime_error(std::move(detail)), code(std::move(codeValue)) {}
 
 ProjectSession::ProjectSession(const ProjectDocument& document, IdGenerator idGenerator)
-    : source_(document.source()),
+    : source_(std::make_unique<Value>(document.source())),
       rootKind_(document.rootKind()),
       project_(document.project()),
       diagnostics_(document.diagnostics()),
@@ -610,7 +610,7 @@ CommandResult ProjectSession::splitClips(
         }
     }
 
-    Value plannedSource = source_;
+    auto plannedSource = std::make_unique<Value>(*source_);
     Project planned = project_;
     auto& plannedTimeline = activeTimeline(planned);
     std::set<std::string, std::less<>> usedIds;
@@ -654,7 +654,7 @@ CommandResult ProjectSession::splitClips(
         checkCancellation(cancellation);
         const auto& track = timeline.tracks[trackIndex];
         auto& sourceClips = sourceClipsForTrack(
-            source_,
+            *source_,
             rootKind_,
             timeline.id.value,
             track.id.value
@@ -717,7 +717,7 @@ CommandResult ProjectSession::splitClips(
     for (const auto trackIndex : affectedTracks) {
         const auto& track = timeline.tracks[trackIndex];
         auto& sourceClips = sourceClipsForTrack(
-            plannedSource,
+            *plannedSource,
             rootKind_,
             timeline.id.value,
             track.id.value
@@ -756,12 +756,12 @@ CommandResult ProjectSession::splitClips(
     checkCancellation(cancellation);
 
     static_assert(std::is_nothrow_move_assignable_v<Project>);
-    static_assert(std::is_nothrow_move_assignable_v<Value>);
     static_assert(std::is_nothrow_move_constructible_v<UndoEntry>);
     static_assert(std::is_nothrow_move_constructible_v<CommandResult>);
     static_assert(noexcept(sessionGeneratedClipIds_.swap(plannedGeneratedClipIds)));
+    static_assert(noexcept(source_.swap(plannedSource)));
     project_ = std::move(planned);
-    source_ = std::move(plannedSource);
+    source_.swap(plannedSource);
     sessionGeneratedClipIds_.swap(plannedGeneratedClipIds);
     revision_ = revisionAfter;
     stateId_ = stateAfter;
@@ -792,7 +792,7 @@ CommandResult ProjectSession::undo(std::stop_token cancellation) {
     const auto revisionBefore = revision_;
     const auto revisionAfter = revisionBefore + 1;
     Project planned = project_;
-    Value plannedSource = source_;
+    auto plannedSource = std::make_unique<Value>(*source_);
     for (const auto& snapshot : pending.tracks) {
         const auto& timeline = project_.timelines[snapshot.timelineIndex];
         const auto& track = timeline.tracks[snapshot.trackIndex];
@@ -802,7 +802,7 @@ CommandResult ProjectSession::undo(std::stop_token cancellation) {
         planned.timelines[snapshot.timelineIndex].tracks[snapshot.trackIndex].clips =
             snapshot.clips;
         sourceClipsForTrack(
-            plannedSource,
+            *plannedSource,
             rootKind_,
             timeline.id.value,
             track.id.value
@@ -825,9 +825,9 @@ CommandResult ProjectSession::undo(std::stop_token cancellation) {
     checkCancellation(cancellation);
 
     static_assert(std::is_nothrow_move_assignable_v<Project>);
-    static_assert(std::is_nothrow_move_assignable_v<Value>);
+    static_assert(noexcept(source_.swap(plannedSource)));
     project_ = std::move(planned);
-    source_ = std::move(plannedSource);
+    source_.swap(plannedSource);
     sessionGeneratedClipIds_.swap(plannedGeneratedClipIds);
     revision_ = revisionAfter;
     stateId_ = pending.beforeStateId;
@@ -839,7 +839,7 @@ ProjectSessionSnapshot ProjectSession::snapshot(std::stop_token cancellation) co
     std::scoped_lock lock(mutex_);
     checkCancellation(cancellation);
     return {
-        ProjectDocument(source_, rootKind_, project_, diagnostics_),
+        ProjectDocument(*source_, rootKind_, project_, diagnostics_),
         revision_,
         stateId_,
         persistedStateId_,
@@ -849,7 +849,7 @@ ProjectSessionSnapshot ProjectSession::snapshot(std::stop_token cancellation) co
 ProjectSaveSnapshot ProjectSession::saveSnapshot(std::stop_token cancellation) const {
     std::scoped_lock lock(mutex_);
     checkCancellation(cancellation);
-    return {source_, revision_, stateId_};
+    return {*source_, revision_, stateId_};
 }
 
 void ProjectSession::markPersisted(std::uint64_t stateId) {

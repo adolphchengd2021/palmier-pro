@@ -4564,7 +4564,7 @@ def windows_mcp_project_session_contract() -> None:
         "unsupportedClipSemantics",
         "undoJournal_.push_back",
         "project_ = std::move(planned)",
-        "source_ = std::move(plannedSource)",
+        "source_.swap(plannedSource)",
         "stateId_ = pending.beforeStateId",
         "return stateId_ != persistedStateId_",
         "Re-read get_timeline after undo.",
