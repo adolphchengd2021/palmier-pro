@@ -145,6 +145,26 @@ public:
         return playback_.tick(expectedGeneration, cancellation);
     }
 
+    media::HeadlessAvPlaybackReceipt seek(
+        std::uint64_t expectedGeneration,
+        const std::filesystem::path& input,
+        std::int64_t timelineFrame,
+        audio::FrameRate timelineFrameRate,
+        media::DecodeFrameStart start,
+        media::HeadlessAvPlaybackSeekMode mode,
+        std::stop_token cancellation
+    ) override {
+        return playback_.seek(
+            expectedGeneration,
+            input,
+            timelineFrame,
+            timelineFrameRate,
+            start,
+            mode,
+            cancellation
+        );
+    }
+
     media::HeadlessAvPlaybackReceipt cancel(
         std::uint64_t expectedGeneration
     ) override {
@@ -362,6 +382,8 @@ PreviewPresentationReceipt PreviewPresentationSession::play(
         if (playback.generation != generation_) {
             generation_ = playback.generation;
             settings_.reset();
+            input_.clear();
+            timelineFrameRate_ = {};
             clearFrameState();
         }
         state_ = stateFor(playback.state);
@@ -398,6 +420,8 @@ PreviewPresentationReceipt PreviewPresentationSession::play(
         clearFrameState();
     }
     settings_ = std::move(settings);
+    input_ = input;
+    timelineFrameRate_ = timelineFrameRate;
     if (generationChanged || settingsChanged) {
         pendingRenderedFrame_.reset();
         pendingRenderedSourceTimestamp_.reset();
@@ -534,11 +558,171 @@ PreviewPresentationReceipt PreviewPresentationSession::tick(
         value.audioFailure = playback.audioFailure;
         return value;
     }
+    return presentCurrentFrame(
+        playbackOutcome,
+        operation->cancellation.get_token()
+    );
+}
+
+PreviewPresentationReceipt PreviewPresentationSession::seek(
+    std::uint64_t expectedGeneration,
+    std::int64_t targetTimelineFrame,
+    media::HeadlessAvPlaybackSeekMode mode,
+    std::stop_token cancellation
+) {
+    std::unique_lock operationLock(operationMutex_);
+    {
+        std::scoped_lock lifecycleLock(lifecycleMutex_);
+        if (closeRequested_) {
+            return refused(
+                PreviewPresentationStage::seekPlayback,
+                PreviewPresentationFailureCode::invalidRequest,
+                E_ILLEGAL_METHOD_CALL
+            );
+        }
+    }
+    if (expectedGeneration == 0 || expectedGeneration != generation_) {
+        return receipt(
+            PreviewPresentationOutcome::stale,
+            PreviewPresentationStage::seekPlayback
+        );
+    }
+    if (mode != media::HeadlessAvPlaybackSeekMode::paused
+        && mode != media::HeadlessAvPlaybackSeekMode::playing) {
+        return refused(
+            PreviewPresentationStage::seekPlayback,
+            PreviewPresentationFailureCode::invalidRequest,
+            E_INVALIDARG
+        );
+    }
+    if (state_ != PreviewPresentationState::playing
+        && state_ != PreviewPresentationState::paused
+        && state_ != PreviewPresentationState::completed) {
+        return refused(
+            PreviewPresentationStage::seekPlayback,
+            PreviewPresentationFailureCode::invalidRequest,
+            E_ILLEGAL_METHOD_CALL
+        );
+    }
+    if (!settings_.has_value() || input_.empty()
+        || timelineFrameRate_.numerator == 0
+        || timelineFrameRate_.denominator == 0) {
+        return refused(
+            PreviewPresentationStage::seekPlayback,
+            PreviewPresentationFailureCode::invalidRequest,
+            E_ILLEGAL_METHOD_CALL
+        );
+    }
+    const auto& layer = settings_->renderLayer;
+    if (targetTimelineFrame < layer.timelineStartFrame
+        || layer.durationFrames <= 0) {
+        return refused(
+            PreviewPresentationStage::seekPlayback,
+            PreviewPresentationFailureCode::invalidRequest,
+            E_INVALIDARG
+        );
+    }
+    const auto offset = targetTimelineFrame - layer.timelineStartFrame;
+    if (offset >= layer.durationFrames
+        || layer.sourceStartFrame
+            > (std::numeric_limits<std::int64_t>::max)() - offset) {
+        return refused(
+            PreviewPresentationStage::seekPlayback,
+            PreviewPresentationFailureCode::invalidRequest,
+            E_INVALIDARG
+        );
+    }
+    auto operation = beginOperation(expectedGeneration);
+    if (operation == nullptr) {
+        return refused(
+            PreviewPresentationStage::seekPlayback,
+            PreviewPresentationFailureCode::invalidRequest,
+            HRESULT_FROM_WIN32(ERROR_INVALID_STATE)
+        );
+    }
+    ScopeExit cleanup([&] { finishOperation(operation); });
+    std::stop_callback cancellationCallback(
+        cancellation,
+        [&operation] { operation->cancellation.request_stop(); }
+    );
+    if (operation->cancellation.stop_requested()) {
+        auto value = receipt(
+            PreviewPresentationOutcome::cancelled,
+            PreviewPresentationStage::seekPlayback
+        );
+        value.hresult = HRESULT_FROM_WIN32(ERROR_CANCELLED);
+        return value;
+    }
+
+    auto playback = playback_->seek(
+        expectedGeneration,
+        input_,
+        targetTimelineFrame,
+        timelineFrameRate_,
+        {
+            layer.sourceStartFrame + offset,
+            {layer.framesPerSecond, 1},
+        },
+        mode,
+        operation->cancellation.get_token()
+    );
+    const auto playbackOutcome = outcomeFor(playback.outcome);
+    if (playbackOutcome == PreviewPresentationOutcome::noOp) {
+        return receipt(
+            PreviewPresentationOutcome::noOp,
+            PreviewPresentationStage::seekPlayback
+        );
+    }
+    if (playbackOutcome != PreviewPresentationOutcome::changed
+        || playback.generation == expectedGeneration
+        || !playback.frame.has_value()
+        || !playback.hasTargetTimelineFrame
+        || playback.targetTimelineFrame != targetTimelineFrame) {
+        if (playback.generation != generation_) {
+            generation_ = playback.generation;
+            state_ = stateFor(playback.state);
+            clearFrameState();
+        }
+        auto value = receipt(
+            playbackOutcome == PreviewPresentationOutcome::changed
+                ? PreviewPresentationOutcome::failed
+                : playbackOutcome,
+            PreviewPresentationStage::seekPlayback
+        );
+        value.failure = playbackOutcome == PreviewPresentationOutcome::changed
+            || playback.failure
+                != media::HeadlessAvPlaybackFailureCode::none
+            ? PreviewPresentationFailureCode::playbackFailure
+            : PreviewPresentationFailureCode::none;
+        value.hresult = playbackOutcome == PreviewPresentationOutcome::changed
+            ? E_UNEXPECTED
+            : playback.hresult;
+        value.mediaFailureCode = playback.mediaFailureCode;
+        value.audioFailure = playback.audioFailure;
+        return value;
+    }
+
+    generation_ = playback.generation;
+    state_ = stateFor(playback.state);
+    clearFrameState();
+    cachedFrame_ = std::move(playback.frame);
+    targetTimelineFrame_ = targetTimelineFrame;
+    presentationDirty_ = true;
+    return presentCurrentFrame(
+        PreviewPresentationOutcome::changed,
+        operation->cancellation.get_token()
+    );
+}
+
+PreviewPresentationReceipt PreviewPresentationSession::presentCurrentFrame(
+    PreviewPresentationOutcome playbackOutcome,
+    std::stop_token cancellation
+) {
     if (!presentationDirty_ || !cachedFrame_.has_value()
         || !targetTimelineFrame_.has_value() || !settings_.has_value()) {
         return receipt(playbackOutcome, PreviewPresentationStage::tickPlayback);
     }
-    if (operation->cancellation.stop_requested()) {
+    if (cancellation.stop_requested()) {
         auto value = receipt(
             PreviewPresentationOutcome::cancelled,
             PreviewPresentationStage::render
@@ -557,14 +741,13 @@ PreviewPresentationReceipt PreviewPresentationSession::tick(
                 *cachedFrame_,
                 targetFrame,
                 *settings_,
-                operation->cancellation.get_token()
+                cancellation
             );
             pendingRenderedSourceTimestamp_ = sourceTimestamp;
             pendingRenderedTargetFrame_ = targetFrame;
             ++renderSerial_;
         } catch (const render::RenderError& error) {
-            if (error.code == "cancelled"
-                && operation->cancellation.stop_requested()) {
+            if (error.code == "cancelled" && cancellation.stop_requested()) {
                 auto value = receipt(
                     PreviewPresentationOutcome::cancelled,
                     PreviewPresentationStage::render
@@ -596,7 +779,7 @@ PreviewPresentationReceipt PreviewPresentationSession::tick(
         }
     }
 
-    if (operation->cancellation.stop_requested()) {
+    if (cancellation.stop_requested()) {
         auto value = receipt(
             PreviewPresentationOutcome::cancelled,
             PreviewPresentationStage::present
@@ -606,7 +789,7 @@ PreviewPresentationReceipt PreviewPresentationSession::tick(
     }
     const auto surface = surface_->present(
         *pendingRenderedFrame_,
-        operation->cancellation.get_token()
+        cancellation
     );
     presentSerial_ = surface.presentSerial;
     if (surface.outcome == render::D3d11PreviewSurfaceOutcome::presented) {

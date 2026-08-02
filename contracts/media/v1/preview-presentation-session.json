@@ -2,7 +2,7 @@
   "version": 1,
   "owner": "windows/preview-session",
   "stateOwner": "one coordinator owns the headless A/V generation, latest selected source frame, shared renderer, pending rendered frame, HWND surface, render serial, present serial, cancellation admission, and close receipt",
-  "threadContract": "all synchronous play, tick, render, resize, present, cancel, and close work runs on one background presentation executor and never on the Qt UI thread",
+  "threadContract": "all synchronous play, seek, tick, render, resize, present, cancel, and close work runs on one background presentation executor and never on the Qt UI thread",
   "states": [
     "idle",
     "playing",
@@ -30,6 +30,7 @@
     "validate",
     "startPlayback",
     "tickPlayback",
+    "seekPlayback",
     "pausePlayback",
     "resumePlayback",
     "render",
@@ -73,6 +74,7 @@
     "cancellation": "close requests the admitted operation stop source before waiting for serialized ownership; cancellation is rechecked before render and Present, and no work is admitted after close",
     "settings": "the boundary accepts one immutable project-compiled static video layer, passes its exact-CFR source start to playback, requires a new playback generation for source-mapping changes, and rebuilds every timeline frame through the shared project RenderPlan compiler before rendering",
     "transport": "pause and resume preserve the generation, compiled settings, selected source frame, rendered-frame cache, and visible surface; paused ticks do not reach the A/V clock",
+    "seek": "seek validates the exact current generation and the end-exclusive compiled clip interval, maps the requested timeline frame through the existing static layer source offset with checked arithmetic, replaces playback with one newer generation, and renders and presents its exact first frame without clearing the old surface first",
     "clipBoundary": "the first target frame at or beyond the compiled clip interval stops source playback, preserves the last valid frame, and completes without rendering inactive content"
   },
   "excluded": [

@@ -46,6 +46,7 @@ struct Command final {
     std::int64_t timelineFrame{};
     std::optional<DecodeFrameStart> decodeStart;
     std::uint64_t expectedGeneration{};
+    bool startPaused{};
     std::stop_token cancellation;
     std::shared_ptr<CommandCompletion> completion;
 };
@@ -192,7 +193,33 @@ public:
             timelineFrame,
             generation,
             cancellation,
-            start
+            start,
+            false
+        );
+    }
+
+    AudioPlaybackReceipt preparePausedExactGeneration(
+        const std::filesystem::path& input,
+        std::int64_t timelineFrame,
+        DecodeFrameStart start,
+        std::uint64_t generation,
+        std::stop_token cancellation
+    ) {
+        if (generation == 0) {
+            auto value = snapshot();
+            value.outcome = AudioPlaybackOutcome::refused;
+            value.failure = AudioPlaybackFailureCode::invalidRequest;
+            value.hresult = E_INVALIDARG;
+            return value;
+        }
+        return command(
+            CommandKind::play,
+            input,
+            timelineFrame,
+            generation,
+            cancellation,
+            start,
+            true
         );
     }
 
@@ -433,7 +460,8 @@ private:
         std::int64_t timelineFrame,
         std::uint64_t expectedGeneration,
         std::stop_token cancellation = {},
-        std::optional<DecodeFrameStart> decodeStart = {}
+        std::optional<DecodeFrameStart> decodeStart = {},
+        bool startPaused = false
     ) {
         auto completion = std::make_shared<CommandCompletion>();
         {
@@ -462,6 +490,7 @@ private:
                 timelineFrame,
                 decodeStart,
                 expectedGeneration,
+                startPaused,
                 cancellation,
                 completion,
             });
@@ -855,7 +884,10 @@ private:
             value.hresult = E_INVALIDARG;
             return value;
         }
-        if (previous.state == AudioPlaybackState::playing
+        const auto requestedState = commandValue.startPaused
+            ? AudioPlaybackState::paused
+            : AudioPlaybackState::playing;
+        if (previous.state == requestedState
             && commandValue.input == input_
             && commandValue.timelineFrame == timelineFrame_
             && sameStart(commandValue.decodeStart, decodeStart_)
@@ -1100,6 +1132,29 @@ private:
             eosSubmitted_ = true;
         }
 
+        if (commandValue.startPaused) {
+            if (!sourceAnchor_.has_value()) {
+                auto value = failureReceipt(
+                    AudioPlaybackStage::preparePaused,
+                    AudioPlaybackFailureCode::invariantFailure,
+                    E_UNEXPECTED
+                );
+                value.generation = generation_;
+                return terminateActiveFailure(value);
+            }
+            auto value = previous;
+            value.generation = generation_;
+            value.state = AudioPlaybackState::paused;
+            value.outcome = AudioPlaybackOutcome::changed;
+            value.stage = AudioPlaybackStage::preparePaused;
+            value.failure = AudioPlaybackFailureCode::none;
+            value.hresult = S_OK;
+            value.acceptedFrames = outputCursor_;
+            value.hasClockAnchor = false;
+            publish(value);
+            return value;
+        }
+
         const auto started = output_->start(generation_);
         if (started.currentState == audio::WasapiOutputState::completed) {
             auto value = previous;
@@ -1284,12 +1339,40 @@ private:
             }
             return terminateActiveFailure(failure);
         }
+        if (!clockAnchor_.has_value()) {
+            if (!resumed.hasClockSample || !configuration_.has_value()
+                || !sourceAnchor_.has_value()
+                || resumed.clockSample.generation != generation_) {
+                auto failure = outputFailureReceipt(
+                    resumed,
+                    AudioPlaybackStage::resumeDevice
+                );
+                failure.failure = AudioPlaybackFailureCode::invariantFailure;
+                failure.hresult = E_UNEXPECTED;
+                return terminateActiveFailure(failure);
+            }
+            clockAnchor_ = AudioPlaybackClockAnchor{
+                {
+                    generation_,
+                    resumed.clockSample.devicePosition,
+                    configuration_->clockFrequency,
+                    timelineFrame_,
+                },
+                sourceAnchor_->presentationTimestamp,
+                sourceAnchor_->timeBase.numerator,
+                sourceAnchor_->timeBase.denominator,
+                resumed.clockSample.qpc100Nanoseconds,
+                resumed.clockSample.precisionDegraded,
+            };
+        }
         value.state = AudioPlaybackState::playing;
         value.outcome = outputOutcome(resumed.outcome);
         value.stage = AudioPlaybackStage::resumeDevice;
         value.failure = AudioPlaybackFailureCode::none;
         value.hresult = resumed.hresult;
         value.acceptedFrames = outputCursor_;
+        value.hasClockAnchor = true;
+        value.clockAnchor = *clockAnchor_;
         publish(value);
         return value;
     }
@@ -1672,6 +1755,22 @@ AudioPlaybackReceipt AudioPlaybackSession::playExactGeneration(
     return impl_->playExactGeneration(
         input,
         timelineFrame,
+        generation,
+        cancellation
+    );
+}
+
+AudioPlaybackReceipt AudioPlaybackSession::preparePausedExactGeneration(
+    const std::filesystem::path& input,
+    std::int64_t timelineFrame,
+    DecodeFrameStart start,
+    std::uint64_t generation,
+    std::stop_token cancellation
+) {
+    return impl_->preparePausedExactGeneration(
+        input,
+        timelineFrame,
+        start,
         generation,
         cancellation
     );

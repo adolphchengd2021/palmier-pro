@@ -40,13 +40,14 @@
     "clock": "successful Start returns a generation-matched device clock anchor for the requested timeline frame and preserves the first admitted source presentation timestamp and time base",
     "position": "a generation-checked read returns only a cached non-regressing device-thread clock sample and preserves terminal state and failure",
     "transport": "pause and resume preserve the exact generation, clock anchor, queued PCM, decoded cursor, and source mapping; repeated controls are no-ops and stale generations are refused",
+    "pausedSeekPreparation": "an exact newer generation may prebuffer and prime source-aligned PCM without starting the device or publishing a clock anchor; the first Resume starts that generation and establishes its source-aware timeline clock anchor",
     "close": "an active generation receives a separate cancellation terminal before device close; concurrent close joins once"
   },
   "excluded": [
     "physical-device audible playback",
     "gapless replacement while candidate open or decode is slow",
     "default-device notifications and automatic reopen",
-    "seek, scrub, speed change, and time stretch",
+    "continuous scrub, speed change, and time stretch",
     "multitrack mixing, metering, and effects",
     "A/V frame selection and drift correction",
     "Windows 10 runtime certification"

@@ -54,6 +54,7 @@ enum class PreviewPresentationStage {
     validate,
     startPlayback,
     tickPlayback,
+    seekPlayback,
     pausePlayback,
     resumePlayback,
     render,
@@ -105,6 +106,15 @@ public:
     ) = 0;
     virtual media::HeadlessAvPlaybackReceipt tick(
         std::uint64_t expectedGeneration,
+        std::stop_token cancellation
+    ) = 0;
+    virtual media::HeadlessAvPlaybackReceipt seek(
+        std::uint64_t expectedGeneration,
+        const std::filesystem::path& input,
+        std::int64_t timelineFrame,
+        audio::FrameRate timelineFrameRate,
+        media::DecodeFrameStart start,
+        media::HeadlessAvPlaybackSeekMode mode,
         std::stop_token cancellation
     ) = 0;
     virtual media::HeadlessAvPlaybackReceipt pause(
@@ -186,6 +196,12 @@ public:
         std::uint64_t expectedGeneration,
         std::stop_token cancellation = {}
     );
+    PreviewPresentationReceipt seek(
+        std::uint64_t expectedGeneration,
+        std::int64_t targetTimelineFrame,
+        media::HeadlessAvPlaybackSeekMode mode,
+        std::stop_token cancellation = {}
+    );
     PreviewPresentationReceipt pause(std::uint64_t expectedGeneration);
     PreviewPresentationReceipt resume(std::uint64_t expectedGeneration);
     PreviewPresentationReceipt resize(
@@ -222,6 +238,10 @@ private:
         const std::shared_ptr<detail::PreviewPresentationActiveOperation>& operation
     );
     void clearFrameState();
+    PreviewPresentationReceipt presentCurrentFrame(
+        PreviewPresentationOutcome playbackOutcome,
+        std::stop_token cancellation
+    );
 
     mutable std::mutex operationMutex_;
     mutable std::mutex lifecycleMutex_;
@@ -231,6 +251,8 @@ private:
     std::uint64_t generation_{};
     PreviewPresentationState state_{PreviewPresentationState::idle};
     std::optional<PreviewPresentationSettings> settings_;
+    std::filesystem::path input_;
+    audio::FrameRate timelineFrameRate_;
     std::optional<media::PresentedVideoFrame> cachedFrame_;
     std::optional<std::int64_t> targetTimelineFrame_;
     std::optional<render::RenderedFrame> pendingRenderedFrame_;

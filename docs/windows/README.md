@@ -126,8 +126,16 @@ Preview transport now pauses and resumes the same A/V generation through the
 existing WASAPI, media-session, preview-session, and Qt owners. Pause retains
 the exact clock/source mapping and visible cached frame while suppressing clock
 ticks; Resume restarts the bounded completion-triggered cadence without a
-replacement decode. Scrub, arbitrary playhead seek, speed, VFR, and physical
-device/UI evidence remain open; see ADR 0041.
+replacement decode. Continuous scrub, speed, VFR, and physical device/UI
+evidence remain open; see ADR 0041.
+
+Bounded exact-CFR playhead seek now replaces the A/V generation at an exact
+compiled clip frame. Playing seek continues cadence; paused seek primes audio
+without Start, presents the exact first decoded frame, and establishes its new
+clock anchor only on Resume. Qt exposes an exact frame field plus Previous Frame
+and Next Frame controls; steps always remain paused and out-of-range targets are
+refused without clamping. Continuous scrub, VFR, speed, multi-clip navigation,
+and physical device/UI evidence remain open; see ADR 0042.
 
 The same Qt workflow stages the Release executable through CMake install, runs
 the pinned `windeployqt` QML deployment, requires the complete app-local FFmpeg

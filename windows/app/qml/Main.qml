@@ -226,6 +226,10 @@ ApplicationWindow {
 
     header: ToolBar {
         Row {
+            id: previewTransportControls
+            property bool seekAvailable: previewCoordinator.state === "playing"
+                || previewCoordinator.state === "paused"
+                || previewCoordinator.state === "completed"
             spacing: AppTheme.itemSpacing
             anchors.verticalCenter: parent.verticalCenter
             Button {
@@ -558,6 +562,14 @@ ApplicationWindow {
         Row {
             spacing: AppTheme.itemSpacing
             Button {
+                objectName: "previousPreviewFrameButton"
+                text: qsTr("Previous Frame")
+                enabled: previewTransportControls.seekAvailable
+                    && previewCoordinator.currentFrame > previewCoordinator.minimumFrame
+                    && previewCoordinator.maximumFrame >= previewCoordinator.minimumFrame
+                onClicked: previewCoordinator.stepFrame(-1)
+            }
+            Button {
                 objectName: "pausePreviewButton"
                 text: qsTr("Pause")
                 enabled: previewCoordinator.state === "playing"
@@ -569,9 +581,53 @@ ApplicationWindow {
                 enabled: previewCoordinator.state === "paused"
                 onClicked: previewCoordinator.resume()
             }
+            Button {
+                objectName: "nextPreviewFrameButton"
+                text: qsTr("Next Frame")
+                enabled: previewTransportControls.seekAvailable
+                    && previewCoordinator.currentFrame < previewCoordinator.maximumFrame
+                    && previewCoordinator.maximumFrame >= previewCoordinator.minimumFrame
+                onClicked: previewCoordinator.stepFrame(1)
+            }
+            TextField {
+                id: previewFrameField
+                objectName: "previewFrameField"
+                width: AppTheme.trackHeaderWidth
+                inputMethodHints: Qt.ImhDigitsOnly
+                Component.onCompleted: text = previewCoordinator.currentFrame.toString()
+                onActiveFocusChanged: {
+                    if (!activeFocus)
+                        text = previewCoordinator.currentFrame.toString()
+                }
+                onAccepted: {
+                    const frame = Number(text)
+                    if (Number.isSafeInteger(frame))
+                        previewCoordinator.seekToFrame(frame)
+                }
+                Connections {
+                    target: previewCoordinator
+                    function onCurrentFrameChanged() {
+                        if (!previewFrameField.activeFocus)
+                            previewFrameField.text = previewCoordinator.currentFrame.toString()
+                    }
+                }
+            }
+            Button {
+                objectName: "seekPreviewFrameButton"
+                text: qsTr("Seek")
+                enabled: previewTransportControls.seekAvailable
+                    && previewCoordinator.maximumFrame >= previewCoordinator.minimumFrame
+                onClicked: {
+                    const frame = Number(previewFrameField.text)
+                    if (Number.isSafeInteger(frame))
+                        previewCoordinator.seekToFrame(frame)
+                }
+            }
             Label {
                 objectName: "previewTransportState"
-                text: previewCoordinator.state
+                text: previewCoordinator.state + " — "
+                    + previewCoordinator.currentFrame.toString()
+                    + qsTr(" frame")
                 color: AppTheme.secondaryText
             }
         }

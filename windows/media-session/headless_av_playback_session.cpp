@@ -64,6 +64,22 @@ public:
             );
     }
 
+    AudioPlaybackReceipt preparePausedExactGeneration(
+        const std::filesystem::path& input,
+        std::int64_t timelineFrame,
+        DecodeFrameStart decodeStart,
+        std::uint64_t generation,
+        std::stop_token cancellation
+    ) override {
+        return session_.preparePausedExactGeneration(
+            input,
+            timelineFrame,
+            decodeStart,
+            generation,
+            cancellation
+        );
+    }
+
     AudioPlaybackPositionReceipt position(
         std::uint64_t generation
     ) const override {
@@ -241,7 +257,10 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::playInternal(
     std::int64_t timelineFrame,
     audio::FrameRate timelineFrameRate,
     std::optional<DecodeFrameStart> decodeStart,
-    std::stop_token cancellation
+    std::stop_token cancellation,
+    std::optional<std::uint64_t> expectedGeneration,
+    HeadlessAvPlaybackSeekMode mode,
+    bool returnInitialFrame
 ) {
     std::lock_guard lock(mutex_);
     bool closeRequested;
@@ -258,8 +277,22 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::playInternal(
         value.hresult = E_ILLEGAL_METHOD_CALL;
         return value;
     }
-    if (input.empty() || timelineFrame < 0 || timelineFrameRate.numerator == 0
+    if (expectedGeneration.has_value()
+        && (*expectedGeneration == 0 || *expectedGeneration != generation_)) {
+        auto value = baseReceipt(
+            HeadlessAvPlaybackOutcome::stale,
+            HeadlessAvPlaybackStage::seekVideo
+        );
+        value.failure = HeadlessAvPlaybackFailureCode::invalidRequest;
+        value.hresult = E_INVALIDARG;
+        return value;
+    }
+    if ((mode != HeadlessAvPlaybackSeekMode::paused
+            && mode != HeadlessAvPlaybackSeekMode::playing)
+        || input.empty() || timelineFrame < 0 || timelineFrameRate.numerator == 0
         || timelineFrameRate.denominator == 0
+        || (mode == HeadlessAvPlaybackSeekMode::paused
+            && !decodeStart.has_value())
         || (decodeStart.has_value()
             && (decodeStart->frameIndex < 0
                 || decodeStart->frameRate.numerator <= 0
@@ -272,7 +305,10 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::playInternal(
         value.hresult = E_INVALIDARG;
         return value;
     }
-    if (state_ == HeadlessAvPlaybackState::playing && input == input_
+    const auto requestedState = mode == HeadlessAvPlaybackSeekMode::paused
+        ? HeadlessAvPlaybackState::paused
+        : HeadlessAvPlaybackState::playing;
+    if (state_ == requestedState && input == input_
         && timelineFrame == timelineFrame_
         && timelineFrameRate.numerator == timelineFrameRate_.numerator
         && timelineFrameRate.denominator == timelineFrameRate_.denominator
@@ -347,13 +383,21 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::playInternal(
 
     AudioPlaybackReceipt audioStart;
     try {
-        audioStart = audio_->playExactGeneration(
-            input,
-            timelineFrame,
-            decodeStart,
-            nextGeneration,
-            operationToken
-        );
+        audioStart = mode == HeadlessAvPlaybackSeekMode::paused
+            ? audio_->preparePausedExactGeneration(
+                input,
+                timelineFrame,
+                *decodeStart,
+                nextGeneration,
+                operationToken
+            )
+            : audio_->playExactGeneration(
+                input,
+                timelineFrame,
+                decodeStart,
+                nextGeneration,
+                operationToken
+            );
     } catch (...) {
         auto value = baseReceipt(
             HeadlessAvPlaybackOutcome::failed,
@@ -379,7 +423,9 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::playInternal(
     }
     if (audioStart.outcome != AudioPlaybackOutcome::changed
         || audioStart.generation != nextGeneration
-        || (audioStart.state != AudioPlaybackState::playing
+        || (audioStart.state != (mode == HeadlessAvPlaybackSeekMode::paused
+                ? AudioPlaybackState::paused
+                : AudioPlaybackState::playing)
             && audioStart.state != AudioPlaybackState::completed)) {
         if (audioStart.generation == nextGeneration) {
             if (video_ != nullptr && generation_ != 0) {
@@ -469,19 +515,69 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::playInternal(
     timelineFrameRate_ = timelineFrameRate;
     decodeStart_ = decodeStart;
     state_ = stateForAudio(audioStart.state);
-    if (state_ == HeadlessAvPlaybackState::completed) {
+    if (state_ == HeadlessAvPlaybackState::completed && !returnInitialFrame) {
         video_->cancel(generation_);
     }
     auto value = baseReceipt(
         HeadlessAvPlaybackOutcome::changed,
-        HeadlessAvPlaybackStage::commitVideo
+        returnInitialFrame
+            ? HeadlessAvPlaybackStage::seekVideo
+            : HeadlessAvPlaybackStage::commitVideo
     );
     value.audioState = audioStart.state;
     value.audioFailure = audioStart.failure;
     value.videoState = video_->state();
     value.fillCalls = 1;
     value.admittedFrames = prefill.admittedFrames;
+    if (returnInitialFrame && state_ != HeadlessAvPlaybackState::completed) {
+        try {
+            auto first = video_->dequeue(generation_);
+            if (first.receipt.outcome != PresentationVideoOutcome::changed
+                || !first.frame.has_value()) {
+                return failActive(
+                    HeadlessAvPlaybackStage::seekVideo,
+                    HeadlessAvPlaybackFailureCode::invariantFailure,
+                    E_UNEXPECTED
+                );
+            }
+            value.frame = std::move(first.frame);
+            value.hasTargetTimelineFrame = true;
+            value.targetTimelineFrame = timelineFrame_;
+            value.videoState = video_->state();
+            if (state_ == HeadlessAvPlaybackState::completed) {
+                video_->cancel(generation_);
+                value.videoState = video_->state();
+            }
+        } catch (...) {
+            return failActive(
+                HeadlessAvPlaybackStage::seekVideo,
+                HeadlessAvPlaybackFailureCode::videoFailure,
+                E_UNEXPECTED
+            );
+        }
+    }
     return value;
+}
+
+HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::seek(
+    std::uint64_t expectedGeneration,
+    const std::filesystem::path& input,
+    std::int64_t timelineFrame,
+    audio::FrameRate timelineFrameRate,
+    DecodeFrameStart start,
+    HeadlessAvPlaybackSeekMode mode,
+    std::stop_token cancellation
+) {
+    return playInternal(
+        input,
+        timelineFrame,
+        timelineFrameRate,
+        start,
+        cancellation,
+        expectedGeneration,
+        mode,
+        true
+    );
 }
 
 HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::tick(

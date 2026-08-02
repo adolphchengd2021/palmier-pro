@@ -42,6 +42,7 @@ enum class AudioPlaybackStage {
     installGeneration,
     pcmHandoff,
     startDevice,
+    preparePaused,
     pauseDevice,
     resumeDevice,
     drain,
@@ -121,6 +122,13 @@ public:
         std::stop_token cancellation = {}
     );
     AudioPlaybackReceipt playExactGeneration(
+        const std::filesystem::path& input,
+        std::int64_t timelineFrame,
+        DecodeFrameStart start,
+        std::uint64_t generation,
+        std::stop_token cancellation = {}
+    );
+    AudioPlaybackReceipt preparePausedExactGeneration(
         const std::filesystem::path& input,
         std::int64_t timelineFrame,
         DecodeFrameStart start,

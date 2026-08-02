@@ -26,6 +26,7 @@
     "prepareVideo",
     "startAudio",
     "commitVideo",
+    "seekVideo",
     "audioPosition",
     "fillVideo",
     "selectVideo",
@@ -74,6 +75,7 @@
     "clock": "one cached generation-matched audio position is read per tick and passed unchanged to the presentation selector",
     "sourceStart": "one exact source-frame request is part of generation identity and is passed unchanged to both video and audio preparation before commit",
     "transport": "same-generation pause and resume delegate once to audio, retain the prepared video cursor, and suppress clock reads and video selection while paused",
+    "seek": "an exact-current-generation seek prepares one exact-CFR source start as a newer A/V generation; paused mode primes but does not start audio, playing mode starts it, and both return the exact first decoded frame and requested timeline frame before later clock ticks",
     "tick": "selection and at most the configured bounded fill calls continue until an early frame, video EOF, no progress, or budget exhaustion",
     "delivery": "one tick returns only its latest selected frame and counts every older selected or superseded due frame as dropped",
     "terminal": "video EOF does not end audio; audio completion, cancellation, invalidation, or failure terminates the A/V generation without extrapolating a clock",
@@ -84,7 +86,7 @@
     "interactive swap-chain presentation",
     "physical-device audible A/V synchronization",
     "final hardware endpoint position at audio completion",
-    "interactive scrub, speed change, and drift correction",
+    "continuous scrub, speed change, and drift correction",
     "device recovery",
     "Windows 10 runtime certification"
   ]

@@ -312,6 +312,18 @@ if(BUILD_TESTING)
         pauseCancelsActiveTickAndResumeKeepsTheGeneration
     )
     add_palmier_qt_preview_test(
+        frame_step_and_seek_replace_generation
+        frameStepsPauseAndSeekReplacesTheGeneration
+    )
+    add_palmier_qt_preview_test(
+        rapid_seek_uses_committed_generation
+        rapidSeekUsesTheCommittedReplacementGeneration
+    )
+    add_palmier_qt_preview_test(
+        stale_tick_target_cannot_overwrite_replacement
+        staleTickTargetCannotOverwriteReplacementCurrentFrame
+    )
+    add_palmier_qt_preview_test(
         stale_tick_cancels_without_retry
         staleTickCancelsWithoutRetryLoop
     )

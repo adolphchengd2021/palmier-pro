@@ -33,6 +33,12 @@ public:
         std::uint64_t expectedGeneration,
         std::stop_token cancellation
     ) = 0;
+    virtual preview::PreviewPresentationReceipt seek(
+        std::uint64_t expectedGeneration,
+        std::int64_t targetTimelineFrame,
+        media::HeadlessAvPlaybackSeekMode mode,
+        std::stop_token cancellation
+    ) = 0;
     virtual preview::PreviewPresentationReceipt pause(
         std::uint64_t expectedGeneration
     ) = 0;
@@ -74,6 +80,9 @@ class PreviewPresentationController final : public QObject {
     Q_PROPERTY(bool shutdownComplete READ shutdownComplete NOTIFY shutdownCompleteChanged)
     Q_PROPERTY(QString state READ state NOTIFY stateChanged)
     Q_PROPERTY(QString errorCode READ errorCode NOTIFY errorCodeChanged)
+    Q_PROPERTY(qint64 currentFrame READ currentFrame NOTIFY currentFrameChanged)
+    Q_PROPERTY(qint64 minimumFrame READ minimumFrame NOTIFY previewRangeChanged)
+    Q_PROPERTY(qint64 maximumFrame READ maximumFrame NOTIFY previewRangeChanged)
 
 public:
     explicit PreviewPresentationController(QObject* parent = nullptr);
@@ -92,6 +101,9 @@ public:
     bool shutdownComplete() const noexcept;
     QString state() const;
     QString errorCode() const;
+    qint64 currentFrame() const noexcept;
+    qint64 minimumFrame() const noexcept;
+    qint64 maximumFrame() const noexcept;
     preview::PreviewPresentationReceipt latestPlaybackReceipt() const noexcept;
     void replaceProjectPreview(
         std::uint64_t projectGeneration,
@@ -104,6 +116,8 @@ public:
     );
     Q_INVOKABLE bool pause();
     Q_INVOKABLE bool resume();
+    Q_INVOKABLE bool seekToFrame(qint64 targetTimelineFrame);
+    Q_INVOKABLE bool stepFrame(int delta);
     Q_INVOKABLE bool requestShutdown();
 
 signals:
@@ -111,6 +125,8 @@ signals:
     void shutdownCompleteChanged();
     void stateChanged();
     void errorCodeChanged();
+    void currentFrameChanged();
+    void previewRangeChanged();
     void shutdownReady();
 
 private:
@@ -119,6 +135,7 @@ private:
         resize,
         play,
         tick,
+        seek,
         pause,
         resume,
         cancel,
@@ -136,6 +153,15 @@ private:
         std::uint64_t projectGeneration{};
         std::uint64_t projectRevision{};
         ProjectPreviewProjection preview;
+    };
+
+    struct PendingSeek final {
+        std::uint64_t sourceSerial{};
+        std::uint64_t playbackGeneration{};
+        std::int64_t targetTimelineFrame{};
+        media::HeadlessAvPlaybackSeekMode mode{
+            media::HeadlessAvPlaybackSeekMode::paused
+        };
     };
 
     struct OperationResult final {
@@ -162,6 +188,7 @@ private:
         std::uint64_t sourceSerial,
         std::uint64_t playbackGeneration
     );
+    void scheduleSeek(PendingSeek request);
     void scheduleTransport(
         OperationKind kind,
         std::uint64_t sourceSerial,
@@ -184,6 +211,8 @@ private:
     void setReady(bool value);
     void setState(QString value);
     void setErrorCode(QString value);
+    void setCurrentFrame(std::int64_t value);
+    void setPreviewRange(std::int64_t minimum, std::int64_t maximum);
 
     detail::QtPreviewSessionFactory factory_;
     std::shared_ptr<detail::QtPreviewWorkerState> workerState_;
@@ -192,6 +221,7 @@ private:
     std::shared_ptr<std::stop_source> activeCancellation_;
     std::optional<PendingResize> pendingResize_;
     std::optional<PendingPreview> desiredPreview_;
+    std::optional<PendingSeek> pendingSeek_;
     HWND nativeWindow_{};
     std::uint64_t surfaceEpoch_{};
     std::uint64_t operationSerial_{};
@@ -208,6 +238,9 @@ private:
     bool tickPending_{};
     bool pauseRequested_{};
     bool resumeRequested_{};
+    std::int64_t currentFrame_{};
+    std::int64_t minimumFrame_{};
+    std::int64_t maximumFrame_{-1};
     bool sessionExists_{};
     bool shutdownRequested_{};
     bool shutdownComplete_{};

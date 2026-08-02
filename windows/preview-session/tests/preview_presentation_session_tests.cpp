@@ -109,6 +109,7 @@ struct PlaybackState final {
     HeadlessAvPlaybackState state{HeadlessAvPlaybackState::idle};
     std::size_t playCalls{};
     std::size_t tickCalls{};
+    std::size_t seekCalls{};
     std::size_t pauseCalls{};
     std::size_t resumeCalls{};
     std::size_t cancelCalls{};
@@ -125,6 +126,7 @@ struct PlaybackState final {
     bool failCancel{};
     std::int64_t targetTimelineFrame{};
     std::optional<palmier::media::DecodeFrameStart> decodeStart;
+    std::optional<palmier::media::HeadlessAvPlaybackSeekMode> seekMode;
     std::function<void()> afterTick;
     std::mutex mutex;
     std::condition_variable condition;
@@ -231,6 +233,49 @@ public:
         if (state_->afterTick) {
             state_->afterTick();
         }
+        return value;
+    }
+
+    HeadlessAvPlaybackReceipt seek(
+        std::uint64_t expectedGeneration,
+        const std::filesystem::path&,
+        std::int64_t targetTimelineFrame,
+        palmier::audio::FrameRate,
+        palmier::media::DecodeFrameStart decodeStart,
+        palmier::media::HeadlessAvPlaybackSeekMode mode,
+        std::stop_token cancellation
+    ) override {
+        std::scoped_lock lock(state_->mutex);
+        ++state_->seekCalls;
+        if (expectedGeneration != state_->generation) {
+            return playbackReceipt(
+                state_->generation,
+                state_->state,
+                HeadlessAvPlaybackOutcome::stale
+            );
+        }
+        if (cancellation.stop_requested()) {
+            return playbackReceipt(
+                state_->generation,
+                state_->state,
+                HeadlessAvPlaybackOutcome::cancelled
+            );
+        }
+        ++state_->generation;
+        state_->state = mode == palmier::media::HeadlessAvPlaybackSeekMode::paused
+            ? HeadlessAvPlaybackState::paused
+            : HeadlessAvPlaybackState::playing;
+        state_->targetTimelineFrame = targetTimelineFrame;
+        state_->decodeStart = decodeStart;
+        state_->seekMode = mode;
+        auto value = playbackReceipt(
+            state_->generation,
+            state_->state,
+            HeadlessAvPlaybackOutcome::changed
+        );
+        value.hasTargetTimelineFrame = true;
+        value.targetTimelineFrame = targetTimelineFrame;
+        value.frame = frame(state_->generation, decodeStart.frameIndex, 0.5F);
         return value;
     }
 
@@ -866,6 +911,99 @@ void pauseResumePreservesGenerationAndCachedFrame() {
     require(fixture.playback->resumeCalls == 1, "repeat preview resume reached playback");
 }
 
+void seekPresentsExactFramesAndEnforcesGenerationAndBounds() {
+    Fixture fixture;
+    start(fixture);
+    enqueueFrame(fixture, 0, 0);
+    require(
+        fixture.session->tick(1).outcome == PreviewPresentationOutcome::presented,
+        "seek setup did not present"
+    );
+    const auto renders = fixture.renderer->calls;
+    const auto presents = fixture.surface->presentCalls;
+    require(
+        fixture.session->seek(
+            1,
+            2,
+            static_cast<palmier::media::HeadlessAvPlaybackSeekMode>(99)
+        ).outcome == PreviewPresentationOutcome::refused,
+        "invalid preview seek mode was accepted"
+    );
+    require(fixture.playback->seekCalls == 0, "invalid seek mode reached playback");
+
+    const auto paused = fixture.session->seek(
+        1,
+        3,
+        palmier::media::HeadlessAvPlaybackSeekMode::paused
+    );
+    require(paused.outcome == PreviewPresentationOutcome::presented, "paused seek did not present");
+    require(paused.state == PreviewPresentationState::paused, "paused seek started playback");
+    require(paused.generation == 2, "paused seek did not replace generation");
+    require(paused.hasTargetTimelineFrame && paused.targetTimelineFrame == 3, "paused seek target changed");
+    require(paused.hasSourcePresentationTimestamp && paused.sourcePresentationTimestamp == 3, "paused seek source changed");
+    require(paused.hasCachedFrame, "paused seek lost cached frame");
+    require(fixture.renderer->calls == renders + 1, "paused seek did not render once");
+    require(fixture.surface->presentCalls == presents + 1, "paused seek did not present once");
+    require(
+        fixture.playback->decodeStart.has_value()
+            && fixture.playback->decodeStart->frameIndex == 3,
+        "paused seek did not map the source frame"
+    );
+    require(
+        fixture.playback->seekMode
+            == palmier::media::HeadlessAvPlaybackSeekMode::paused,
+        "paused seek changed mode"
+    );
+    require(
+        fixture.session->seek(
+            1,
+            4,
+            palmier::media::HeadlessAvPlaybackSeekMode::paused
+        ).outcome == PreviewPresentationOutcome::stale,
+        "stale preview seek was accepted"
+    );
+    require(fixture.playback->seekCalls == 1, "stale preview seek reached playback");
+    require(
+        fixture.session->seek(
+            2,
+            -1,
+            palmier::media::HeadlessAvPlaybackSeekMode::paused
+        ).outcome == PreviewPresentationOutcome::refused,
+        "negative preview seek was accepted"
+    );
+    require(
+        fixture.session->seek(
+            2,
+            100,
+            palmier::media::HeadlessAvPlaybackSeekMode::paused
+        ).outcome == PreviewPresentationOutcome::refused,
+        "end-exclusive preview seek was accepted"
+    );
+    require(fixture.playback->seekCalls == 1, "out-of-range seek reached playback");
+
+    require(fixture.session->resume(2).state == PreviewPresentationState::playing, "seek resume failed");
+    const auto playing = fixture.session->seek(
+        2,
+        4,
+        palmier::media::HeadlessAvPlaybackSeekMode::playing
+    );
+    require(playing.state == PreviewPresentationState::playing, "playing seek paused");
+    require(playing.generation == 3, "playing seek did not replace generation");
+    require(playing.targetTimelineFrame == 4, "playing seek target changed");
+
+    std::stop_source cancelled;
+    cancelled.request_stop();
+    const auto cancelledSeek = fixture.session->seek(
+        3,
+        5,
+        palmier::media::HeadlessAvPlaybackSeekMode::paused,
+        cancelled.get_token()
+    );
+    require(cancelledSeek.outcome == PreviewPresentationOutcome::cancelled, "cancelled seek committed");
+    require(fixture.session->snapshot().generation == 3, "cancelled seek changed generation");
+    require(fixture.session->close().state == PreviewPresentationState::closed, "seek close failed");
+}
+
 void terminalSurfaceStopsPlayback() {
     Fixture fixture;
     fixture.surface->presentOutcomes = {D3d11PreviewSurfaceOutcome::invalidated};
@@ -1073,6 +1211,7 @@ int main() {
         sourceMappingChangeRequiresPlaybackRestart();
         invalidAndStaleRequestsDoNotReachOwnedPorts();
         pauseResumePreservesGenerationAndCachedFrame();
+        seekPresentsExactFramesAndEnforcesGenerationAndBounds();
         terminalSurfaceStopsPlayback();
         renderFailureStopsPlayback();
         cancellationAfterPlaybackStopsBeforeRender();

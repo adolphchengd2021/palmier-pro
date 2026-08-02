@@ -33,6 +33,13 @@ public:
         std::uint64_t generation,
         std::stop_token cancellation
     ) = 0;
+    virtual AudioPlaybackReceipt preparePausedExactGeneration(
+        const std::filesystem::path& input,
+        std::int64_t timelineFrame,
+        DecodeFrameStart decodeStart,
+        std::uint64_t generation,
+        std::stop_token cancellation
+    ) = 0;
     virtual AudioPlaybackPositionReceipt position(
         std::uint64_t generation
     ) const = 0;
@@ -63,6 +70,11 @@ enum class HeadlessAvPlaybackState {
     closed,
 };
 
+enum class HeadlessAvPlaybackSeekMode {
+    paused,
+    playing,
+};
+
 enum class HeadlessAvPlaybackOutcome {
     changed,
     noOp,
@@ -78,6 +90,7 @@ enum class HeadlessAvPlaybackStage {
     prepareVideo,
     startAudio,
     commitVideo,
+    seekVideo,
     audioPosition,
     fillVideo,
     selectVideo,
@@ -143,6 +156,15 @@ public:
         std::uint64_t expectedGeneration,
         std::stop_token cancellation = {}
     );
+    HeadlessAvPlaybackReceipt seek(
+        std::uint64_t expectedGeneration,
+        const std::filesystem::path& input,
+        std::int64_t timelineFrame,
+        audio::FrameRate timelineFrameRate,
+        DecodeFrameStart start,
+        HeadlessAvPlaybackSeekMode mode,
+        std::stop_token cancellation = {}
+    );
     HeadlessAvPlaybackReceipt pause(std::uint64_t expectedGeneration);
     HeadlessAvPlaybackReceipt resume(std::uint64_t expectedGeneration);
     HeadlessAvPlaybackReceipt cancel(std::uint64_t expectedGeneration);
@@ -177,7 +199,10 @@ private:
         std::int64_t timelineFrame,
         audio::FrameRate timelineFrameRate,
         std::optional<DecodeFrameStart> decodeStart,
-        std::stop_token cancellation
+        std::stop_token cancellation,
+        std::optional<std::uint64_t> expectedGeneration = {},
+        HeadlessAvPlaybackSeekMode mode = HeadlessAvPlaybackSeekMode::playing,
+        bool returnInitialFrame = false
     );
 
     mutable std::mutex mutex_;

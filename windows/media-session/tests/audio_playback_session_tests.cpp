@@ -76,6 +76,8 @@ struct PlaybackStreamState final {
     DWORD destroyedThread{};
     std::uint64_t clockPosition{};
     std::uint32_t closeCalls{};
+    std::atomic_uint32_t startCalls{};
+    std::atomic_uint32_t stopCalls{};
 };
 
 class PlaybackStream final : public WasapiOutputWorkerStream {
@@ -184,7 +186,10 @@ public:
         activeFrames_ = 0;
         return S_OK;
     }
-    HRESULT start() noexcept override { return record(); }
+    HRESULT start() noexcept override {
+        ++state_->startCalls;
+        return record();
+    }
     HRESULT loadClockPosition(WasapiClockReading& reading) noexcept override {
         record();
         reading = {
@@ -194,7 +199,10 @@ public:
         };
         return S_OK;
     }
-    HRESULT stop() noexcept override { return record(); }
+    HRESULT stop() noexcept override {
+        ++state_->stopCalls;
+        return record();
+    }
     HRESULT reset() noexcept override {
         const auto result = record();
         if (FAILED(result)) {
@@ -422,6 +430,46 @@ void pauseResumePreservesGenerationClockAndQueuedPcm() {
     const auto cancelled = session.cancel(1);
     require(cancelled.state == AudioPlaybackState::cancelled, "paused audio cancel failed");
     require(session.close().state == AudioPlaybackState::closed, "paused audio close failed");
+}
+
+void pausedPreparationStartsOnlyWhenResumedAndAnchorsTheSeek() {
+    TemporaryDirectory media;
+    const auto input = media.write(
+        "paused-seek.wav",
+        palmier::media::test_fixtures::patternedPcmWav
+    );
+    const DecodeFrameStart start{1, {100, 1}};
+    auto state = std::make_shared<PlaybackStreamState>();
+    state->automaticRender.store(false);
+    AudioPlaybackSession session(outputWorker(state));
+
+    const auto prepared = session.preparePausedExactGeneration(
+        input,
+        12,
+        start,
+        1
+    );
+    require(prepared.outcome == AudioPlaybackOutcome::changed, "paused seek prepare failed");
+    require(prepared.state == AudioPlaybackState::paused, "paused seek started playing");
+    require(prepared.generation == 1, "paused seek changed generation");
+    require(!prepared.hasClockAnchor, "paused seek published an unstarted clock");
+    require(state->startCalls.load() == 0, "paused seek started WASAPI");
+    const auto position = session.position(1);
+    require(!position.hasClockAnchor, "paused seek position invented an anchor");
+    require(position.hresult == E_PENDING, "paused seek position changed pending state");
+
+    const auto resumed = session.resume(1);
+    require(resumed.state == AudioPlaybackState::playing, "paused seek did not resume");
+    require(resumed.generation == 1, "paused seek resume changed generation");
+    require(resumed.hasClockAnchor, "paused seek resume did not anchor the clock");
+    require(resumed.clockAnchor.value.timelineFrame == 12, "seek timeline anchor changed");
+    require(
+        resumed.clockAnchor.sourcePresentationTimestamp == 240,
+        "seek source anchor changed"
+    );
+    require(state->startCalls.load() == 1, "paused seek started WASAPI more than once");
+    require(session.cancel(1).state == AudioPlaybackState::cancelled, "seek cancel failed");
+    require(session.close().state == AudioPlaybackState::closed, "seek close failed");
 }
 
 void failedReplacementPreservesTheRunningGeneration() {
@@ -674,6 +722,10 @@ int main() {
         runCase(
             "pauseResumePreservesGenerationClockAndQueuedPcm",
             pauseResumePreservesGenerationClockAndQueuedPcm
+        );
+        runCase(
+            "pausedPreparationStartsOnlyWhenResumedAndAnchorsTheSeek",
+            pausedPreparationStartsOnlyWhenResumedAndAnchorsTheSeek
         );
         runCase(
             "failedReplacementPreservesTheRunningGeneration",

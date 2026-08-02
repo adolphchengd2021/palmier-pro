@@ -280,20 +280,27 @@ struct FakeSessionState final {
     QSemaphore releaseFirstResize;
     QSemaphore tickEntered;
     QSemaphore releaseTick;
+    QSemaphore seekEntered;
+    QSemaphore releaseSeek;
     bool gateFirstResize{};
     bool gateTick{};
+    bool gateSeek{};
     bool staleTick{};
     bool tickCancellationObserved{};
+    bool seekCancellationObserved{};
     bool failClose{};
     bool destroyed{};
     HWND window{};
     bool windowAliveAtDestruction{};
     std::uint64_t generation{};
     std::size_t tickCalls{};
+    std::size_t seekCalls{};
     std::size_t pauseCalls{};
     std::size_t resumeCalls{};
     std::size_t cancelCalls{};
     std::size_t playingTicks{};
+    std::vector<std::int64_t> seekTargets;
+    std::vector<palmier::media::HeadlessAvPlaybackSeekMode> seekModes;
 };
 
 class FakeSession final : public palmier::windows::detail::QtPreviewSessionPort {
@@ -376,6 +383,8 @@ public:
                 auto receipt = completedReceipt(expectedGeneration);
                 receipt.state = PreviewPresentationState::cancelled;
                 receipt.outcome = PreviewPresentationOutcome::cancelled;
+                receipt.hasTargetTimelineFrame = true;
+                receipt.targetTimelineFrame = 0;
                 return receipt;
             }
         }
@@ -392,6 +401,66 @@ public:
             }
         }
         return completedReceipt(expectedGeneration);
+    }
+
+    PreviewPresentationReceipt seek(
+        std::uint64_t expectedGeneration,
+        std::int64_t targetTimelineFrame,
+        palmier::media::HeadlessAvPlaybackSeekMode mode,
+        std::stop_token cancellation
+    ) override {
+        bool gate;
+        std::uint64_t generation;
+        {
+            const std::lock_guard lock(state_->mutex);
+            ++state_->seekCalls;
+            state_->seekTargets.push_back(targetTimelineFrame);
+            state_->seekModes.push_back(mode);
+            state_->threads.push_back(std::this_thread::get_id());
+            if (cancellation.stop_requested()) {
+                auto receipt = completedReceipt(expectedGeneration);
+                receipt.state = PreviewPresentationState::cancelled;
+                receipt.outcome = PreviewPresentationOutcome::cancelled;
+                return receipt;
+            }
+            if (expectedGeneration != state_->generation) {
+                auto receipt = playingReceipt(state_->generation);
+                receipt.outcome = PreviewPresentationOutcome::stale;
+                return receipt;
+            }
+            ++state_->generation;
+            generation = state_->generation;
+            gate = state_->gateSeek;
+            if (gate) state_->gateSeek = false;
+        }
+        if (gate) {
+            state_->seekEntered.release();
+            std::stop_callback cancellationCallback(cancellation, [this] {
+                state_->releaseSeek.release();
+            });
+            state_->releaseSeek.acquire();
+            if (cancellation.stop_requested()) {
+                const std::lock_guard lock(state_->mutex);
+                state_->seekCancellationObserved = true;
+                auto receipt = playingReceipt(generation);
+                receipt.state = mode
+                        == palmier::media::HeadlessAvPlaybackSeekMode::paused
+                    ? PreviewPresentationState::paused
+                    : PreviewPresentationState::playing;
+                receipt.outcome = PreviewPresentationOutcome::cancelled;
+                receipt.hasTargetTimelineFrame = true;
+                receipt.targetTimelineFrame = targetTimelineFrame;
+                return receipt;
+            }
+        }
+        auto receipt = playingReceipt(generation);
+        receipt.state = mode == palmier::media::HeadlessAvPlaybackSeekMode::paused
+            ? PreviewPresentationState::paused
+            : PreviewPresentationState::playing;
+        receipt.outcome = PreviewPresentationOutcome::presented;
+        receipt.hasTargetTimelineFrame = true;
+        receipt.targetTimelineFrame = targetTimelineFrame;
+        return receipt;
     }
 
     PreviewPresentationReceipt cancel(std::uint64_t expectedGeneration) override {
@@ -524,6 +593,11 @@ bool sessionDestroyed(const std::shared_ptr<FakeSessionState>& state) {
 bool tickCancellationObserved(const std::shared_ptr<FakeSessionState>& state) {
     const std::lock_guard lock(state->mutex);
     return state->tickCancellationObserved;
+}
+
+bool seekCancellationObserved(const std::shared_ptr<FakeSessionState>& state) {
+    const std::lock_guard lock(state->mutex);
+    return state->seekCancellationObserved;
 }
 
 class QtPreviewTests final : public QObject {
@@ -744,6 +818,131 @@ private slots:
             const std::lock_guard lock(state->mutex);
             QCOMPARE(state->resumeCalls, std::size_t{1});
         }
+
+        static_cast<void>(controller.requestShutdown());
+        QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);
+        root.reset();
+    }
+
+    void frameStepsPauseAndSeekReplacesTheGeneration() {
+        auto state = std::make_shared<FakeSessionState>();
+        state->gateTick = true;
+        state->playingTicks = 100;
+        palmier::windows::PreviewPresentationController controller(
+            [state](HWND) { return std::make_unique<FakeSession>(state); },
+            nullptr
+        );
+        QQmlEngine engine;
+        auto root = createPreviewWindow(engine, controller);
+        QVERIFY(root != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(controller.ready(), 5000);
+
+        controller.replaceProjectPreview(1, availablePreview("media-seek"));
+        QTRY_COMPARE_WITH_TIMEOUT(state->tickEntered.available(), 1, 5000);
+        QVERIFY(controller.stepFrame(1));
+        QTRY_VERIFY_WITH_TIMEOUT(tickCancellationObserved(state), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.state(), QStringLiteral("paused"), 5000);
+        QCOMPARE(controller.currentFrame(), qint64{1});
+        {
+            const std::lock_guard lock(state->mutex);
+            QCOMPARE(state->generation, std::uint64_t{2});
+            QCOMPARE(state->seekCalls, std::size_t{1});
+            QCOMPARE(state->seekTargets.back(), std::int64_t{1});
+            QCOMPARE(
+                state->seekModes.back(),
+                palmier::media::HeadlessAvPlaybackSeekMode::paused
+            );
+        }
+
+        QVERIFY(controller.stepFrame(1));
+        QTRY_COMPARE_WITH_TIMEOUT(controller.currentFrame(), qint64{2}, 5000);
+        QVERIFY(controller.stepFrame(-1));
+        QTRY_COMPARE_WITH_TIMEOUT(controller.currentFrame(), qint64{1}, 5000);
+        QVERIFY(controller.seekToFrame(10));
+        QTRY_COMPARE_WITH_TIMEOUT(controller.currentFrame(), qint64{10}, 5000);
+        QCOMPARE(controller.state(), QStringLiteral("paused"));
+        QVERIFY(!controller.seekToFrame(30));
+        QVERIFY(!controller.stepFrame(2));
+
+        QVERIFY(controller.resume());
+        QTRY_COMPARE_WITH_TIMEOUT(controller.state(), QStringLiteral("playing"), 5000);
+        QVERIFY(controller.seekToFrame(12));
+        QTRY_COMPARE_WITH_TIMEOUT(controller.currentFrame(), qint64{12}, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.state(), QStringLiteral("playing"), 5000);
+        {
+            const std::lock_guard lock(state->mutex);
+            QCOMPARE(state->generation, std::uint64_t{6});
+            QCOMPARE(state->seekCalls, std::size_t{5});
+            QCOMPARE(state->seekTargets.back(), std::int64_t{12});
+            QCOMPARE(
+                state->seekModes.back(),
+                palmier::media::HeadlessAvPlaybackSeekMode::playing
+            );
+        }
+
+        static_cast<void>(controller.requestShutdown());
+        QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);
+        root.reset();
+    }
+
+    void rapidSeekUsesTheCommittedReplacementGeneration() {
+        auto state = std::make_shared<FakeSessionState>();
+        state->gateTick = true;
+        state->gateSeek = true;
+        state->playingTicks = 100;
+        palmier::windows::PreviewPresentationController controller(
+            [state](HWND) { return std::make_unique<FakeSession>(state); },
+            nullptr
+        );
+        QQmlEngine engine;
+        auto root = createPreviewWindow(engine, controller);
+        QVERIFY(root != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(controller.ready(), 5000);
+
+        controller.replaceProjectPreview(1, availablePreview("media-rapid-seek"));
+        QTRY_COMPARE_WITH_TIMEOUT(state->tickEntered.available(), 1, 5000);
+        QVERIFY(controller.seekToFrame(5));
+        QTRY_VERIFY_WITH_TIMEOUT(tickCancellationObserved(state), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(state->seekEntered.available(), 1, 5000);
+        QVERIFY(controller.seekToFrame(7));
+        QTRY_VERIFY_WITH_TIMEOUT(seekCancellationObserved(state), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.currentFrame(), qint64{7}, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.state(), QStringLiteral("playing"), 5000);
+        QCOMPARE(controller.errorCode(), QString{});
+        {
+            const std::lock_guard lock(state->mutex);
+            QCOMPARE(state->generation, std::uint64_t{3});
+            QCOMPARE(state->seekCalls, std::size_t{2});
+            QCOMPARE(state->seekTargets.back(), std::int64_t{7});
+        }
+
+        static_cast<void>(controller.requestShutdown());
+        QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);
+        root.reset();
+    }
+
+    void staleTickTargetCannotOverwriteReplacementCurrentFrame() {
+        auto state = std::make_shared<FakeSessionState>();
+        state->gateTick = true;
+        palmier::windows::PreviewPresentationController controller(
+            [state](HWND) { return std::make_unique<FakeSession>(state); },
+            nullptr
+        );
+        QQmlEngine engine;
+        auto root = createPreviewWindow(engine, controller);
+        QVERIFY(root != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(controller.ready(), 5000);
+
+        controller.replaceProjectPreview(1, availablePreview("media-old-target"));
+        QTRY_COMPARE_WITH_TIMEOUT(state->tickEntered.available(), 1, 5000);
+        auto replacement = availablePreview("media-new-target");
+        replacement.candidate->renderLayer.timelineStartFrame = 10;
+        replacement.candidate->renderLayer.durationFrames = 5;
+        controller.replaceProjectPreview(2, std::move(replacement));
+        QTRY_VERIFY_WITH_TIMEOUT(tickCancellationObserved(state), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(playCount(state), std::size_t{2}, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.state(), QStringLiteral("completed"), 5000);
+        QCOMPARE(controller.currentFrame(), qint64{10});
 
         static_cast<void>(controller.requestShutdown());
         QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);

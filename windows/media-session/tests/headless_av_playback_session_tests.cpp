@@ -44,6 +44,7 @@ using palmier::media::HeadlessAvPlaybackFailureCode;
 using palmier::media::HeadlessAvPlaybackLimits;
 using palmier::media::HeadlessAvPlaybackOutcome;
 using palmier::media::HeadlessAvPlaybackSession;
+using palmier::media::HeadlessAvPlaybackSeekMode;
 using palmier::media::HeadlessAvPlaybackState;
 using palmier::media::MediaFailureCode;
 using palmier::media::PresentationVideoDecodeState;
@@ -61,11 +62,13 @@ struct FakeAudioState final {
     std::uint64_t generation{};
     AudioPlaybackState state{AudioPlaybackState::idle};
     std::size_t playCalls{};
+    std::size_t preparePausedCalls{};
     std::size_t positionCalls{};
     std::size_t pauseCalls{};
     std::size_t resumeCalls{};
     std::size_t cancelCalls{};
     std::size_t closeCalls{};
+    bool completePausedPrepare{};
     bool failNextPlay{};
     bool failAfterCommit{};
     bool hasClockSample{true};
@@ -181,6 +184,39 @@ public:
             AudioPlaybackOutcome::changed,
             AudioPlaybackStage::startDevice
         );
+    }
+
+    AudioPlaybackReceipt preparePausedExactGeneration(
+        const std::filesystem::path&,
+        std::int64_t timelineFrame,
+        palmier::media::DecodeFrameStart decodeStart,
+        std::uint64_t generation,
+        std::stop_token cancellation
+    ) override {
+        ++state_->preparePausedCalls;
+        if (cancellation.stop_requested()) {
+            return audioReceipt(*state_, AudioPlaybackOutcome::cancelled);
+        }
+        if (generation != state_->generation + 1) {
+            auto value = audioReceipt(*state_, AudioPlaybackOutcome::refused);
+            value.failure = AudioPlaybackFailureCode::invalidRequest;
+            value.hresult = E_INVALIDARG;
+            return value;
+        }
+        state_->generation = generation;
+        state_->timelineFrame = timelineFrame;
+        state_->decodeStart = decodeStart;
+        state_->sourcePresentationTimestamp = decodeStart.frameIndex * 4;
+        state_->state = state_->completePausedPrepare
+            ? AudioPlaybackState::completed
+            : AudioPlaybackState::paused;
+        auto value = audioReceipt(
+            *state_,
+            AudioPlaybackOutcome::changed,
+            AudioPlaybackStage::preparePaused
+        );
+        value.hasClockAnchor = false;
+        return value;
     }
 
     AudioPlaybackPositionReceipt position(
@@ -394,6 +430,104 @@ void pauseAndResumePreserveGenerationAndStopClockTicks() {
     require(playback->pause(1).state == HeadlessAvPlaybackState::paused, "second pause failed");
     require(playback->cancel(1).state == HeadlessAvPlaybackState::cancelled, "paused cancel failed");
     playback->close();
+}
+
+void seeksExposeTheExactFirstFrameAndReplaceGeneration() {
+    TemporaryDirectory media;
+    const auto input = media.write(
+        "seek-qtrle-three.mov",
+        palmier::media::test_fixtures::qtrleOpaqueThreeFrames
+    );
+    auto state = std::make_shared<FakeAudioState>();
+    auto playback = session(state);
+    const auto started = playback->play(input, 0, {10, 1});
+    require(started.generation == 1, "seek setup did not start");
+    require(
+        playback->seek(
+            1,
+            input,
+            1,
+            {10, 1},
+            {1, {10, 1}},
+            static_cast<HeadlessAvPlaybackSeekMode>(99)
+        ).outcome == HeadlessAvPlaybackOutcome::refused,
+        "invalid seek mode was accepted"
+    );
+    require(playback->snapshot().generation == 1, "invalid seek mode changed generation");
+
+    const auto paused = playback->seek(
+        1,
+        input,
+        1,
+        {10, 1},
+        {1, {10, 1}},
+        HeadlessAvPlaybackSeekMode::paused
+    );
+    require(paused.outcome == HeadlessAvPlaybackOutcome::changed, "paused seek failed");
+    require(paused.state == HeadlessAvPlaybackState::paused, "paused seek started audio");
+    require(paused.generation == 2, "paused seek did not replace generation");
+    require(paused.hasTargetTimelineFrame && paused.targetTimelineFrame == 1, "seek target changed");
+    require(paused.frame.has_value(), "paused seek returned no frame");
+    require(paused.frame->presentationTimestamp == 1'024, "paused seek frame changed");
+    require(state->preparePausedCalls == 1, "paused seek skipped paused audio prepare");
+    const auto positions = state->positionCalls;
+    require(playback->tick(2).outcome == HeadlessAvPlaybackOutcome::noOp, "paused seek tick changed");
+    require(state->positionCalls == positions, "paused seek tick read the clock");
+    require(playback->resume(2).state == HeadlessAvPlaybackState::playing, "seek resume failed");
+
+    const auto playing = playback->seek(
+        2,
+        input,
+        2,
+        {10, 1},
+        {2, {10, 1}},
+        HeadlessAvPlaybackSeekMode::playing
+    );
+    require(playing.state == HeadlessAvPlaybackState::playing, "playing seek paused");
+    require(playing.generation == 3, "playing seek did not replace generation");
+    require(playing.frame.has_value(), "playing seek returned no frame");
+    require(playing.frame->presentationTimestamp == 2'048, "playing seek frame changed");
+    require(
+        playback->seek(
+            2,
+            input,
+            1,
+            {10, 1},
+            {1, {10, 1}},
+            HeadlessAvPlaybackSeekMode::paused
+        ).outcome == HeadlessAvPlaybackOutcome::stale,
+        "stale seek was accepted"
+    );
+    require(state->preparePausedCalls == 1, "stale seek reached audio");
+
+    state->completePausedPrepare = true;
+    const auto completed = playback->seek(
+        3,
+        input,
+        0,
+        {10, 1},
+        {0, {10, 1}},
+        HeadlessAvPlaybackSeekMode::paused
+    );
+    require(completed.state == HeadlessAvPlaybackState::completed, "completed audio state changed");
+    require(completed.generation == 4, "completed seek did not replace generation");
+    require(completed.frame.has_value(), "completed seek returned no exact frame");
+    require(completed.frame->presentationTimestamp == 0, "completed seek frame changed");
+
+    std::stop_source cancelled;
+    cancelled.request_stop();
+    const auto cancelledSeek = playback->seek(
+        4,
+        input,
+        1,
+        {10, 1},
+        {1, {10, 1}},
+        HeadlessAvPlaybackSeekMode::paused,
+        cancelled.get_token()
+    );
+    require(cancelledSeek.outcome == HeadlessAvPlaybackOutcome::cancelled, "cancelled seek committed");
+    require(playback->snapshot().generation == 4, "cancelled seek changed generation");
+    require(playback->close().state == HeadlessAvPlaybackState::closed, "seek close failed");
 }
 
 void failedReplacementPreservesTheActiveGeneration() {
@@ -642,6 +776,7 @@ int main() {
         playsAndTicksOneRealVideoGeneration();
         startsVideoAndAudioAtTheSameTrimmedFrame();
         pauseAndResumePreserveGenerationAndStopClockTicks();
+        seeksExposeTheExactFirstFrameAndReplaceGeneration();
         failedReplacementPreservesTheActiveGeneration();
         boundsCatchUpAndDeliversOnlyTheLatestFrame();
         noSampleAndAudioTerminalsDoNotGuessVideoTime();

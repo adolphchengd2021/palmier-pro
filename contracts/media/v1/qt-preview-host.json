@@ -1,8 +1,8 @@
 {
   "version": 1,
   "owner": "windows/app",
-  "stateOwner": "the Qt controller owns one Qt-native child window, surface epoch, latest positive physical size, latest committed project preview source, playback generation, one in-flight command, one pending resize, one pending tick, pause and resume intent, cancellation admission, UI receipt state, and the shutdown barrier",
-  "threadContract": "the Qt UI thread owns only QWindow embedding, immutable project source publication, transport intent, and completion-triggered single-shot tick admission; one persistent background presentation thread constructs, resizes, plays, ticks, pauses, resumes, cancels, closes, and destroys PreviewPresentationSession",
+  "stateOwner": "the Qt controller owns one Qt-native child window, surface epoch, latest positive physical size, latest committed project preview source, playback generation, current frame and inclusive clip frame range, one in-flight command, one pending resize, one pending tick, one latest seek intent, pause and resume intent, cancellation admission, UI receipt state, and the shutdown barrier",
+  "threadContract": "the Qt UI thread owns only QWindow embedding, immutable project source publication, bounded transport intent, and completion-triggered single-shot tick admission; one persistent background presentation thread constructs, resizes, plays, seeks, ticks, pauses, resumes, cancels, closes, and destroys PreviewPresentationSession",
   "states": [
     "empty",
     "attaching",
@@ -25,13 +25,13 @@
     "nativeOwnership": "QML embeds one Qt-owned QWindow through WindowContainer; no external-window wrapper or manual child HWND is introduced",
     "physicalSize": "the UI thread reads the embedded HWND client rectangle and never submits zero width or height to the preview session",
     "backgroundOwnership": "session construction, resize, close, and destruction occur on the same persistent background presentation thread",
-    "boundedQueue": "only one synchronous session command is in flight, resize bursts retain only the latest distinct physical size, and a tick completion admits at most one later single-shot tick",
+    "boundedQueue": "only one synchronous session command is in flight, resize bursts retain only the latest distinct physical size, seek bursts retain only the latest exact target, and a tick completion admits at most one later single-shot tick",
     "cancellation": "project replacement and shutdown request the admitted stop source; replacement clears the old playback before starting the latest source, and shutdown admits no later resize, play, or tick",
     "projectCommit": "only a latest successful project load publishes its immutable stable-ID project-compiled preview layer; failed and cancelled loads preserve the committed preview",
     "playbackEvidence": "the controller retains the latest accepted play or tick receipt by value so tests can distinguish project-driven render, present, and EOF proof from a typed audio-device-unavailable partial result",
     "replacement": "project generation, source serial, surface epoch, and playback generation reject stale completions; an offline, unsupported, or empty replacement clears the previous surface",
     "surfaceEpoch": "a changed HWND retires the current session instead of reusing its swap chain or accepting stale completion",
-    "transport": "Pause interrupts one admitted tick, then serializes same-generation pause before admitting more cadence; Resume preserves the source serial and generation and restarts completion-triggered ticks",
+    "transport": "Pause interrupts one admitted tick, then serializes same-generation pause before admitting more cadence; Resume preserves the source serial and generation and restarts completion-triggered ticks; direct seek preserves playing or paused intent, while one-frame steps always replace playback into paused state and refuse an out-of-range target without clamping",
     "shutdown": "the root QML window waits for both project loading and preview session close before allowing Qt to destroy the child window; one guarded drain handles explicit quit before exit, aboutToQuit fallback, and post-event-loop fallback, close failure changes a successful exit code, and unexpected controller teardown retains the QWindow until background session destruction"
   },
   "excluded": [

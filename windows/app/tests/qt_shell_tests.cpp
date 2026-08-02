@@ -1930,6 +1930,10 @@ private slots:
         QVERIFY(root->findChild<QObject*>(QStringLiteral("previewViewport")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("pausePreviewButton")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("resumePreviewButton")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("previousPreviewFrameButton")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("nextPreviewFrameButton")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("previewFrameField")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("seekPreviewFrameButton")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("previewTransportState")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("previewErrorState")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("emptyState")) != nullptr);
