@@ -478,12 +478,12 @@ void cancellationDuringPlanningDoesNotCommit(const std::filesystem::path& root) 
 
 void extremeTimingIsRefusedBeforeCommit() {
     const std::string source = R"({
-        "id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{
             "id":"track","type":"video","clips":[{
                 "id":"clip","mediaRef":"media","startFrame":0,
                 "durationFrames":9223372036854775807,"speed":1
             }]
-        }]
+        }]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]
     })";
     const auto document = palmier::project::readProject(source, [] {
         return std::string("unexpected-reader-id");
