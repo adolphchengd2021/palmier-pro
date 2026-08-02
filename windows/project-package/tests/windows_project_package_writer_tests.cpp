@@ -36,6 +36,7 @@ using palmier::project::ProjectPackageWriteError;
 using palmier::project::ProjectPackageWriteWarning;
 using palmier::project::ProjectPackageServiceError;
 using palmier::project::ProjectRuntime;
+using palmier::project::RemoveClipsCommand;
 using palmier::project::SplitClipsCommand;
 using palmier::project::SplitPoint;
 using palmier::project::testing::ProjectPackageWriteCheckpoint;
@@ -561,9 +562,10 @@ void editSaveRestartPreservesCanariesAndState(const std::filesystem::path& root)
         }
     );
     require(movedClip != splitClips.end(), "split did not create a movable right clip");
+    const auto movedClipId = movedClip->find("id")->string();
     const auto move = runtime.moveClips(
         MoveClipsCommand{{ClipMove{
-            movedClip->find("id")->string(),
+            movedClipId,
             std::nullopt,
             std::int64_t{200},
         }}},
@@ -601,6 +603,29 @@ void editSaveRestartPreservesCanariesAndState(const std::filesystem::path& root)
     } catch (const CommandError& error) {
         require(error.code == "nothingToUndo", "restart returned the wrong undo boundary");
     }
+
+    const auto removed = reopened.removeClips(RemoveClipsCommand{{movedClipId}}, 12);
+    require(removed.command.changed && removed.session->revision == 1, "remove did not update runtime");
+    const auto removeReceipt = palmier::project::writeProjectPackage(reopened, package.path(), 12);
+    require(
+        removeReceipt.runtimeAcknowledged && !removeReceipt.runtimeDirty,
+        "remove save did not clear exact dirty state"
+    );
+    reopened.close();
+    requireDeclaredCanaries(root, package.path());
+    ProjectRuntime removedReopened;
+    installRuntime(removedReopened, package.path(), 13);
+    const auto removedTimeline = removedReopened.getTimeline({}, 13).timeline;
+    const auto& remainingClips = removedTimeline.find("tracks")->array().front()
+        .find("clips")->array();
+    require(
+        std::none_of(
+            remainingClips.begin(),
+            remainingClips.end(),
+            [&](const Value& clip) { return clip.find("id")->string() == movedClipId; }
+        ),
+        "restart restored a removed clip"
+    );
 }
 
 void savingAnOlderSnapshotLeavesNewerRuntimeDirty() {

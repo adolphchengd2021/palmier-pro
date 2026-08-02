@@ -76,6 +76,12 @@ ApplicationWindow {
             window.closeAfterEdit = false
             window.close()
         }
+        function onClipRemoved(clipId) {
+            if (window.selectedClipId !== clipId) return
+            window.selectedClipId = ""
+            window.selectedTrackId = ""
+            window.selectedMediaType = ""
+        }
     }
 
     Connections {
@@ -345,6 +351,16 @@ ApplicationWindow {
                     moveTrack.text,
                     moveFrame.text
                 )
+            }
+            Button {
+                objectName: "removeClipButton"
+                text: qsTr("Remove")
+                enabled: window.selectedClipId.length > 0
+                    && projectCoordinator.presentationReady
+                    && !projectCoordinator.loading
+                    && !editingCoordinator.busy
+                    && !exportCoordinator.exporting
+                onClicked: editingCoordinator.removeClip(window.selectedClipId)
             }
             Label {
                 visible: editingCoordinator.busy

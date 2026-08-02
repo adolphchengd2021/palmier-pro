@@ -20,6 +20,7 @@ using palmier::project::MoveClipsCommand;
 using palmier::project::ProjectRuntime;
 using palmier::project::ProjectRuntimeError;
 using palmier::project::ProjectRuntimeObserver;
+using palmier::project::RemoveClipsCommand;
 using palmier::project::SplitClipsCommand;
 using palmier::project::SplitPoint;
 
@@ -181,6 +182,19 @@ void moveNoOpDoesNotPublishOrAdvanceHistory() {
     const auto publications = observer->publications();
     require(publications.size() == 2, "changed move should publish exactly once");
     require(publications.back().revision == 1, "move publication revision");
+}
+
+void removePublishesOneSharedStateAndUndo() {
+    auto observer = std::make_shared<RuntimeObserver>();
+    ProjectRuntime runtime(observer);
+    runtime.install(projectDocument(), 1, [] { return std::string("runtime-remove-id"); });
+    const auto removed = runtime.removeClips(RemoveClipsCommand{{"target"}}, 1);
+    require(removed.command.changed && removed.session->revision == 1, "runtime remove commit");
+    require(removed.session->undoDepth == 1 && removed.session->dirty(), "runtime remove identity");
+    require(observer->publications().size() == 2, "remove should publish exactly once");
+    const auto restored = runtime.undo(1);
+    require(restored.session->undoDepth == 0 && !restored.session->dirty(), "runtime remove undo");
+    require(observer->publications().size() == 3, "remove undo should publish exactly once");
 }
 
 void dirtyAndGenerationGatesProtectReplacement() {
@@ -423,6 +437,7 @@ int main() {
     try {
         mutationPublishesOneSessionState();
         moveNoOpDoesNotPublishOrAdvanceHistory();
+        removePublishesOneSharedStateAndUndo();
         dirtyAndGenerationGatesProtectReplacement();
         persistenceAcknowledgementPublishesOnlyOnChange();
         saveSnapshotCarriesExactRuntimeIdentity();

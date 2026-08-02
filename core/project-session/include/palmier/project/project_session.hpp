@@ -42,6 +42,10 @@ struct MoveClipsCommand final {
     std::vector<ClipMove> moves;
 };
 
+struct RemoveClipsCommand final {
+    std::vector<std::string> clipIds;
+};
+
 struct ProjectSessionSnapshot final {
     ProjectDocument document;
     std::uint64_t revision;
@@ -99,6 +103,10 @@ public:
     );
     CommandResult moveClips(
         const MoveClipsCommand& command,
+        std::stop_token cancellation = {}
+    );
+    CommandResult removeClips(
+        const RemoveClipsCommand& command,
         std::stop_token cancellation = {}
     );
     CommandResult undo(std::stop_token cancellation = {});

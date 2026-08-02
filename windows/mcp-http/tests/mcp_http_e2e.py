@@ -460,6 +460,31 @@ def main() -> int:
                 normalized(tool_payload(first.tool("get_timeline", {}))) == normalized(baseline),
                 "move undo exact restore",
             )
+            tool_error(first.tool("remove_clips", {"clipIds": []}), "invalidClipIds")
+            tool_error(first.tool(
+                "remove_clips",
+                {"clipIds": ["clip-main-1", "missing"]},
+            ), "clipNotFound")
+            remove_receipt = tool_payload(first.tool(
+                "remove_clips",
+                {"clipIds": ["clip-main-1"]},
+            ))
+            remove_action_id = require_receipt(remove_receipt, contract, 6, 7)
+            require(
+                remove_receipt["removedClipIds"] == ["clip-main-1"],
+                "remove receipt stable IDs",
+            )
+            removed = tool_payload(second.tool("get_timeline", {}))
+            require(timeline_clip(removed, "clip-main-1") is None, "remove readback")
+            remove_undo = tool_payload(second.tool("undo", {}))
+            require(
+                require_receipt(remove_undo, contract, 7, 8) == remove_action_id,
+                "remove undo identity",
+            )
+            require(
+                normalized(tool_payload(first.tool("get_timeline", {}))) == normalized(baseline),
+                "remove undo exact restore",
+            )
             tool_error(first.tool("undo", {}), "nothingToUndo")
 
             unknown = first.tool("set_clip_properties", {"clipIds": ["clip-main-1"]})

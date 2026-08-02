@@ -8,9 +8,9 @@ current macOS product. It is not a conditional Swift build.
 M0 establishes product decisions, compatibility contracts, fixtures, drift
 checks, the compiled MSVC contract probe, and a safe-edit C++ project document.
 It now includes an optional Qt project shell, isolated media/audio prototypes,
-one bounded project-driven H.264 export slice, a four-tool loopback MCP editing
+one bounded project-driven H.264 export slice, a five-tool loopback MCP editing
 slice, and an atomic `project.json` edit-save-restart slice with stable-ID Split,
-Undo, explicit Save, and dirty-close protection in Qt. The Qt workflow also
+Move, Remove, Undo, explicit Save, and dirty-close protection in Qt. The Qt workflow also
 builds an unsigned x64 prototype installer with a runtime hash manifest and
 distribution evidence, then tests isolated staging, install, launch, uninstall,
    and external user-data preservation. It now also owns the active package
@@ -70,15 +70,15 @@ that remains a clean-VM gate.
 
 The default build also provides `palmier_windows_mcp`. It loads one project
 into a bounded serial `ProjectRuntime` before binding `127.0.0.1:19789`, then
-exposes only `get_timeline`, `move_clips`, `split_clips`, and `undo` through the runtime's
+exposes only `get_timeline`, `move_clips`, `remove_clips`, `split_clips`, and `undo` through the runtime's
 single owned `ProjectSession`. MCP protocol sessions pin the active project
 generation so a future project replacement cannot silently retarget them. A
-real-process CTest verifies discovery, stable-ID move and split, exact move
+real-process CTest verifies discovery, stable-ID move, remove, and split, exact move
 no-op, cross-session readback, invalid-request isolation, shared undo, hostile-Origin
 refusal, graceful exit, and port release. Clips carrying persisted fields not
 represented by the current C++ projection are refused. This does not prove Qt
 integration, project persistence, Windows 10 runtime behavior, or the remaining
-MCP surface. See ADR 0026, ADR 0027, ADR 0036, and
+MCP surface. See ADR 0026, ADR 0027, ADR 0036, ADR 0037, and
 `contracts/mcp/v1/windows-technical-mvp.json`.
 
 The HTTP implementation also exposes a stoppable `HttpServerService`, now owned

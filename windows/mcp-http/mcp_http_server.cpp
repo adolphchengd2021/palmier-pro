@@ -467,6 +467,20 @@ Value toolsList() {
                 }
             },
             {
+                "name": "remove_clips",
+                "description": "Removes clips atomically by stable ID, expands linked groups, prunes empty tracks, and records one undo action.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "clipIds": {
+                            "type": "array",
+                            "items": {"type": "string"}
+                        }
+                    },
+                    "required": ["clipIds"]
+                }
+            },
+            {
                 "name": "split_clips",
                 "description": "Splits clips atomically by stable ID or track frame in one shared undo action.",
                 "inputSchema": {
@@ -605,6 +619,26 @@ Value invokeTool(
                 command.moves.push_back(std::move(parsed));
             }
             auto result = runtime.moveClips(
+                std::move(command),
+                expectedProjectGeneration
+            );
+            return toolSuccess(std::move(*result.command.payload));
+        }
+        if (name == "remove_clips") {
+            rejectUnknownKeys(object, {"clipIds"}, name);
+            const auto& clipIdsValue = requiredField(object, "clipIds");
+            if (clipIdsValue.kind() != Value::Kind::array) {
+                throw palmier::project::CommandError(
+                    "invalidArguments",
+                    "clipIds must be an array"
+                );
+            }
+            palmier::project::RemoveClipsCommand command;
+            command.clipIds.reserve(clipIdsValue.array().size());
+            for (const auto& clipId : clipIdsValue.array()) {
+                command.clipIds.push_back(requireString(clipId, "clipIds item"));
+            }
+            auto result = runtime.removeClips(
                 std::move(command),
                 expectedProjectGeneration
             );

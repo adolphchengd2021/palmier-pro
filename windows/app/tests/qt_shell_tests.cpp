@@ -277,6 +277,61 @@ private slots:
         QVERIFY(editing.requestShutdown());
     }
 
+    void editingControllerRemovesByStableIdAndUndoes() {
+        auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
+        auto runtime = std::make_shared<palmier::project::ProjectRuntime>(mailbox);
+        auto document = palmier::project::readProject(
+            splittableProjectJson,
+            [] { return std::string("generated"); }
+        );
+        static_cast<void>(runtime->install(
+            std::move(document),
+            15,
+            [] { return std::string("ui-remove-action"); }
+        ));
+        palmier::windows::ProjectEditingController editing(runtime, mailbox, nullptr);
+        editing.activateProject(15);
+        QSignalSpy finished(
+            &editing,
+            &palmier::windows::ProjectEditingController::operationFinished
+        );
+        QSignalSpy clipRemoved(
+            &editing,
+            &palmier::windows::ProjectEditingController::clipRemoved
+        );
+
+        editing.removeClip(QStringLiteral("clip"));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 5000);
+        QCOMPARE(finished.at(0).at(0).toBool(), true);
+        QCOMPARE(clipRemoved.count(), 1);
+        QCOMPARE(clipRemoved.front().front().toString(), QStringLiteral("clip"));
+        auto snapshot = runtime->snapshot(15);
+        QCOMPARE(snapshot.session->document.project().timelines.front().tracks.size(), std::size_t{0});
+        QCOMPARE(snapshot.session->revision, std::uint64_t{1});
+        QCOMPARE(snapshot.session->undoDepth, std::size_t{1});
+
+        editing.removeClip(QStringLiteral("missing"));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 2, 5000);
+        QCOMPARE(finished.last().at(0).toBool(), false);
+        QCOMPARE(editing.errorCode(), QStringLiteral("clipNotFound"));
+        snapshot = runtime->snapshot(15);
+        QCOMPARE(snapshot.session->revision, std::uint64_t{1});
+        QCOMPARE(snapshot.session->undoDepth, std::size_t{1});
+
+        editing.undo();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 3, 5000);
+        QCOMPARE(finished.last().at(0).toBool(), true);
+        snapshot = runtime->snapshot(15);
+        QCOMPARE(snapshot.session->document.project().timelines.front().tracks.size(), std::size_t{1});
+        QCOMPARE(
+            snapshot.session->document.project().timelines.front()
+                .tracks.front().clips.front().id.value,
+            std::string("clip")
+        );
+        QCOMPARE(snapshot.session->undoDepth, std::size_t{0});
+        QVERIFY(editing.requestShutdown());
+    }
+
     void persistenceShutdownRefreshesAuthoritativeDirtyState() {
         auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
         auto runtime = std::make_shared<palmier::project::ProjectRuntime>(mailbox);
@@ -1754,6 +1809,7 @@ private slots:
         QVERIFY(root->findChild<QObject*>(QStringLiteral("moveTrackField")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("moveFrameField")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("moveClipButton")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("removeClipButton")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("previewViewport")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("previewErrorState")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("emptyState")) != nullptr);

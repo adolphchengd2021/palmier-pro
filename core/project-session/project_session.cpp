@@ -338,6 +338,86 @@ Array& sourceTracksForTimeline(
     return requireSourceArray(timeline, "tracks");
 }
 
+struct TimelineSourceIndex final {
+    Value timeline;
+    std::map<std::string, Value, std::less<>> tracks;
+    std::map<std::string, Value, std::less<>> clips;
+    std::map<std::string, std::size_t, std::less<>> clipCounts;
+};
+
+TimelineSourceIndex indexTimelineSource(
+    Value& source,
+    RootKind rootKind,
+    std::string_view timelineId
+) {
+    TimelineSourceIndex result{
+        sourceTimelineFor(source, rootKind, timelineId),
+        {},
+        {},
+        {},
+    };
+    const auto& sourceTracks = sourceTracksForTimeline(source, rootKind, timelineId);
+    for (const auto& sourceTrack : sourceTracks) {
+        const auto& trackObject = requireSourceObject(sourceTrack, "track");
+        const auto trackId = trackObject.find("id");
+        if (trackId == trackObject.end() || trackId->second.kind() != Value::Kind::string) {
+            throw CommandError("sourceModelMismatch", "source track is missing a stable ID");
+        }
+        if (!result.tracks.emplace(trackId->second.string(), sourceTrack).second) {
+            throw CommandError("ambiguousSourceId", "track ID is duplicated in project source");
+        }
+        const auto clips = trackObject.find("clips");
+        if (clips == trackObject.end()) {
+            result.clipCounts.emplace(trackId->second.string(), 0);
+            continue;
+        }
+        if (clips->second.kind() != Value::Kind::array) {
+            throw CommandError("sourceModelMismatch", "source track clips is not an array");
+        }
+        result.clipCounts.emplace(trackId->second.string(), clips->second.array().size());
+        for (const auto& sourceClip : clips->second.array()) {
+            if (sourceClip.kind() != Value::Kind::object) continue;
+            const auto id = sourceClip.object().find("id");
+            if (id == sourceClip.object().end() || id->second.kind() != Value::Kind::string) {
+                continue;
+            }
+            if (!result.clips.emplace(id->second.string(), sourceClip).second) {
+                throw CommandError("ambiguousSourceId", "clip ID is duplicated in project source");
+            }
+        }
+    }
+    return result;
+}
+
+void requireSourceTracksMatch(
+    const Timeline& timeline,
+    const std::set<std::string, std::less<>>& trackIds,
+    const TimelineSourceIndex& sourceIndex
+) {
+    for (const auto& track : timeline.tracks) {
+        if (!trackIds.contains(track.id.value)) continue;
+        const auto count = sourceIndex.clipCounts.find(track.id.value);
+        if (
+            !sourceIndex.tracks.contains(track.id.value)
+            || count == sourceIndex.clipCounts.end()
+            || count->second != track.clips.size()
+        ) {
+            throw CommandError(
+                "sourceModelMismatch",
+                "affected track source does not match the Windows clip model"
+            );
+        }
+        for (const auto& clip : track.clips) {
+            if (!sourceIndex.clips.contains(clip.id.value)) {
+                throw CommandError(
+                    "sourceModelMismatch",
+                    "affected clip is missing from project source: " + clip.id.value
+                );
+            }
+        }
+    }
+}
+
 bool trackTypesCompatible(std::string_view source, std::string_view destination) {
     const bool sourceIsVisual = source != "audio";
     const bool destinationIsVisual = destination != "audio";
@@ -1051,72 +1131,11 @@ CommandResult ProjectSession::moveClips(
             [&](const Timeline& entry) { return entry.id.value == project_.activeTimelineId; }
         ))
     );
-    const Value sourceTimelineSnapshot = sourceTimelineFor(
-        *source_,
-        rootKind_,
-        timeline.id.value
-    );
-    const auto& sourceTracks = sourceTracksForTimeline(
-        *source_,
-        rootKind_,
-        timeline.id.value
-    );
-    std::map<std::string, Value, std::less<>> sourceTrackValues;
-    std::map<std::string, Value, std::less<>> sourceClipValues;
-    std::map<std::string, std::size_t, std::less<>> sourceClipCounts;
-    for (const auto& sourceTrack : sourceTracks) {
-        const auto& trackObject = requireSourceObject(sourceTrack, "track");
-        const auto trackId = trackObject.find("id");
-        if (trackId == trackObject.end() || trackId->second.kind() != Value::Kind::string) {
-            throw CommandError("sourceModelMismatch", "source track is missing a stable ID");
-        }
-        if (!sourceTrackValues.emplace(trackId->second.string(), sourceTrack).second) {
-            throw CommandError("ambiguousSourceId", "track ID is duplicated in project source");
-        }
-        const auto clips = trackObject.find("clips");
-        if (clips == trackObject.end()) {
-            sourceClipCounts.emplace(trackId->second.string(), 0);
-            continue;
-        }
-        if (clips->second.kind() != Value::Kind::array) {
-            throw CommandError("sourceModelMismatch", "source track clips is not an array");
-        }
-        sourceClipCounts.emplace(trackId->second.string(), clips->second.array().size());
-        for (const auto& sourceClip : clips->second.array()) {
-            if (sourceClip.kind() != Value::Kind::object) {
-                continue;
-            }
-            const auto id = sourceClip.object().find("id");
-            if (id == sourceClip.object().end() || id->second.kind() != Value::Kind::string) {
-                continue;
-            }
-            if (!sourceClipValues.emplace(id->second.string(), sourceClip).second) {
-                throw CommandError("ambiguousSourceId", "clip ID is duplicated in project source");
-            }
-        }
-    }
-    for (const auto& track : timeline.tracks) {
-        if (!changedTrackIds.contains(track.id.value)) continue;
-        const auto count = sourceClipCounts.find(track.id.value);
-        if (
-            !sourceTrackValues.contains(track.id.value)
-            || count == sourceClipCounts.end()
-            || count->second != track.clips.size()
-        ) {
-            throw CommandError(
-                "sourceModelMismatch",
-                "affected track source does not match the Windows clip model"
-            );
-        }
-        for (const auto& clip : track.clips) {
-            if (!sourceClipValues.contains(clip.id.value)) {
-                throw CommandError(
-                    "sourceModelMismatch",
-                    "affected clip is missing from project source: " + clip.id.value
-                );
-            }
-        }
-    }
+    auto sourceIndex = indexTimelineSource(*source_, rootKind_, timeline.id.value);
+    const Value sourceTimelineSnapshot = sourceIndex.timeline;
+    requireSourceTracksMatch(timeline, changedTrackIds, sourceIndex);
+    auto& sourceTrackValues = sourceIndex.tracks;
+    auto sourceClipValues = std::move(sourceIndex.clips);
 
     if (revision_ >= maximumRevision) {
         throw CommandError("revisionOverflow", "project revision cannot advance");
@@ -1387,6 +1406,208 @@ CommandResult ProjectSession::moveClips(
     project_ = std::move(planned);
     source_.swap(plannedSource);
     sessionGeneratedClipIds_.swap(plannedGeneratedClipIds);
+    revision_ = revisionAfter;
+    stateId_ = stateAfter;
+    ++nextStateId_;
+    undoJournal_.push_back(std::move(undoEntry));
+    return result;
+}
+
+CommandResult ProjectSession::removeClips(
+    const RemoveClipsCommand& command,
+    std::stop_token cancellation
+) {
+    std::scoped_lock lock(mutex_);
+    checkCancellation(cancellation);
+    if (command.clipIds.empty()) {
+        throw CommandError("invalidClipIds", "clipIds must be a non-empty array");
+    }
+
+    auto& timeline = activeTimeline(project_);
+    if (rootKind_ != RootKind::current) {
+        throw CommandError(
+            "unsupportedProjectWriteRoot",
+            "the Windows mutation slice does not write legacy project roots"
+        );
+    }
+    if (timeline.id.origin != EntityIdOrigin::persisted) {
+        throw CommandError("unstableTimelineId", "remove requires a persisted active timeline ID");
+    }
+
+    std::set<std::string, std::less<>> removedIds;
+    std::set<std::string, std::less<>> removedLinkGroups;
+    for (const auto& clipId : command.clipIds) {
+        checkCancellation(cancellation);
+        if (clipId.empty()) {
+            throw CommandError("invalidClipId", "remove clipId must not be empty");
+        }
+        const auto location = uniqueClipLocation(timeline, clipId);
+        const auto& clip = timeline.tracks[location.trackIndex].clips[location.clipIndex];
+        if (
+            clip.id.origin != EntityIdOrigin::persisted
+            && !sessionGeneratedClipIds_.contains(clipId)
+        ) {
+            throw CommandError("unstableClipId", "remove requires a stable clip ID: " + clipId);
+        }
+        removedIds.insert(clipId);
+        if (clip.linkGroupId) {
+            if (clip.linkGroupId->empty()) {
+                throw CommandError("invalidLinkGroupId", "linkGroupId must not be empty");
+            }
+            removedLinkGroups.insert(*clip.linkGroupId);
+        }
+    }
+    for (const auto& track : timeline.tracks) {
+        for (const auto& clip : track.clips) {
+            checkCancellation(cancellation);
+            if (clip.linkGroupId && removedLinkGroups.contains(*clip.linkGroupId)) {
+                if (
+                    clip.id.origin != EntityIdOrigin::persisted
+                    && !sessionGeneratedClipIds_.contains(clip.id.value)
+                ) {
+                    throw CommandError(
+                        "unstableClipId",
+                        "remove requires a stable linked clip ID: " + clip.id.value
+                    );
+                }
+                removedIds.insert(clip.id.value);
+            }
+        }
+    }
+
+    const auto timelineIndex = static_cast<std::size_t>(
+        std::distance(project_.timelines.begin(), std::find_if(
+            project_.timelines.begin(),
+            project_.timelines.end(),
+            [&](const Timeline& entry) { return entry.id.value == project_.activeTimelineId; }
+        ))
+    );
+    std::set<std::string, std::less<>> activeTrackIds;
+    for (const auto& track : timeline.tracks) {
+        if (track.id.origin != EntityIdOrigin::persisted) {
+            throw CommandError("unstableTrackId", "remove requires persisted track IDs");
+        }
+        activeTrackIds.insert(track.id.value);
+    }
+    auto sourceIndex = indexTimelineSource(*source_, rootKind_, timeline.id.value);
+    const Value sourceTimelineSnapshot = sourceIndex.timeline;
+    requireSourceTracksMatch(timeline, activeTrackIds, sourceIndex);
+    const auto& sourceTrackValues = sourceIndex.tracks;
+    const auto& sourceClipValues = sourceIndex.clips;
+
+    if (revision_ >= maximumRevision) {
+        throw CommandError("revisionOverflow", "project revision cannot advance");
+    }
+    if (nextStateId_ == (std::numeric_limits<std::uint64_t>::max)()) {
+        throw CommandError("stateIdentityOverflow", "project state identity cannot advance");
+    }
+    std::set<std::string, std::less<>> usedIds;
+    for (const auto& projectTimeline : project_.timelines) {
+        usedIds.insert(projectTimeline.id.value);
+        for (const auto& track : projectTimeline.tracks) {
+            usedIds.insert(track.id.value);
+            for (const auto& clip : track.clips) {
+                usedIds.insert(clip.id.value);
+                if (clip.linkGroupId) usedIds.insert(*clip.linkGroupId);
+            }
+        }
+    }
+    const auto actionId = idGenerator_();
+    if (actionId.empty() || !usedIds.insert(actionId).second) {
+        throw CommandError("invalidGeneratedId", "ID generator returned an empty or duplicate value");
+    }
+
+    Project planned = project_;
+    auto& plannedTimeline = activeTimeline(planned);
+    for (auto& track : plannedTimeline.tracks) {
+        track.clips.erase(
+            std::remove_if(
+                track.clips.begin(),
+                track.clips.end(),
+                [&](const Clip& clip) { return removedIds.contains(clip.id.value); }
+            ),
+            track.clips.end()
+        );
+    }
+    const auto trackCountBefore = plannedTimeline.tracks.size();
+    plannedTimeline.tracks.erase(
+        std::remove_if(
+            plannedTimeline.tracks.begin(),
+            plannedTimeline.tracks.end(),
+            [](const Track& track) { return track.clips.empty(); }
+        ),
+        plannedTimeline.tracks.end()
+    );
+    const auto prunedTrackCount = trackCountBefore - plannedTimeline.tracks.size();
+
+    auto plannedSource = std::make_unique<Value>(*source_);
+    Array plannedSourceTracks;
+    plannedSourceTracks.reserve(plannedTimeline.tracks.size());
+    for (const auto& track : plannedTimeline.tracks) {
+        Value sourceTrack = sourceTrackValues.at(track.id.value);
+        Array sourceClips;
+        sourceClips.reserve(track.clips.size());
+        for (const auto& clip : track.clips) {
+            sourceClips.push_back(sourceClipValues.at(clip.id.value));
+        }
+        requireSourceObject(sourceTrack, "track")["clips"] = Value(std::move(sourceClips));
+        plannedSourceTracks.push_back(std::move(sourceTrack));
+    }
+    sourceTracksForTimeline(*plannedSource, rootKind_, timeline.id.value) =
+        std::move(plannedSourceTracks);
+    checkCancellation(cancellation);
+
+    Array removed;
+    for (const auto& track : timeline.tracks) {
+        for (const auto& clip : track.clips) {
+            if (removedIds.contains(clip.id.value)) removed.emplace_back(clip.id.value);
+        }
+    }
+    const auto revisionBefore = revision_;
+    const auto revisionAfter = revisionBefore + 1;
+    const auto stateAfter = nextStateId_;
+    undoJournal_.reserve(undoJournal_.size() + 1);
+    UndoEntry undoEntry{
+        actionId,
+        {},
+        std::make_unique<TimelineSnapshot>(TimelineSnapshot{
+            timelineIndex,
+            timeline,
+            sourceTimelineSnapshot,
+        }),
+        {},
+        stateId_,
+    };
+    auto payload = receiptBase(true, revisionBefore, revisionAfter, actionId);
+    payload["removedClipIds"] = Value(std::move(removed));
+    if (prunedTrackCount > 0) {
+        payload["notes"] = Value(Array{Value(
+            "Track indices shifted - re-read get_timeline before the next index-based call."
+        )});
+    }
+    auto publication = preparePublication({
+        ProjectDocument(*plannedSource, rootKind_, planned, diagnostics_),
+        revisionAfter,
+        stateAfter,
+        persistedStateId_,
+        undoJournal_.size() + 1,
+    });
+    CommandResult result{
+        true,
+        revisionBefore,
+        revisionAfter,
+        actionId,
+        std::make_unique<Value>(std::move(payload)),
+        std::move(publication),
+    };
+    checkCancellation(cancellation);
+
+    static_assert(std::is_nothrow_move_assignable_v<Project>);
+    static_assert(std::is_nothrow_move_constructible_v<UndoEntry>);
+    static_assert(std::is_nothrow_move_constructible_v<CommandResult>);
+    static_assert(noexcept(source_.swap(plannedSource)));
+    project_ = std::move(planned);
+    source_.swap(plannedSource);
     revision_ = revisionAfter;
     stateId_ = stateAfter;
     ++nextStateId_;

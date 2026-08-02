@@ -87,6 +87,11 @@ public:
         std::optional<std::uint64_t> expectedProjectGeneration = {},
         std::stop_token cancellation = {}
     );
+    ProjectRuntimeCommandResult removeClips(
+        RemoveClipsCommand command,
+        std::optional<std::uint64_t> expectedProjectGeneration = {},
+        std::stop_token cancellation = {}
+    );
     ProjectRuntimeCommandResult undo(
         std::optional<std::uint64_t> expectedProjectGeneration = {},
         std::stop_token cancellation = {}

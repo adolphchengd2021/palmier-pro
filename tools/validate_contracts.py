@@ -1671,6 +1671,7 @@ def windows_project_reader_contract() -> None:
     for token in [
         "editSaveRestartPreservesCanariesAndState",
         "move did not update runtime",
+        "remove did not update runtime",
         "savingAnOlderSnapshotLeavesNewerRuntimeDirty",
         "committedSaveReportsClosedRuntimeAsWarning",
         "committedSaveConvertsUnexpectedAcknowledgementFailureToWarning",
@@ -4256,6 +4257,8 @@ def windows_qt_read_only_shell_contract() -> None:
         "Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)",
         "Q_PROPERTY(bool canUndo READ canUndo NOTIFY canUndoChanged)",
         "moveClip(",
+        "removeClip(const QString& clipId)",
+        "clipRemoved(const QString& clipId)",
         "splitClip(const QString& clipId, const QString& frameText)",
         "Q_INVOKABLE void undo()",
     ]:
@@ -4266,6 +4269,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "frameText.toLongLong(&frameIsValid, 10)",
         "^[0-9]+$",
         "runtime->moveClips(",
+        "runtime->removeClips(",
         "runtime->splitClips(",
         "runtime->undo(generation, cancellation)",
         "publication.session->undoDepth > 0",
@@ -4362,10 +4366,13 @@ def windows_qt_read_only_shell_contract() -> None:
         "MessageDialog.Save | MessageDialog.Discard | MessageDialog.Cancel",
         "persistenceShutdownReady",
         "editingCoordinator.moveClip(",
+        "editingCoordinator.removeClip(",
+        "function onClipRemoved(clipId)",
         "editingCoordinator.splitClip(",
         'objectName: "moveTrackField"',
         'objectName: "moveFrameField"',
         'objectName: "moveClipButton"',
+        'objectName: "removeClipButton"',
         "editingCoordinator.undo()",
         "modelData.stableId",
         "clip: true",
@@ -4420,6 +4427,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "dirtyRuntimeRefusesProjectReplacement",
         "editingControllerSplitsAndUndoesByStableId",
         "editingControllerMovesByStableIdAndPreservesNoOpHistory",
+        "editingControllerRemovesByStableIdAndUndoes",
         "persistenceShutdownRefreshesAuthoritativeDirtyState",
     ]:
         if token not in qt_tests:
@@ -4888,7 +4896,7 @@ def windows_mcp_project_session_contract() -> None:
         contract["endpoint"],
         "http://127.0.0.1:19789/mcp",
     )
-    expected_tools = ["get_timeline", "move_clips", "split_clips", "undo"]
+    expected_tools = ["get_timeline", "move_clips", "remove_clips", "split_clips", "undo"]
     require_equal("Windows MCP tool subset", contract["toolNames"], expected_tools)
     require_equal(
         "Windows MCP discovery names",
@@ -4929,6 +4937,11 @@ def windows_mcp_project_session_contract() -> None:
             '"toTrack": ["type": "integer"',
             '"toFrame": ["type": "integer"',
             '"required": ["clipId"]',
+        ],
+        "removeClips": [
+            '"clipIds": [',
+            '"items": ["type": "string"]',
+            'required: ["clipIds"]',
         ],
         "splitClips": [
             '"splits": [',
@@ -5008,6 +5021,7 @@ def windows_mcp_project_session_contract() -> None:
     runtime_adr = read_text("docs/windows/adr/0027-serial-project-runtime.md")
     service_adr = read_text("docs/windows/adr/0028-stoppable-embedded-mcp-service.md")
     move_adr = read_text("docs/windows/adr/0036-atomic-move-clips.md")
+    remove_adr = read_text("docs/windows/adr/0037-atomic-remove-clips.md")
     readme = read_text("docs/windows/README.md")
     for token in [
         "class ProjectSession final",
@@ -5016,6 +5030,7 @@ def windows_mcp_project_session_contract() -> None:
         "ProjectSaveSnapshot",
         "TimelineQuery",
         "MoveClipsCommand",
+        "RemoveClipsCommand",
         "SplitClipsCommand",
         "CommandResult",
         "ProjectSessionPublicationFactory",
@@ -5030,6 +5045,7 @@ def windows_mcp_project_session_contract() -> None:
     for token in [
         "unsafeClipIds(document)",
         "CommandResult ProjectSession::moveClips(",
+        "CommandResult ProjectSession::removeClips(",
         "linked clips must preserve their frame offsets",
         "moved clips overlap on a destination track",
         "destination overlap would change a linked clip",
@@ -5061,6 +5077,9 @@ def windows_mcp_project_session_contract() -> None:
         "moveOverwriteSplitsBlockerAtomically",
         "moveCancellationDuringPlanningDoesNotCommit",
         "invalidMovesDoNotMutate",
+        "removeLinkedGroupPrunesAndUndoesExactly",
+        "invalidRemovalsDoNotMutateOrConsumeIds",
+        "removeCancellationDuringPlanningDoesNotCommit",
         "sourceCanariesAndPersistedIdentity",
         "unstableWriteParentsAreRefused",
         "invalidBatchDoesNotMutate",
@@ -5077,6 +5096,7 @@ def windows_mcp_project_session_contract() -> None:
         "publicationPreparationFailureDoesNotCommit",
         "split publication failure must preserve the exact session",
         "move publication failure must preserve the exact session",
+        "remove publication failure must preserve the exact session",
         "undo publication failure must retain the committed split and undo entry",
         "persistence publication failure must not acknowledge the state",
     ]:
@@ -5088,6 +5108,7 @@ def windows_mcp_project_session_contract() -> None:
         "ProjectRuntimeTimelineResult",
         "ProjectRuntimeCommandResult",
         "moveClips(",
+        "removeClips(",
         "projectGeneration(",
         "ProjectRuntimeObserver",
         "operationCommitted() noexcept",
@@ -5115,6 +5136,7 @@ def windows_mcp_project_session_contract() -> None:
     for token in [
         "mutationPublishesOneSessionState",
         "moveNoOpDoesNotPublishOrAdvanceHistory",
+        "removePublishesOneSharedStateAndUndo",
         "dirtyAndGenerationGatesProtectReplacement",
         "operationsAreSerializedAndQueuedCancellationDoesNotCommit",
         "cancellationAfterCommitStillPublishesSuccess",
@@ -5161,6 +5183,7 @@ def windows_mcp_project_session_contract() -> None:
         "MCP session belongs to a replaced project",
         "runtime.getTimeline(query, expectedProjectGeneration)",
         "runtime.moveClips(",
+        "runtime.removeClips(",
         "runtime.undo(expectedProjectGeneration)",
         "SO_RCVTIMEO",
         "mediaType(",
@@ -5219,6 +5242,8 @@ def windows_mcp_project_session_contract() -> None:
         "cross-session split readback",
         "move no-op changed timeline",
         "move undo exact restore",
+        "remove readback",
+        "remove undo exact restore",
         "rejected requests must not mutate",
         "cross-session undo exact restore",
         "require_port_released",
@@ -5243,7 +5268,7 @@ def windows_mcp_project_session_contract() -> None:
     ]:
         if token not in adr:
             raise ContractError(f"Windows MCP ADR missing token {token!r}")
-    for token in ["four-tool loopback MCP", "ADR 0026", "ADR 0036"]:
+    for token in ["five-tool loopback MCP", "ADR 0026", "ADR 0036", "ADR 0037"]:
         if token not in readme:
             raise ContractError(f"Windows README missing token {token!r}")
     for token in [
@@ -5256,6 +5281,16 @@ def windows_mcp_project_session_contract() -> None:
     ]:
         if token not in move_adr:
             raise ContractError(f"Windows move_clips ADR missing token {token!r}")
+    for token in [
+        "one atomic `ProjectSession` operation",
+        "expands linked audio/video groups",
+        "prunes empty tracks",
+        "unknown clip fields",
+        "one undo entry",
+        "independent MCP readback",
+    ]:
+        if token not in remove_adr:
+            raise ContractError(f"Windows remove_clips ADR missing token {token!r}")
     for token in [
         "only thread that closes the listener",
         "already accepted before cancellation",

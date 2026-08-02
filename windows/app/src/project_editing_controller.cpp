@@ -120,6 +120,16 @@ void ProjectEditingController::moveClip(
     );
 }
 
+void ProjectEditingController::removeClip(const QString& clipId) {
+    if (clipId.isEmpty()) {
+        setErrorCode(QStringLiteral("invalidArguments"));
+        setErrorMessage(QStringLiteral("Choose a clip to remove."));
+        emit operationFinished(false);
+        return;
+    }
+    start(Operation::remove, clipId);
+}
+
 void ProjectEditingController::undo() {
     if (!canUndo_) {
         setErrorCode(QStringLiteral("nothingToUndo"));
@@ -153,7 +163,12 @@ void ProjectEditingController::start(
     const auto runtime = runtime_;
     const auto stableClipId = clipId.toStdString();
     auto* watcher = new QFutureWatcher<EditResult>(this);
-    connect(watcher, &QFutureWatcher<EditResult>::finished, this, [this, watcher] {
+    connect(watcher, &QFutureWatcher<EditResult>::finished, this, [
+        this,
+        watcher,
+        operation,
+        clipId
+    ] {
         auto result = watcher->future().takeResult();
         watcher->deleteLater();
         setBusy(false);
@@ -166,6 +181,7 @@ void ProjectEditingController::start(
             setErrorCode(std::move(result.errorCode));
             setErrorMessage(std::move(result.errorMessage));
         }
+        if (succeeded && operation == Operation::remove) emit clipRemoved(clipId);
         emit operationFinished(succeeded);
         if (shutdownRequested_) emit shutdownReady();
     });
@@ -198,6 +214,16 @@ void ProjectEditingController::start(
                     destinationFrame,
                 });
                 auto result = runtime->moveClips(
+                    std::move(command),
+                    generation,
+                    cancellation
+                );
+                return EditResult{std::move(result.session), {}, {}};
+            }
+            if (operation == Operation::remove) {
+                project::RemoveClipsCommand command;
+                command.clipIds.push_back(stableClipId);
+                auto result = runtime->removeClips(
                     std::move(command),
                     generation,
                     cancellation

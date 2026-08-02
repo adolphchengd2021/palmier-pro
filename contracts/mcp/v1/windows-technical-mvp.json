@@ -6,6 +6,7 @@
   "toolNames": [
     "get_timeline",
     "move_clips",
+    "remove_clips",
     "split_clips",
     "undo"
   ],
@@ -57,6 +58,24 @@
         },
         "required": [
           "moves"
+        ]
+      }
+    },
+    {
+      "name": "remove_clips",
+      "description": "Removes clips atomically by stable ID, expands linked groups, prunes empty tracks, and records one undo action.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "clipIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "clipIds"
         ]
       }
     },
@@ -125,6 +144,7 @@
     "loopback-only HTTP transport",
     "shared in-memory ProjectSession across MCP sessions",
     "stable-ID move with linked-partner frame propagation and exact no-op receipts",
+    "stable-ID linked-group removal with empty-track pruning",
     "stable-ID split with integer project frames",
     "shared undo and independent timeline readback"
   ],

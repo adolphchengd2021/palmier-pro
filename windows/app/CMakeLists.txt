@@ -133,6 +133,10 @@ if(BUILD_TESTING)
         editingControllerMovesByStableIdAndPreservesNoOpHistory
     )
     add_palmier_qt_shell_test(
+        editing_controller_remove_undo
+        editingControllerRemovesByStableIdAndUndoes
+    )
+    add_palmier_qt_shell_test(
         persistence_save_waits_for_shutdown
         persistenceSaveRunsOffGuiAndShutdownWaits
     )

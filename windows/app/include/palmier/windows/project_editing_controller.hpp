@@ -42,6 +42,7 @@ public:
         const QString& trackText,
         const QString& frameText
     );
+    Q_INVOKABLE void removeClip(const QString& clipId);
     Q_INVOKABLE void undo();
     Q_INVOKABLE bool requestShutdown();
 
@@ -51,10 +52,11 @@ signals:
     void errorCodeChanged();
     void errorMessageChanged();
     void operationFinished(bool succeeded);
+    void clipRemoved(const QString& clipId);
     void shutdownReady();
 
 private:
-    enum class Operation { split, move, undo };
+    enum class Operation { split, move, remove, undo };
 
     void start(
         Operation operation,

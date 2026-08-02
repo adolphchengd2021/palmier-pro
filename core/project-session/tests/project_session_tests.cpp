@@ -18,6 +18,7 @@ using palmier::project::CommandError;
 using palmier::project::ClipMove;
 using palmier::project::MoveClipsCommand;
 using palmier::project::ProjectSession;
+using palmier::project::RemoveClipsCommand;
 using palmier::project::SplitClipsCommand;
 using palmier::project::SplitPoint;
 
@@ -377,6 +378,134 @@ void moveCancellationDuringPlanningDoesNotCommit() {
     );
 }
 
+void removeLinkedGroupPrunesAndUndoesExactly() {
+    const std::string source = R"({
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[
+            {"id":"video","type":"video","clips":[{
+                "id":"video-clip","mediaRef":"media","mediaType":"video",
+                "sourceClipType":"video","startFrame":0,"durationFrames":30,
+                "linkGroupId":"link","x-remove-canary":{"keep":true}
+            }]},
+            {"id":"audio","type":"audio","clips":[{
+                "id":"audio-clip","mediaRef":"media","mediaType":"audio",
+                "sourceClipType":"audio","startFrame":0,"durationFrames":30,
+                "linkGroupId":"link"
+            }]},
+            {"id":"keeper-track","type":"image","x-track":{"keep":true},"clips":[{
+                "id":"keeper","mediaRef":"still","mediaType":"image",
+                "sourceClipType":"image","startFrame":100,"durationFrames":30
+            }]}
+        ]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"],
+        "x-root":{"keep":"root"}
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    ProjectSession session(document, [] { return std::string("remove-action-id"); });
+    const auto baseline = palmier::json::canonical(session.snapshot().document.source());
+    const auto removed = session.removeClips(RemoveClipsCommand{{"video-clip"}});
+    require(removed.changed && removed.revisionAfter == 1, "remove revision");
+    require(removed.publication->undoDepth == 1, "remove undo depth");
+    const auto& removedIds = at(*removed.payload, "removedClipIds").array();
+    require(removedIds.size() == 2, "linked remove receipt");
+    require(
+        at(*removed.payload, "notes").array().front().string().find("Track indices shifted")
+            != std::string::npos,
+        "remove receipt did not report pruned track indexes"
+    );
+    const auto timeline = session.getTimeline();
+    const auto& tracks = at(timeline, "tracks").array();
+    require(tracks.size() == 1, "remove did not prune empty linked tracks");
+    require(at(tracks.front(), "trackId").string() == "keeper-track", "remove kept wrong track");
+    const auto sourceAfter = session.snapshot();
+    require(
+        palmier::json::canonical(at(sourceAfter.document.source(), "x-root"))
+            == R"({"keep":"root"})",
+        "remove changed root canary"
+    );
+    static_cast<void>(session.undo());
+    require(
+        palmier::json::canonical(session.snapshot().document.source()) == baseline,
+        "remove undo did not restore exact project source"
+    );
+}
+
+void invalidRemovalsDoNotMutateOrConsumeIds() {
+    const std::string source = R"({
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{
+            "id":"track","type":"video","clips":[
+                {"id":"clip","mediaRef":"media","mediaType":"video",
+                 "sourceClipType":"video","startFrame":0,"durationFrames":30},
+                {"id":"keeper","mediaRef":"media","mediaType":"video",
+                 "sourceClipType":"video","startFrame":100,"durationFrames":30}
+            ]
+        }]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    int nextId{};
+    ProjectSession session(document, [&] {
+        return "remove-id-" + std::to_string(++nextId);
+    });
+    const auto baseline = palmier::json::canonical(session.snapshot().document.source());
+    requireCommandError(
+        [&] { static_cast<void>(session.removeClips(RemoveClipsCommand{})); },
+        "invalidClipIds"
+    );
+    requireCommandError(
+        [&] {
+            static_cast<void>(session.removeClips(RemoveClipsCommand{{"clip", "missing"}}));
+        },
+        "clipNotFound"
+    );
+    require(
+        nextId == 0
+        && session.revision() == 0
+        && palmier::json::canonical(session.snapshot().document.source()) == baseline,
+        "invalid remove changed state or generated identity"
+    );
+    const auto removed = session.removeClips(RemoveClipsCommand{{"clip", "clip"}});
+    require(removed.actionId == "remove-id-1", "duplicate remove changed action identity");
+    require(at(*removed.payload, "removedClipIds").array().size() == 1, "duplicate remove receipt");
+    require(at(*removed.payload, "notes").array().empty(), "remove without pruning returned a track note");
+}
+
+void removeCancellationDuringPlanningDoesNotCommit() {
+    const std::string source = R"({
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{
+            "id":"track","type":"video","clips":[{
+                "id":"clip","mediaRef":"media","mediaType":"video",
+                "sourceClipType":"video","startFrame":0,"durationFrames":30
+            }]
+        }]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    std::stop_source cancellation;
+    ProjectSession session(document, [&] {
+        cancellation.request_stop();
+        return std::string("cancel-remove-id");
+    });
+    const auto baseline = palmier::json::canonical(session.snapshot().document.source());
+    requireCommandError(
+        [&] {
+            static_cast<void>(session.removeClips(
+                RemoveClipsCommand{{"clip"}},
+                cancellation.get_token()
+            ));
+        },
+        "cancelled"
+    );
+    require(
+        session.revision() == 0
+        && !session.dirty()
+        && palmier::json::canonical(session.snapshot().document.source()) == baseline,
+        "remove cancellation during planning committed state"
+    );
+}
+
 void moveOverwriteSplitsBlockerAtomically() {
     const std::string source = R"({
         "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{
@@ -498,6 +627,18 @@ void publicationPreparationFailureDoesNotCommit() {
     );
     const auto baseline = palmier::json::canonical(session.snapshot().document.source());
     failPublication = true;
+    try {
+        static_cast<void>(session.removeClips(RemoveClipsCommand{{"target"}}));
+        throw std::runtime_error("expected remove publication preparation failure");
+    } catch (const std::bad_alloc&) {
+    }
+    require(
+        session.revision() == 0
+        && session.stateId() == 0
+        && !session.dirty()
+        && palmier::json::canonical(session.snapshot().document.source()) == baseline,
+        "remove publication failure must preserve the exact session"
+    );
     try {
         static_cast<void>(session.moveClips(MoveClipsCommand{{
             ClipMove{"target", std::nullopt, std::int64_t{20}},
@@ -967,6 +1108,9 @@ int wmain(int argumentCount, wchar_t* arguments[]) {
         linkedOverwriteIsRefusedWithoutMutation();
         moveOverwriteSplitsBlockerAtomically();
         moveCancellationDuringPlanningDoesNotCommit();
+        removeLinkedGroupPrunesAndUndoesExactly();
+        invalidRemovalsDoNotMutateOrConsumeIds();
+        removeCancellationDuringPlanningDoesNotCommit();
         invalidMovesDoNotMutate();
         publicationPreparationFailureDoesNotCommit();
         sourceCanariesAndPersistedIdentity();
