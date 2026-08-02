@@ -529,7 +529,7 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::playInternal(
     value.videoState = video_->state();
     value.fillCalls = 1;
     value.admittedFrames = prefill.admittedFrames;
-    if (returnInitialFrame && state_ != HeadlessAvPlaybackState::completed) {
+    if (returnInitialFrame) {
         try {
             auto first = video_->dequeue(generation_);
             if (first.receipt.outcome != PresentationVideoOutcome::changed
