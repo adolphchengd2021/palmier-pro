@@ -560,6 +560,10 @@ bool isExactRate(const media::Rational& rate, std::int32_t fps) {
     ) == 0;
 }
 
+std::string rationalText(const media::Rational& value) {
+    return std::to_string(value.numerator) + "/" + std::to_string(value.denominator);
+}
+
 void requireExactSourceProbe(
     const std::filesystem::path& input,
     std::int32_t fps,
@@ -724,10 +728,24 @@ std::uint64_t verifyOutput(
         || stream->width != static_cast<std::int32_t>(layer.canvasWidth)
         || stream->height != static_cast<std::int32_t>(layer.canvasHeight)
         || !isExactRate(stream->averageFrameRate, layer.framesPerSecond)) {
+        const std::string detail = stream == probe.streams.end()
+            ? "encoded output has no video stream"
+            : "encoded stream contract differs: codec="
+                + stream->codecName
+                + ", size="
+                + std::to_string(stream->width)
+                + "x"
+                + std::to_string(stream->height)
+                + ", averageRate="
+                + rationalText(stream->averageFrameRate)
+                + ", realRate="
+                + rationalText(stream->realFrameRate)
+                + ", timeBase="
+                + rationalText(stream->timeBase);
         fail(
             H264ExportFailureCode::verificationFailed,
             "verifyProbe",
-            "encoded stream contract differs"
+            detail
         );
     }
 
