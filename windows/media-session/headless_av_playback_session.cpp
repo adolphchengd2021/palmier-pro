@@ -30,6 +30,7 @@ HeadlessAvPlaybackOutcome terminalOutcome(
         return HeadlessAvPlaybackOutcome::failed;
     case HeadlessAvPlaybackState::idle:
     case HeadlessAvPlaybackState::playing:
+    case HeadlessAvPlaybackState::paused:
     case HeadlessAvPlaybackState::completed:
     case HeadlessAvPlaybackState::closed:
         return HeadlessAvPlaybackOutcome::noOp;
@@ -73,6 +74,14 @@ public:
         return session_.cancel(generation);
     }
 
+    AudioPlaybackReceipt pause(std::uint64_t generation) override {
+        return session_.pause(generation);
+    }
+
+    AudioPlaybackReceipt resume(std::uint64_t generation) override {
+        return session_.resume(generation);
+    }
+
     AudioPlaybackReceipt snapshot() const override {
         return session_.snapshot();
     }
@@ -99,6 +108,8 @@ HeadlessAvPlaybackState stateForAudio(AudioPlaybackState state) noexcept {
     case AudioPlaybackState::preparing:
     case AudioPlaybackState::playing:
         return HeadlessAvPlaybackState::playing;
+    case AudioPlaybackState::paused:
+        return HeadlessAvPlaybackState::paused;
     }
     return HeadlessAvPlaybackState::failed;
 }
@@ -504,6 +515,12 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::tick(
     if (isTerminal(state_)) {
         return baseReceipt(terminalOutcome(state_));
     }
+    if (state_ == HeadlessAvPlaybackState::paused) {
+        return baseReceipt(
+            HeadlessAvPlaybackOutcome::noOp,
+            HeadlessAvPlaybackStage::audioPosition
+        );
+    }
     if (video_ == nullptr) {
         return failActive(
             HeadlessAvPlaybackStage::selectVideo,
@@ -678,6 +695,152 @@ HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::tick(
     return value;
 }
 
+HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::pause(
+    std::uint64_t expectedGeneration
+) {
+    std::lock_guard lifecycleLock(lifecycleMutex_);
+    std::lock_guard lock(mutex_);
+    bool closeRequested;
+    {
+        std::lock_guard operationLock(operationMutex_);
+        closeRequested = closeRequested_;
+    }
+    if (closeRequested) {
+        auto value = baseReceipt(
+            HeadlessAvPlaybackOutcome::refused,
+            HeadlessAvPlaybackStage::pauseAudio
+        );
+        value.failure = HeadlessAvPlaybackFailureCode::invalidRequest;
+        value.hresult = E_ILLEGAL_METHOD_CALL;
+        return value;
+    }
+    if (expectedGeneration == 0 || expectedGeneration != generation_) {
+        auto value = baseReceipt(
+            HeadlessAvPlaybackOutcome::stale,
+            HeadlessAvPlaybackStage::pauseAudio
+        );
+        value.failure = HeadlessAvPlaybackFailureCode::invalidRequest;
+        value.hresult = E_INVALIDARG;
+        return value;
+    }
+    if (state_ == HeadlessAvPlaybackState::paused) {
+        return baseReceipt(
+            HeadlessAvPlaybackOutcome::noOp,
+            HeadlessAvPlaybackStage::pauseAudio
+        );
+    }
+    if (state_ != HeadlessAvPlaybackState::playing) {
+        auto value = baseReceipt(
+            HeadlessAvPlaybackOutcome::refused,
+            HeadlessAvPlaybackStage::pauseAudio
+        );
+        value.failure = HeadlessAvPlaybackFailureCode::invalidRequest;
+        value.hresult = E_ILLEGAL_METHOD_CALL;
+        return value;
+    }
+    try {
+        const auto audio = audio_->pause(generation_);
+        if (audio.generation != generation_
+            || (audio.outcome != AudioPlaybackOutcome::changed
+                && audio.outcome != AudioPlaybackOutcome::noOp)
+            || audio.state != AudioPlaybackState::paused) {
+            return failActive(
+                HeadlessAvPlaybackStage::pauseAudio,
+                HeadlessAvPlaybackFailureCode::audioFailure,
+                audio.generation == generation_ ? audio.hresult : E_UNEXPECTED
+            );
+        }
+        state_ = HeadlessAvPlaybackState::paused;
+        auto value = baseReceipt(
+            outcomeForAudio(audio.outcome),
+            HeadlessAvPlaybackStage::pauseAudio
+        );
+        value.audioState = audio.state;
+        value.audioFailure = audio.failure;
+        value.hresult = audio.hresult;
+        return value;
+    } catch (...) {
+        return failActive(
+            HeadlessAvPlaybackStage::pauseAudio,
+            HeadlessAvPlaybackFailureCode::audioFailure,
+            E_UNEXPECTED
+        );
+    }
+}
+
+HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::resume(
+    std::uint64_t expectedGeneration
+) {
+    std::lock_guard lifecycleLock(lifecycleMutex_);
+    std::lock_guard lock(mutex_);
+    bool closeRequested;
+    {
+        std::lock_guard operationLock(operationMutex_);
+        closeRequested = closeRequested_;
+    }
+    if (closeRequested) {
+        auto value = baseReceipt(
+            HeadlessAvPlaybackOutcome::refused,
+            HeadlessAvPlaybackStage::resumeAudio
+        );
+        value.failure = HeadlessAvPlaybackFailureCode::invalidRequest;
+        value.hresult = E_ILLEGAL_METHOD_CALL;
+        return value;
+    }
+    if (expectedGeneration == 0 || expectedGeneration != generation_) {
+        auto value = baseReceipt(
+            HeadlessAvPlaybackOutcome::stale,
+            HeadlessAvPlaybackStage::resumeAudio
+        );
+        value.failure = HeadlessAvPlaybackFailureCode::invalidRequest;
+        value.hresult = E_INVALIDARG;
+        return value;
+    }
+    if (state_ == HeadlessAvPlaybackState::playing) {
+        return baseReceipt(
+            HeadlessAvPlaybackOutcome::noOp,
+            HeadlessAvPlaybackStage::resumeAudio
+        );
+    }
+    if (state_ != HeadlessAvPlaybackState::paused) {
+        auto value = baseReceipt(
+            HeadlessAvPlaybackOutcome::refused,
+            HeadlessAvPlaybackStage::resumeAudio
+        );
+        value.failure = HeadlessAvPlaybackFailureCode::invalidRequest;
+        value.hresult = E_ILLEGAL_METHOD_CALL;
+        return value;
+    }
+    try {
+        const auto audio = audio_->resume(generation_);
+        if (audio.generation != generation_
+            || (audio.outcome != AudioPlaybackOutcome::changed
+                && audio.outcome != AudioPlaybackOutcome::noOp)
+            || audio.state != AudioPlaybackState::playing) {
+            return failActive(
+                HeadlessAvPlaybackStage::resumeAudio,
+                HeadlessAvPlaybackFailureCode::audioFailure,
+                audio.generation == generation_ ? audio.hresult : E_UNEXPECTED
+            );
+        }
+        state_ = HeadlessAvPlaybackState::playing;
+        auto value = baseReceipt(
+            outcomeForAudio(audio.outcome),
+            HeadlessAvPlaybackStage::resumeAudio
+        );
+        value.audioState = audio.state;
+        value.audioFailure = audio.failure;
+        value.hresult = audio.hresult;
+        return value;
+    } catch (...) {
+        return failActive(
+            HeadlessAvPlaybackStage::resumeAudio,
+            HeadlessAvPlaybackFailureCode::audioFailure,
+            E_UNEXPECTED
+        );
+    }
+}
+
 HeadlessAvPlaybackReceipt HeadlessAvPlaybackSession::cancel(
     std::uint64_t expectedGeneration
 ) {
@@ -818,7 +981,8 @@ HeadlessAvPlaybackSession::terminateFromAudioPosition(
         video_->cancel(generation_);
     }
     state_ = stateForAudio(position.state);
-    if (state_ == HeadlessAvPlaybackState::playing) {
+    if (state_ == HeadlessAvPlaybackState::playing
+        || state_ == HeadlessAvPlaybackState::paused) {
         state_ = HeadlessAvPlaybackState::failed;
     }
     auto value = baseReceipt(outcomeForAudio(position.outcome), stage);

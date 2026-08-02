@@ -34,6 +34,8 @@ struct CommandCompletion final {
 
 enum class CommandKind {
     play,
+    pause,
+    resume,
     cancel,
     close,
 };
@@ -196,6 +198,14 @@ public:
 
     AudioPlaybackReceipt cancel(std::uint64_t expectedGeneration) {
         return command(CommandKind::cancel, {}, 0, expectedGeneration);
+    }
+
+    AudioPlaybackReceipt pause(std::uint64_t expectedGeneration) {
+        return command(CommandKind::pause, {}, 0, expectedGeneration);
+    }
+
+    AudioPlaybackReceipt resume(std::uint64_t expectedGeneration) {
+        return command(CommandKind::resume, {}, 0, expectedGeneration);
     }
 
     AudioPlaybackReceipt snapshot() const {
@@ -1200,6 +1210,90 @@ private:
         return value;
     }
 
+    AudioPlaybackReceipt executePause(const Command& commandValue) {
+        auto value = snapshot();
+        if (generation_ == 0
+            || commandValue.expectedGeneration != generation_) {
+            value.outcome = AudioPlaybackOutcome::refused;
+            value.failure = AudioPlaybackFailureCode::invalidRequest;
+            value.hresult = E_INVALIDARG;
+            return value;
+        }
+        if (value.state == AudioPlaybackState::paused) {
+            value.outcome = AudioPlaybackOutcome::noOp;
+            value.stage = AudioPlaybackStage::pauseDevice;
+            return value;
+        }
+        if (value.state != AudioPlaybackState::playing) {
+            value.outcome = AudioPlaybackOutcome::refused;
+            value.stage = AudioPlaybackStage::pauseDevice;
+            value.failure = AudioPlaybackFailureCode::invalidRequest;
+            value.hresult = E_ILLEGAL_METHOD_CALL;
+            return value;
+        }
+        const auto paused = output_->pause(generation_);
+        if (paused.outcome != audio::WasapiOutputOutcome::changed
+            && paused.outcome != audio::WasapiOutputOutcome::noOp) {
+            return terminateActiveFailure(outputFailureReceipt(
+                paused,
+                AudioPlaybackStage::pauseDevice
+            ));
+        }
+        value.state = AudioPlaybackState::paused;
+        value.outcome = outputOutcome(paused.outcome);
+        value.stage = AudioPlaybackStage::pauseDevice;
+        value.failure = AudioPlaybackFailureCode::none;
+        value.hresult = paused.hresult;
+        value.acceptedFrames = outputCursor_;
+        publish(value);
+        return value;
+    }
+
+    AudioPlaybackReceipt executeResume(const Command& commandValue) {
+        auto value = snapshot();
+        if (generation_ == 0
+            || commandValue.expectedGeneration != generation_) {
+            value.outcome = AudioPlaybackOutcome::refused;
+            value.failure = AudioPlaybackFailureCode::invalidRequest;
+            value.hresult = E_INVALIDARG;
+            return value;
+        }
+        if (value.state == AudioPlaybackState::playing) {
+            value.outcome = AudioPlaybackOutcome::noOp;
+            value.stage = AudioPlaybackStage::resumeDevice;
+            return value;
+        }
+        if (value.state != AudioPlaybackState::paused) {
+            value.outcome = AudioPlaybackOutcome::refused;
+            value.stage = AudioPlaybackStage::resumeDevice;
+            value.failure = AudioPlaybackFailureCode::invalidRequest;
+            value.hresult = E_ILLEGAL_METHOD_CALL;
+            return value;
+        }
+        const auto resumed = output_->start(generation_);
+        if ((resumed.outcome != audio::WasapiOutputOutcome::changed
+                && resumed.outcome != audio::WasapiOutputOutcome::noOp)
+            || resumed.generation != generation_) {
+            auto failure = outputFailureReceipt(
+                resumed,
+                AudioPlaybackStage::resumeDevice
+            );
+            if (resumed.generation != generation_) {
+                failure.failure = AudioPlaybackFailureCode::invariantFailure;
+                failure.hresult = E_UNEXPECTED;
+            }
+            return terminateActiveFailure(failure);
+        }
+        value.state = AudioPlaybackState::playing;
+        value.outcome = outputOutcome(resumed.outcome);
+        value.stage = AudioPlaybackStage::resumeDevice;
+        value.failure = AudioPlaybackFailureCode::none;
+        value.hresult = resumed.hresult;
+        value.acceptedFrames = outputCursor_;
+        publish(value);
+        return value;
+    }
+
     AudioPlaybackReceipt executeClose() {
         const auto previous = snapshot();
         if (pump_) {
@@ -1207,7 +1301,9 @@ private:
         }
         pendingBlock_.reset();
         pump_.reset();
-        if (generation_ != 0 && previous.state == AudioPlaybackState::playing) {
+        if (generation_ != 0
+            && (previous.state == AudioPlaybackState::playing
+                || previous.state == AudioPlaybackState::paused)) {
             const auto discarded = output_->discardGeneration(generation_);
             const bool discardedSuccessfully =
                 discarded.outcome == audio::WasapiOutputOutcome::changed
@@ -1463,6 +1559,12 @@ private:
                     case CommandKind::play:
                         value = executePlay(*commandValue);
                         break;
+                    case CommandKind::pause:
+                        value = executePause(*commandValue);
+                        break;
+                    case CommandKind::resume:
+                        value = executeResume(*commandValue);
+                        break;
                     case CommandKind::cancel:
                         value = executeCancel(*commandValue);
                         break;
@@ -1595,6 +1697,18 @@ AudioPlaybackReceipt AudioPlaybackSession::cancel(
     std::uint64_t expectedGeneration
 ) {
     return impl_->cancel(expectedGeneration);
+}
+
+AudioPlaybackReceipt AudioPlaybackSession::pause(
+    std::uint64_t expectedGeneration
+) {
+    return impl_->pause(expectedGeneration);
+}
+
+AudioPlaybackReceipt AudioPlaybackSession::resume(
+    std::uint64_t expectedGeneration
+) {
+    return impl_->resume(expectedGeneration);
 }
 
 AudioPlaybackReceipt AudioPlaybackSession::waitForTerminal(

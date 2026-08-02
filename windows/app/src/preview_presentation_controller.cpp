@@ -67,6 +67,18 @@ public:
         return session_.cancel(expectedGeneration);
     }
 
+    preview::PreviewPresentationReceipt pause(
+        std::uint64_t expectedGeneration
+    ) override {
+        return session_.pause(expectedGeneration);
+    }
+
+    preview::PreviewPresentationReceipt resume(
+        std::uint64_t expectedGeneration
+    ) override {
+        return session_.resume(expectedGeneration);
+    }
+
     preview::PreviewPresentationReceipt close() override { return session_.close(); }
 
 private:
@@ -117,6 +129,7 @@ QString presentationStateName(const preview::PreviewPresentationReceipt& receipt
     switch (receipt.state) {
     case idle: return QStringLiteral("ready");
     case playing: return QStringLiteral("playing");
+    case paused: return QStringLiteral("paused");
     case completed: return QStringLiteral("completed");
     case cancelled: return QStringLiteral("cancelled");
     case invalidated: return QStringLiteral("invalidated");
@@ -279,6 +292,8 @@ void PreviewPresentationController::replaceProjectPreview(
     suppressedPreviewSerial_ = 0;
     tickScheduled_ = false;
     tickPending_ = false;
+    pauseRequested_ = false;
+    resumeRequested_ = false;
     if (
         activeCancellation_
         && activeOperationKind_
@@ -294,6 +309,45 @@ void PreviewPresentationController::replaceProjectPreview(
     servicePendingWork();
 }
 
+bool PreviewPresentationController::pause() {
+    if (shutdownRequested_ || shutdownComplete_ || !sessionExists_
+        || playbackGeneration_ == 0) {
+        return false;
+    }
+    if (pauseRequested_) return true;
+    const bool resumeActive = resumeRequested_
+        || (activeOperationKind_ && *activeOperationKind_ == OperationKind::resume);
+    if (state_ == QStringLiteral("paused") && !resumeActive) return true;
+    if (state_ != QStringLiteral("playing")
+        && state_ != QStringLiteral("paused")) return false;
+    pauseRequested_ = true;
+    resumeRequested_ = false;
+    tickPending_ = false;
+    if (activeCancellation_ && activeOperationKind_
+        && *activeOperationKind_ == OperationKind::tick) {
+        activeCancellation_->request_stop();
+    }
+    servicePendingWork();
+    return true;
+}
+
+bool PreviewPresentationController::resume() {
+    if (shutdownRequested_ || shutdownComplete_ || !sessionExists_
+        || playbackGeneration_ == 0) {
+        return false;
+    }
+    if (resumeRequested_) return true;
+    const bool pauseActive = pauseRequested_
+        || (activeOperationKind_ && *activeOperationKind_ == OperationKind::pause);
+    if (state_ == QStringLiteral("playing") && !pauseActive) return true;
+    if (state_ != QStringLiteral("playing")
+        && state_ != QStringLiteral("paused")) return false;
+    resumeRequested_ = true;
+    pauseRequested_ = false;
+    servicePendingWork();
+    return true;
+}
+
 bool PreviewPresentationController::requestShutdown() {
     if (shutdownComplete_) return true;
     shutdownRequested_ = true;
@@ -302,6 +356,8 @@ bool PreviewPresentationController::requestShutdown() {
     pendingResize_.reset();
     tickScheduled_ = false;
     tickPending_ = false;
+    pauseRequested_ = false;
+    resumeRequested_ = false;
     setReady(false);
     setErrorCode({});
     setState(QStringLiteral("closing"));
@@ -375,7 +431,24 @@ void PreviewPresentationController::servicePendingWork() {
         schedulePlay(*desiredPreview_);
         return;
     }
-    if (tickPending_ && playbackGeneration_ != 0) {
+    if (pauseRequested_ && playbackGeneration_ != 0) {
+        scheduleTransport(
+            OperationKind::pause,
+            activePreviewSerial_,
+            playbackGeneration_
+        );
+        return;
+    }
+    if (resumeRequested_ && playbackGeneration_ != 0) {
+        scheduleTransport(
+            OperationKind::resume,
+            activePreviewSerial_,
+            playbackGeneration_
+        );
+        return;
+    }
+    if (tickPending_ && playbackGeneration_ != 0
+        && state_ == QStringLiteral("playing")) {
         tickPending_ = false;
         scheduleTick(activePreviewSerial_, playbackGeneration_);
     }
@@ -640,6 +713,50 @@ void PreviewPresentationController::scheduleCancel(
     }, Qt::QueuedConnection);
 }
 
+void PreviewPresentationController::scheduleTransport(
+    OperationKind kind,
+    std::uint64_t sourceSerial,
+    std::uint64_t playbackGeneration
+) {
+    if (kind != OperationKind::pause && kind != OperationKind::resume) return;
+    operationActive_ = true;
+    activeOperationKind_ = kind;
+    const auto serial = ++operationSerial_;
+    const auto state = workerState_;
+    const QPointer<PreviewPresentationController> controller(this);
+    QMetaObject::invokeMethod(dispatcher_, [
+        state,
+        controller,
+        serial,
+        epoch = surfaceEpoch_,
+        sourceSerial,
+        playbackGeneration,
+        kind
+    ] {
+        OperationResult result;
+        result.kind = kind;
+        result.serial = serial;
+        result.surfaceEpoch = epoch;
+        result.sourceSerial = sourceSerial;
+        result.playbackGeneration = playbackGeneration;
+        try {
+            result.receipt = state->session
+                ? kind == OperationKind::pause
+                    ? state->session->pause(playbackGeneration)
+                    : state->session->resume(playbackGeneration)
+                : failedReceipt();
+            result.sessionExists = state->session != nullptr;
+        } catch (...) {
+            result.receipt = failedReceipt();
+            result.sessionExists = state->session != nullptr;
+        }
+        if (!controller) return;
+        QMetaObject::invokeMethod(controller.data(), [controller, result] {
+            if (controller) controller->completeOperation(result);
+        }, Qt::QueuedConnection);
+    }, Qt::QueuedConnection);
+}
+
 void PreviewPresentationController::scheduleNextTick(
     std::uint64_t sourceSerial,
     std::uint64_t playbackGeneration,
@@ -648,6 +765,8 @@ void PreviewPresentationController::scheduleNextTick(
     if (
         shutdownRequested_
         || tickScheduled_
+        || pauseRequested_
+        || state_ != QStringLiteral("playing")
         || framesPerSecond <= 0
         || sourceSerial != sourceSerial_
     ) {
@@ -669,7 +788,10 @@ void PreviewPresentationController::scheduleNextTick(
             || sourceSerial != sourceSerial_
             || playbackGeneration != playbackGeneration_
             || activePreviewSerial_ != sourceSerial
+            || pauseRequested_
+            || state_ != QStringLiteral("playing")
         ) {
+            tickScheduled_ = false;
             return;
         }
         tickScheduled_ = false;
@@ -719,7 +841,9 @@ void PreviewPresentationController::completeOperation(OperationResult result) {
         return;
     }
     if (result.surfaceEpoch != surfaceEpoch_) return;
-    if (result.kind == OperationKind::play || result.kind == OperationKind::tick) {
+    if (result.kind == OperationKind::play || result.kind == OperationKind::tick
+        || result.kind == OperationKind::pause
+        || result.kind == OperationKind::resume) {
         latestPlaybackReceipt_ = result.receipt;
     }
     const auto outcome = result.receipt.outcome;
@@ -784,6 +908,36 @@ void PreviewPresentationController::completeOperation(OperationResult result) {
             && desiredPreview_
             && desiredPreview_->preview.candidate
         ) {
+            scheduleNextTick(
+                result.sourceSerial,
+                playbackGeneration_,
+                desiredPreview_->preview.candidate->renderLayer.framesPerSecond
+            );
+        }
+        servicePendingWork();
+        return;
+    }
+    if (result.kind == OperationKind::pause
+        || result.kind == OperationKind::resume) {
+        if (result.kind == OperationKind::pause) pauseRequested_ = false;
+        else resumeRequested_ = false;
+        if (result.sourceSerial != sourceSerial_
+            || result.sourceSerial != activePreviewSerial_
+            || result.playbackGeneration != playbackGeneration_) {
+            servicePendingWork();
+            return;
+        }
+        setState(presentationStateName(result.receipt));
+        if (shutdownRequested_ || shutdownComplete_) return;
+        const bool stale = outcome == preview::PreviewPresentationOutcome::stale
+            || (result.receipt.generation != 0
+                && result.receipt.generation != result.playbackGeneration);
+        setErrorCode(stale
+            ? QStringLiteral("previewStale")
+            : errorName(result.receipt));
+        if (shutdownRequested_ || shutdownComplete_) return;
+        if (result.receipt.state == preview::PreviewPresentationState::playing
+            && desiredPreview_ && desiredPreview_->preview.candidate) {
             scheduleNextTick(
                 result.sourceSerial,
                 playbackGeneration_,

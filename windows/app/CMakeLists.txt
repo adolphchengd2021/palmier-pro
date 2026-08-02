@@ -308,6 +308,10 @@ if(BUILD_TESTING)
         resizeDuringGatedTickResumesBoundedCadence
     )
     add_palmier_qt_preview_test(
+        pause_resume_preserves_generation
+        pauseCancelsActiveTickAndResumeKeepsTheGeneration
+    )
+    add_palmier_qt_preview_test(
         stale_tick_cancels_without_retry
         staleTickCancelsWithoutRetryLoop
     )

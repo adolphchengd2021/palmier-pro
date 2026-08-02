@@ -53,6 +53,8 @@ PreviewPresentationState stateFor(media::HeadlessAvPlaybackState state) noexcept
         return PreviewPresentationState::idle;
     case media::HeadlessAvPlaybackState::playing:
         return PreviewPresentationState::playing;
+    case media::HeadlessAvPlaybackState::paused:
+        return PreviewPresentationState::paused;
     case media::HeadlessAvPlaybackState::completed:
         return PreviewPresentationState::completed;
     case media::HeadlessAvPlaybackState::cancelled:
@@ -147,6 +149,18 @@ public:
         std::uint64_t expectedGeneration
     ) override {
         return playback_.cancel(expectedGeneration);
+    }
+
+    media::HeadlessAvPlaybackReceipt pause(
+        std::uint64_t expectedGeneration
+    ) override {
+        return playback_.pause(expectedGeneration);
+    }
+
+    media::HeadlessAvPlaybackReceipt resume(
+        std::uint64_t expectedGeneration
+    ) override {
+        return playback_.resume(expectedGeneration);
     }
 
     media::HeadlessAvPlaybackReceipt snapshot() const override {
@@ -614,6 +628,102 @@ PreviewPresentationReceipt PreviewPresentationSession::tick(
     value.hresult = surface.hresult;
     if (terminalSurface) {
         value.failure = PreviewPresentationFailureCode::surfaceFailure;
+    }
+    return value;
+}
+
+PreviewPresentationReceipt PreviewPresentationSession::pause(
+    std::uint64_t expectedGeneration
+) {
+    std::unique_lock operationLock(operationMutex_);
+    {
+        std::scoped_lock lifecycleLock(lifecycleMutex_);
+        if (closeRequested_) {
+            return refused(
+                PreviewPresentationStage::pausePlayback,
+                PreviewPresentationFailureCode::invalidRequest,
+                E_ILLEGAL_METHOD_CALL
+            );
+        }
+    }
+    if (expectedGeneration == 0 || expectedGeneration != generation_) {
+        return receipt(
+            PreviewPresentationOutcome::stale,
+            PreviewPresentationStage::pausePlayback
+        );
+    }
+    if (state_ == PreviewPresentationState::paused) {
+        return receipt(
+            PreviewPresentationOutcome::noOp,
+            PreviewPresentationStage::pausePlayback
+        );
+    }
+    if (state_ != PreviewPresentationState::playing) {
+        return refused(
+            PreviewPresentationStage::pausePlayback,
+            PreviewPresentationFailureCode::invalidRequest,
+            E_ILLEGAL_METHOD_CALL
+        );
+    }
+    const auto playback = playback_->pause(expectedGeneration);
+    const auto playbackOutcome = outcomeFor(playback.outcome);
+    state_ = stateFor(playback.state);
+    auto value = receipt(playbackOutcome, PreviewPresentationStage::pausePlayback);
+    value.hresult = playback.hresult;
+    value.mediaFailureCode = playback.mediaFailureCode;
+    value.audioFailure = playback.audioFailure;
+    if ((playbackOutcome != PreviewPresentationOutcome::changed
+            && playbackOutcome != PreviewPresentationOutcome::noOp)
+        || state_ != PreviewPresentationState::paused) {
+        value.failure = PreviewPresentationFailureCode::playbackFailure;
+    }
+    return value;
+}
+
+PreviewPresentationReceipt PreviewPresentationSession::resume(
+    std::uint64_t expectedGeneration
+) {
+    std::unique_lock operationLock(operationMutex_);
+    {
+        std::scoped_lock lifecycleLock(lifecycleMutex_);
+        if (closeRequested_) {
+            return refused(
+                PreviewPresentationStage::resumePlayback,
+                PreviewPresentationFailureCode::invalidRequest,
+                E_ILLEGAL_METHOD_CALL
+            );
+        }
+    }
+    if (expectedGeneration == 0 || expectedGeneration != generation_) {
+        return receipt(
+            PreviewPresentationOutcome::stale,
+            PreviewPresentationStage::resumePlayback
+        );
+    }
+    if (state_ == PreviewPresentationState::playing) {
+        return receipt(
+            PreviewPresentationOutcome::noOp,
+            PreviewPresentationStage::resumePlayback
+        );
+    }
+    if (state_ != PreviewPresentationState::paused) {
+        return refused(
+            PreviewPresentationStage::resumePlayback,
+            PreviewPresentationFailureCode::invalidRequest,
+            E_ILLEGAL_METHOD_CALL
+        );
+    }
+    const auto playback = playback_->resume(expectedGeneration);
+    const auto playbackOutcome = outcomeFor(playback.outcome);
+    state_ = stateFor(playback.state);
+    auto value = receipt(playbackOutcome, PreviewPresentationStage::resumePlayback);
+    value.hresult = playback.hresult;
+    value.mediaFailureCode = playback.mediaFailureCode;
+    value.audioFailure = playback.audioFailure;
+    if ((playbackOutcome != PreviewPresentationOutcome::changed
+            && playbackOutcome != PreviewPresentationOutcome::noOp)
+        || state_ != PreviewPresentationState::playing) {
+        value.failure = PreviewPresentationFailureCode::playbackFailure;
     }
     return value;
 }

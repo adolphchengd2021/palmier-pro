@@ -6,6 +6,7 @@
     "idle",
     "preparing",
     "playing",
+    "paused",
     "completed",
     "cancelled",
     "invalidated",
@@ -38,6 +39,7 @@
     "endOfStream": "ordered EOS carries the exact final output sample and terminal completion waits for endpoint padding drain",
     "clock": "successful Start returns a generation-matched device clock anchor for the requested timeline frame and preserves the first admitted source presentation timestamp and time base",
     "position": "a generation-checked read returns only a cached non-regressing device-thread clock sample and preserves terminal state and failure",
+    "transport": "pause and resume preserve the exact generation, clock anchor, queued PCM, decoded cursor, and source mapping; repeated controls are no-ops and stale generations are refused",
     "close": "an active generation receives a separate cancellation terminal before device close; concurrent close joins once"
   },
   "excluded": [

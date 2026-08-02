@@ -555,6 +555,27 @@ ApplicationWindow {
             window: previewCoordinator.window
         }
 
+        Row {
+            spacing: AppTheme.itemSpacing
+            Button {
+                objectName: "pausePreviewButton"
+                text: qsTr("Pause")
+                enabled: previewCoordinator.state === "playing"
+                onClicked: previewCoordinator.pause()
+            }
+            Button {
+                objectName: "resumePreviewButton"
+                text: qsTr("Resume")
+                enabled: previewCoordinator.state === "paused"
+                onClicked: previewCoordinator.resume()
+            }
+            Label {
+                objectName: "previewTransportState"
+                text: previewCoordinator.state
+                color: AppTheme.secondaryText
+            }
+        }
+
         Label {
             objectName: "previewErrorState"
             visible: previewCoordinator.errorCode.length > 0

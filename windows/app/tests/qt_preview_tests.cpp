@@ -290,6 +290,8 @@ struct FakeSessionState final {
     bool windowAliveAtDestruction{};
     std::uint64_t generation{};
     std::size_t tickCalls{};
+    std::size_t pauseCalls{};
+    std::size_t resumeCalls{};
     std::size_t cancelCalls{};
     std::size_t playingTicks{};
 };
@@ -400,6 +402,22 @@ public:
         receipt.state = PreviewPresentationState::cancelled;
         receipt.outcome = PreviewPresentationOutcome::cancelled;
         return receipt;
+    }
+
+    PreviewPresentationReceipt pause(std::uint64_t expectedGeneration) override {
+        const std::lock_guard lock(state_->mutex);
+        ++state_->pauseCalls;
+        state_->threads.push_back(std::this_thread::get_id());
+        auto receipt = playingReceipt(expectedGeneration);
+        receipt.state = PreviewPresentationState::paused;
+        return receipt;
+    }
+
+    PreviewPresentationReceipt resume(std::uint64_t expectedGeneration) override {
+        const std::lock_guard lock(state_->mutex);
+        ++state_->resumeCalls;
+        state_->threads.push_back(std::this_thread::get_id());
+        return playingReceipt(expectedGeneration);
     }
 
     PreviewPresentationReceipt close() override {
@@ -677,6 +695,55 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(resizeCount(state), std::size_t{2}, 5000);
         QTRY_COMPARE_WITH_TIMEOUT(tickCount(state), std::size_t{2}, 5000);
         QTRY_COMPARE_WITH_TIMEOUT(controller.state(), QStringLiteral("completed"), 5000);
+
+        static_cast<void>(controller.requestShutdown());
+        QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);
+        root.reset();
+    }
+
+    void pauseCancelsActiveTickAndResumeKeepsTheGeneration() {
+        auto state = std::make_shared<FakeSessionState>();
+        state->gateTick = true;
+        state->playingTicks = 100;
+        palmier::windows::PreviewPresentationController controller(
+            [state](HWND) { return std::make_unique<FakeSession>(state); },
+            nullptr
+        );
+        QQmlEngine engine;
+        auto root = createPreviewWindow(engine, controller);
+        QVERIFY(root != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(controller.ready(), 5000);
+
+        controller.replaceProjectPreview(1, availablePreview("media-transport"));
+        QTRY_COMPARE_WITH_TIMEOUT(state->tickEntered.available(), 1, 5000);
+        QVERIFY(controller.pause());
+        QTRY_VERIFY_WITH_TIMEOUT(tickCancellationObserved(state), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.state(), QStringLiteral("paused"), 5000);
+        {
+            const std::lock_guard lock(state->mutex);
+            QCOMPARE(state->pauseCalls, std::size_t{1});
+            QCOMPARE(state->generation, std::uint64_t{1});
+        }
+        QVERIFY(controller.pause());
+        QCoreApplication::processEvents();
+        {
+            const std::lock_guard lock(state->mutex);
+            QCOMPARE(state->pauseCalls, std::size_t{1});
+        }
+
+        QVERIFY(controller.resume());
+        QTRY_COMPARE_WITH_TIMEOUT(controller.state(), QStringLiteral("playing"), 5000);
+        {
+            const std::lock_guard lock(state->mutex);
+            QCOMPARE(state->resumeCalls, std::size_t{1});
+            QCOMPARE(state->generation, std::uint64_t{1});
+        }
+        QVERIFY(controller.resume());
+        QCoreApplication::processEvents();
+        {
+            const std::lock_guard lock(state->mutex);
+            QCOMPARE(state->resumeCalls, std::size_t{1});
+        }
 
         static_cast<void>(controller.requestShutdown());
         QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);

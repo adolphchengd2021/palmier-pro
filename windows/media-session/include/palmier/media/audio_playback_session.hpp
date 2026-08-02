@@ -17,6 +17,7 @@ enum class AudioPlaybackState {
     idle,
     preparing,
     playing,
+    paused,
     completed,
     cancelled,
     invalidated,
@@ -41,6 +42,8 @@ enum class AudioPlaybackStage {
     installGeneration,
     pcmHandoff,
     startDevice,
+    pauseDevice,
+    resumeDevice,
     drain,
     close,
 };
@@ -124,6 +127,8 @@ public:
         std::uint64_t generation,
         std::stop_token cancellation = {}
     );
+    AudioPlaybackReceipt pause(std::uint64_t expectedGeneration);
+    AudioPlaybackReceipt resume(std::uint64_t expectedGeneration);
     AudioPlaybackReceipt cancel(std::uint64_t expectedGeneration);
     AudioPlaybackReceipt waitForTerminal(
         std::uint64_t generation,

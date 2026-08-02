@@ -28,6 +28,7 @@ struct PreviewPresentationLimits final {
 enum class PreviewPresentationState {
     idle,
     playing,
+    paused,
     completed,
     cancelled,
     invalidated,
@@ -53,6 +54,8 @@ enum class PreviewPresentationStage {
     validate,
     startPlayback,
     tickPlayback,
+    pausePlayback,
+    resumePlayback,
     render,
     present,
     resize,
@@ -103,6 +106,12 @@ public:
     virtual media::HeadlessAvPlaybackReceipt tick(
         std::uint64_t expectedGeneration,
         std::stop_token cancellation
+    ) = 0;
+    virtual media::HeadlessAvPlaybackReceipt pause(
+        std::uint64_t expectedGeneration
+    ) = 0;
+    virtual media::HeadlessAvPlaybackReceipt resume(
+        std::uint64_t expectedGeneration
     ) = 0;
     virtual media::HeadlessAvPlaybackReceipt cancel(
         std::uint64_t expectedGeneration
@@ -177,6 +186,8 @@ public:
         std::uint64_t expectedGeneration,
         std::stop_token cancellation = {}
     );
+    PreviewPresentationReceipt pause(std::uint64_t expectedGeneration);
+    PreviewPresentationReceipt resume(std::uint64_t expectedGeneration);
     PreviewPresentationReceipt resize(
         std::uint32_t width,
         std::uint32_t height,

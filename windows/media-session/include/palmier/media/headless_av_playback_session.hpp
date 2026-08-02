@@ -36,6 +36,8 @@ public:
     virtual AudioPlaybackPositionReceipt position(
         std::uint64_t generation
     ) const = 0;
+    virtual AudioPlaybackReceipt pause(std::uint64_t generation) = 0;
+    virtual AudioPlaybackReceipt resume(std::uint64_t generation) = 0;
     virtual AudioPlaybackReceipt cancel(std::uint64_t generation) = 0;
     virtual AudioPlaybackReceipt snapshot() const = 0;
     virtual AudioPlaybackReceipt close() = 0;
@@ -53,6 +55,7 @@ struct HeadlessAvPlaybackLimits final {
 enum class HeadlessAvPlaybackState {
     idle,
     playing,
+    paused,
     completed,
     cancelled,
     invalidated,
@@ -78,6 +81,8 @@ enum class HeadlessAvPlaybackStage {
     audioPosition,
     fillVideo,
     selectVideo,
+    pauseAudio,
+    resumeAudio,
     cancel,
     close,
 };
@@ -138,6 +143,8 @@ public:
         std::uint64_t expectedGeneration,
         std::stop_token cancellation = {}
     );
+    HeadlessAvPlaybackReceipt pause(std::uint64_t expectedGeneration);
+    HeadlessAvPlaybackReceipt resume(std::uint64_t expectedGeneration);
     HeadlessAvPlaybackReceipt cancel(std::uint64_t expectedGeneration);
     HeadlessAvPlaybackReceipt snapshot() const;
     HeadlessAvPlaybackReceipt close();

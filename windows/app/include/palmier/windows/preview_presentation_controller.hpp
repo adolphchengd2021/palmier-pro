@@ -33,6 +33,12 @@ public:
         std::uint64_t expectedGeneration,
         std::stop_token cancellation
     ) = 0;
+    virtual preview::PreviewPresentationReceipt pause(
+        std::uint64_t expectedGeneration
+    ) = 0;
+    virtual preview::PreviewPresentationReceipt resume(
+        std::uint64_t expectedGeneration
+    ) = 0;
     virtual preview::PreviewPresentationReceipt cancel(
         std::uint64_t expectedGeneration
     ) = 0;
@@ -96,6 +102,8 @@ public:
         std::uint64_t projectRevision,
         ProjectPreviewProjection preview
     );
+    Q_INVOKABLE bool pause();
+    Q_INVOKABLE bool resume();
     Q_INVOKABLE bool requestShutdown();
 
 signals:
@@ -106,7 +114,16 @@ signals:
     void shutdownReady();
 
 private:
-    enum class OperationKind { attach, resize, play, tick, cancel, close };
+    enum class OperationKind {
+        attach,
+        resize,
+        play,
+        tick,
+        pause,
+        resume,
+        cancel,
+        close,
+    };
 
     struct PendingResize final {
         std::uint64_t surfaceEpoch{};
@@ -142,6 +159,11 @@ private:
     void scheduleResize(PendingResize request);
     void schedulePlay(PendingPreview request);
     void scheduleTick(
+        std::uint64_t sourceSerial,
+        std::uint64_t playbackGeneration
+    );
+    void scheduleTransport(
+        OperationKind kind,
         std::uint64_t sourceSerial,
         std::uint64_t playbackGeneration
     );
@@ -184,6 +206,8 @@ private:
     std::optional<OperationKind> activeOperationKind_;
     bool tickScheduled_{};
     bool tickPending_{};
+    bool pauseRequested_{};
+    bool resumeRequested_{};
     bool sessionExists_{};
     bool shutdownRequested_{};
     bool shutdownComplete_{};

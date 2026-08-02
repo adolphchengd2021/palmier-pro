@@ -122,6 +122,13 @@ preview, and selected-clip H.264 export. General speed and VFR remain explicit
 refusals, and MCP does not expose a partial property tool; see ADR 0039 and ADR
 0040.
 
+Preview transport now pauses and resumes the same A/V generation through the
+existing WASAPI, media-session, preview-session, and Qt owners. Pause retains
+the exact clock/source mapping and visible cached frame while suppressing clock
+ticks; Resume restarts the bounded completion-triggered cadence without a
+replacement decode. Scrub, arbitrary playhead seek, speed, VFR, and physical
+device/UI evidence remain open; see ADR 0041.
+
 The same Qt workflow stages the Release executable through CMake install, runs
 the pinned `windeployqt` QML deployment, requires the complete app-local FFmpeg
 DLL set, and includes exact Qt, FFmpeg, Palmier Pro, and Visual C++ runtime

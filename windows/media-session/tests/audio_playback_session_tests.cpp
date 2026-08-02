@@ -377,6 +377,53 @@ void trimmedPlaybackAnchorsAndHandsOffTheSameSourceRange() {
     require(state->captured == expected, "trimmed playback changed the decoded source range");
 }
 
+void pauseResumePreservesGenerationClockAndQueuedPcm() {
+    TemporaryDirectory media;
+    const auto input = media.write(
+        "pause-patterned.wav",
+        palmier::media::test_fixtures::patternedPcmWav
+    );
+    auto state = std::make_shared<PlaybackStreamState>();
+    state->automaticRender.store(false);
+    AudioPlaybackSession session(outputWorker(state));
+
+    const auto started = session.play(input, 24);
+    require(started.state == AudioPlaybackState::playing, "pause test play failed");
+    std::vector<std::byte> capturedBeforePause;
+    {
+        std::lock_guard lock(state->mutex);
+        capturedBeforePause = state->captured;
+    }
+    const auto paused = session.pause(1);
+    require(paused.outcome == AudioPlaybackOutcome::changed, "audio pause failed");
+    require(paused.state == AudioPlaybackState::paused, "audio pause lost state");
+    require(paused.generation == 1, "audio pause changed generation");
+    require(paused.clockAnchor.value.timelineFrame == 24, "audio pause changed clock anchor");
+    require(session.pause(1).outcome == AudioPlaybackOutcome::noOp, "repeat audio pause changed");
+    require(session.pause(2).outcome == AudioPlaybackOutcome::refused, "stale audio pause was accepted");
+
+    const auto pausedPosition = session.position(1);
+    require(pausedPosition.state == AudioPlaybackState::paused, "paused position lost state");
+    require(pausedPosition.hasClockAnchor, "paused position lost clock anchor");
+    const auto resumed = session.resume(1);
+    require(resumed.outcome == AudioPlaybackOutcome::changed, "audio resume failed");
+    require(resumed.state == AudioPlaybackState::playing, "audio resume lost state");
+    require(resumed.generation == 1, "audio resume changed generation");
+    require(resumed.clockAnchor.value.timelineFrame == 24, "audio resume changed clock anchor");
+    require(session.resume(1).outcome == AudioPlaybackOutcome::noOp, "repeat audio resume changed");
+    require(session.resume(2).outcome == AudioPlaybackOutcome::refused, "stale audio resume was accepted");
+
+    const auto pausedAgain = session.pause(1);
+    require(pausedAgain.state == AudioPlaybackState::paused, "second audio pause failed");
+    {
+        std::lock_guard lock(state->mutex);
+        require(state->captured == capturedBeforePause, "pause or resume flushed queued PCM");
+    }
+    const auto cancelled = session.cancel(1);
+    require(cancelled.state == AudioPlaybackState::cancelled, "paused audio cancel failed");
+    require(session.close().state == AudioPlaybackState::closed, "paused audio close failed");
+}
+
 void failedReplacementPreservesTheRunningGeneration() {
     TemporaryDirectory media;
     const auto input = media.write(
@@ -623,6 +670,10 @@ int main() {
         runCase(
             "trimmedPlaybackAnchorsAndHandsOffTheSameSourceRange",
             trimmedPlaybackAnchorsAndHandsOffTheSameSourceRange
+        );
+        runCase(
+            "pauseResumePreservesGenerationClockAndQueuedPcm",
+            pauseResumePreservesGenerationClockAndQueuedPcm
         );
         runCase(
             "failedReplacementPreservesTheRunningGeneration",

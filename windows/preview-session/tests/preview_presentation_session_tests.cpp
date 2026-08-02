@@ -109,6 +109,8 @@ struct PlaybackState final {
     HeadlessAvPlaybackState state{HeadlessAvPlaybackState::idle};
     std::size_t playCalls{};
     std::size_t tickCalls{};
+    std::size_t pauseCalls{};
+    std::size_t resumeCalls{};
     std::size_t cancelCalls{};
     std::size_t closeCalls{};
     std::deque<HeadlessAvPlaybackReceipt> plays;
@@ -250,6 +252,46 @@ public:
             value.hresult = E_FAIL;
         }
         return value;
+    }
+
+    HeadlessAvPlaybackReceipt pause(std::uint64_t expectedGeneration) override {
+        std::scoped_lock lock(state_->mutex);
+        ++state_->pauseCalls;
+        if (expectedGeneration != state_->generation) {
+            return playbackReceipt(
+                state_->generation,
+                state_->state,
+                HeadlessAvPlaybackOutcome::stale
+            );
+        }
+        const auto changed = state_->state != HeadlessAvPlaybackState::paused;
+        state_->state = HeadlessAvPlaybackState::paused;
+        return playbackReceipt(
+            state_->generation,
+            state_->state,
+            changed ? HeadlessAvPlaybackOutcome::changed
+                    : HeadlessAvPlaybackOutcome::noOp
+        );
+    }
+
+    HeadlessAvPlaybackReceipt resume(std::uint64_t expectedGeneration) override {
+        std::scoped_lock lock(state_->mutex);
+        ++state_->resumeCalls;
+        if (expectedGeneration != state_->generation) {
+            return playbackReceipt(
+                state_->generation,
+                state_->state,
+                HeadlessAvPlaybackOutcome::stale
+            );
+        }
+        const auto changed = state_->state != HeadlessAvPlaybackState::playing;
+        state_->state = HeadlessAvPlaybackState::playing;
+        return playbackReceipt(
+            state_->generation,
+            state_->state,
+            changed ? HeadlessAvPlaybackOutcome::changed
+                    : HeadlessAvPlaybackOutcome::noOp
+        );
     }
 
     HeadlessAvPlaybackReceipt snapshot() const override {
@@ -785,6 +827,45 @@ void invalidAndStaleRequestsDoNotReachOwnedPorts() {
     require(staleFixture.playback->tickCalls == 0, "stale generation reached playback");
 }
 
+void pauseResumePreservesGenerationAndCachedFrame() {
+    Fixture fixture;
+    start(fixture);
+    fixture.playback->ticks.push_back(tickReceipt(1, 3, 3072));
+    require(
+        fixture.session->tick(1).outcome == PreviewPresentationOutcome::presented,
+        "transport setup did not present"
+    );
+    const auto presentCalls = fixture.surface->presentCalls;
+    const auto tickCalls = fixture.playback->tickCalls;
+
+    const auto paused = fixture.session->pause(1);
+    require(paused.outcome == PreviewPresentationOutcome::changed, "preview pause failed");
+    require(paused.state == PreviewPresentationState::paused, "preview pause lost state");
+    require(paused.generation == 1, "preview pause changed generation");
+    require(paused.hasCachedFrame, "preview pause discarded cached frame");
+    require(fixture.surface->presentCalls == presentCalls, "preview pause touched surface");
+    require(
+        fixture.session->tick(1).outcome == PreviewPresentationOutcome::noOp,
+        "paused preview tick changed"
+    );
+    require(fixture.playback->tickCalls == tickCalls, "paused preview reached playback tick");
+    require(fixture.session->pause(1).outcome == PreviewPresentationOutcome::noOp, "repeat preview pause changed");
+    require(fixture.playback->pauseCalls == 1, "repeat preview pause reached playback");
+    require(
+        fixture.session->resume(2).outcome == PreviewPresentationOutcome::stale,
+        "stale preview resume was accepted"
+    );
+    require(fixture.playback->resumeCalls == 0, "stale preview resume reached playback");
+
+    const auto resumed = fixture.session->resume(1);
+    require(resumed.outcome == PreviewPresentationOutcome::changed, "preview resume failed");
+    require(resumed.state == PreviewPresentationState::playing, "preview resume lost state");
+    require(resumed.generation == 1, "preview resume changed generation");
+    require(resumed.hasCachedFrame, "preview resume discarded cached frame");
+    require(fixture.session->resume(1).outcome == PreviewPresentationOutcome::noOp, "repeat preview resume changed");
+    require(fixture.playback->resumeCalls == 1, "repeat preview resume reached playback");
+}
+
 void terminalSurfaceStopsPlayback() {
     Fixture fixture;
     fixture.surface->presentOutcomes = {D3d11PreviewSurfaceOutcome::invalidated};
@@ -991,6 +1072,7 @@ int main() {
         settingsCanChangeWithoutRestartingPlayback();
         sourceMappingChangeRequiresPlaybackRestart();
         invalidAndStaleRequestsDoNotReachOwnedPorts();
+        pauseResumePreservesGenerationAndCachedFrame();
         terminalSurfaceStopsPlayback();
         renderFailureStopsPlayback();
         cancellationAfterPlaybackStopsBeforeRender();

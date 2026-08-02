@@ -5,6 +5,7 @@
   "states": [
     "idle",
     "playing",
+    "paused",
     "completed",
     "cancelled",
     "invalidated",
@@ -28,6 +29,8 @@
     "audioPosition",
     "fillVideo",
     "selectVideo",
+    "pauseAudio",
+    "resumeAudio",
     "cancel",
     "close"
   ],
@@ -70,6 +73,7 @@
     "interruption": "cancel and close request the active operation stop handle before waiting for the state lock; exact-generation audio preparation receives that same stop token",
     "clock": "one cached generation-matched audio position is read per tick and passed unchanged to the presentation selector",
     "sourceStart": "one exact source-frame request is part of generation identity and is passed unchanged to both video and audio preparation before commit",
+    "transport": "same-generation pause and resume delegate once to audio, retain the prepared video cursor, and suppress clock reads and video selection while paused",
     "tick": "selection and at most the configured bounded fill calls continue until an early frame, video EOF, no progress, or budget exhaustion",
     "delivery": "one tick returns only its latest selected frame and counts every older selected or superseded due frame as dropped",
     "terminal": "video EOF does not end audio; audio completion, cancellation, invalidation, or failure terminates the A/V generation without extrapolating a clock",

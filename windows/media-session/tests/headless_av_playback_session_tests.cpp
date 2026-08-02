@@ -62,6 +62,8 @@ struct FakeAudioState final {
     AudioPlaybackState state{AudioPlaybackState::idle};
     std::size_t playCalls{};
     std::size_t positionCalls{};
+    std::size_t pauseCalls{};
+    std::size_t resumeCalls{};
     std::size_t cancelCalls{};
     std::size_t closeCalls{};
     bool failNextPlay{};
@@ -223,6 +225,40 @@ public:
         return audioReceipt(*state_, AudioPlaybackOutcome::cancelled);
     }
 
+    AudioPlaybackReceipt pause(std::uint64_t generation) override {
+        ++state_->pauseCalls;
+        if (generation != state_->generation) {
+            auto value = audioReceipt(*state_, AudioPlaybackOutcome::refused);
+            value.failure = AudioPlaybackFailureCode::invalidRequest;
+            value.hresult = E_INVALIDARG;
+            return value;
+        }
+        const auto changed = state_->state != AudioPlaybackState::paused;
+        state_->state = AudioPlaybackState::paused;
+        return audioReceipt(
+            *state_,
+            changed ? AudioPlaybackOutcome::changed : AudioPlaybackOutcome::noOp,
+            AudioPlaybackStage::pauseDevice
+        );
+    }
+
+    AudioPlaybackReceipt resume(std::uint64_t generation) override {
+        ++state_->resumeCalls;
+        if (generation != state_->generation) {
+            auto value = audioReceipt(*state_, AudioPlaybackOutcome::refused);
+            value.failure = AudioPlaybackFailureCode::invalidRequest;
+            value.hresult = E_INVALIDARG;
+            return value;
+        }
+        const auto changed = state_->state != AudioPlaybackState::playing;
+        state_->state = AudioPlaybackState::playing;
+        return audioReceipt(
+            *state_,
+            changed ? AudioPlaybackOutcome::changed : AudioPlaybackOutcome::noOp,
+            AudioPlaybackStage::resumeDevice
+        );
+    }
+
     AudioPlaybackReceipt snapshot() const override {
         return audioReceipt(*state_, AudioPlaybackOutcome::noOp);
     }
@@ -320,6 +356,40 @@ void startsVideoAndAudioAtTheSameTrimmedFrame() {
         tick.hasTargetTimelineFrame && tick.targetTimelineFrame == 0,
         "trimmed source start shifted the project timeline"
     );
+}
+
+void pauseAndResumePreserveGenerationAndStopClockTicks() {
+    const auto state = std::make_shared<FakeAudioState>();
+    auto playback = session(state);
+    const auto input = fixture("opaque-qtrle-three.mov");
+    const auto started = playback->play(input, 0, {10, 1});
+    require(started.generation == 1, "transport play failed");
+
+    const auto paused = playback->pause(1);
+    require(paused.outcome == HeadlessAvPlaybackOutcome::changed, "pause failed");
+    require(paused.state == HeadlessAvPlaybackState::paused, "pause lost state");
+    require(paused.generation == 1, "pause changed generation");
+    const auto positionsBeforeTick = state->positionCalls;
+    const auto held = playback->tick(1);
+    require(held.outcome == HeadlessAvPlaybackOutcome::noOp, "paused tick changed");
+    require(state->positionCalls == positionsBeforeTick, "paused tick read the clock");
+    require(playback->pause(1).outcome == HeadlessAvPlaybackOutcome::noOp, "repeat pause changed");
+    require(state->pauseCalls == 1, "repeat pause reached audio");
+    require(
+        playback->resume(2).outcome == HeadlessAvPlaybackOutcome::stale,
+        "stale resume was accepted"
+    );
+    require(state->resumeCalls == 0, "stale resume reached audio");
+
+    const auto resumed = playback->resume(1);
+    require(resumed.outcome == HeadlessAvPlaybackOutcome::changed, "resume failed");
+    require(resumed.state == HeadlessAvPlaybackState::playing, "resume lost state");
+    require(resumed.generation == 1, "resume changed generation");
+    require(playback->resume(1).outcome == HeadlessAvPlaybackOutcome::noOp, "repeat resume changed");
+    require(state->resumeCalls == 1, "repeat resume reached audio");
+    require(playback->pause(1).state == HeadlessAvPlaybackState::paused, "second pause failed");
+    require(playback->cancel(1).state == HeadlessAvPlaybackState::cancelled, "paused cancel failed");
+    playback->close();
 }
 
 void failedReplacementPreservesTheActiveGeneration() {
@@ -567,6 +637,7 @@ int main() {
     try {
         playsAndTicksOneRealVideoGeneration();
         startsVideoAndAudioAtTheSameTrimmedFrame();
+        pauseAndResumePreserveGenerationAndStopClockTicks();
         failedReplacementPreservesTheActiveGeneration();
         boundsCatchUpAndDeliversOnlyTheLatestFrame();
         noSampleAndAudioTerminalsDoNotGuessVideoTime();

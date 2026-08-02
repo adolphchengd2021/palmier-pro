@@ -1928,6 +1928,9 @@ private slots:
         QVERIFY(root->findChild<QObject*>(QStringLiteral("clipSpeedField")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("setClipTimingButton")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("previewViewport")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("pausePreviewButton")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("resumePreviewButton")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("previewTransportState")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("previewErrorState")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("emptyState")) != nullptr);
         auto* emptyState = root->findChild<QObject*>(QStringLiteral("emptyState"));
