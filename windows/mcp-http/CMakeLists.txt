@@ -3,7 +3,7 @@ set(mcp_http_include_dir "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_library(palmier_mcp_http STATIC mcp_http_server.cpp)
 target_include_directories(palmier_mcp_http PUBLIC "${mcp_http_include_dir}")
 target_compile_features(palmier_mcp_http PUBLIC cxx_std_20)
-target_link_libraries(palmier_mcp_http PUBLIC palmier_project_session Ws2_32)
+target_link_libraries(palmier_mcp_http PUBLIC palmier_project_runtime Ws2_32)
 
 add_executable(palmier_windows_mcp app/main.cpp)
 target_link_libraries(palmier_windows_mcp PRIVATE palmier_mcp_http Ole32)

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "palmier/project/project_session.hpp"
+#include "palmier/project/project_runtime.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -14,7 +14,7 @@ struct HttpServerOptions final {
 };
 
 int runHttpServer(
-    palmier::project::ProjectSession& projectSession,
+    palmier::project::ProjectRuntime& projectRuntime,
     const HttpServerOptions& options,
     const std::function<std::string()>& sessionIdGenerator
 );

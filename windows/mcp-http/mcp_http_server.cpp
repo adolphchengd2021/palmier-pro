@@ -102,6 +102,7 @@ struct HttpResponse final {
 struct SessionState final {
     bool initialized;
     std::chrono::steady_clock::time_point lastActivity;
+    std::uint64_t projectGeneration;
 };
 
 class HttpError final : public std::runtime_error {
@@ -403,9 +404,10 @@ HttpResponse jsonResponse(Value value, int status = 200, std::string reason = "O
 }
 
 Value invokeTool(
-    palmier::project::ProjectSession& session,
+    palmier::project::ProjectRuntime& runtime,
     std::string_view name,
-    const Value& arguments
+    const Value& arguments,
+    std::uint64_t expectedProjectGeneration
 ) {
     try {
         const auto& object = requireObject(arguments, "arguments");
@@ -427,7 +429,7 @@ Value invokeTool(
                 }
                 query.captionDetail = field->second.boolean();
             }
-            return toolSuccess(session.getTimeline(query));
+            return toolSuccess(runtime.getTimeline(query, expectedProjectGeneration).timeline);
         }
         if (name == "split_clips") {
             rejectUnknownKeys(object, {"splits", "trackIndex", "frames"}, name);
@@ -464,16 +466,21 @@ Value invokeTool(
                 }
                 command.frames = std::move(frames);
             }
-            auto result = session.splitClips(command);
-            return toolSuccess(std::move(*result.payload));
+            auto result = runtime.splitClips(
+                std::move(command),
+                expectedProjectGeneration
+            );
+            return toolSuccess(std::move(*result.command.payload));
         }
         if (name == "undo") {
             rejectUnknownKeys(object, {}, name);
-            auto result = session.undo();
-            return toolSuccess(std::move(*result.payload));
+            auto result = runtime.undo(expectedProjectGeneration);
+            return toolSuccess(std::move(*result.command.payload));
         }
         return toolFailure("toolNotImplemented", "tool is not implemented by the Windows technical MVP");
     } catch (const palmier::project::CommandError& error) {
+        return toolFailure(error.code, error.what());
+    } catch (const palmier::project::ProjectRuntimeError& error) {
         return toolFailure(error.code, error.what());
     } catch (const std::exception& error) {
         return toolFailure("internalError", error.what());
@@ -551,7 +558,7 @@ void pruneExpiredSessions(
 
 HttpResponse handleRequest(
     const HttpRequest& request,
-    palmier::project::ProjectSession& projectSession,
+    palmier::project::ProjectRuntime& projectRuntime,
     const HttpServerOptions& options,
     const std::function<std::string()>& sessionIdGenerator,
     std::map<std::string, SessionState, std::less<>>& sessions,
@@ -638,7 +645,11 @@ HttpResponse handleRequest(
             );
             sessions.erase(oldest);
         }
-        sessions.emplace(sessionId, SessionState{false, now});
+        sessions.emplace(sessionId, SessionState{
+            false,
+            now,
+            projectRuntime.projectGeneration(),
+        });
         auto response = jsonResponse(jsonRpcResult(id, Value(Object{
             {"capabilities", Value(Object{
                 {"tools", Value(Object{{"listChanged", Value(false)}})},
@@ -663,6 +674,10 @@ HttpResponse handleRequest(
     if (protocol == request.headers.end() || protocol->second != protocolVersion) {
         throw HttpError(400, "Bad Request", "missing or unsupported MCP protocol version");
     }
+    if (sessionState->second.projectGeneration != projectRuntime.projectGeneration()) {
+        sessions.erase(sessionState);
+        throw HttpError(409, "Conflict", "MCP session belongs to a replaced project");
+    }
     if (method == "notifications/initialized") {
         sessionState->second.initialized = true;
         return {202, "Accepted", {}, {}};
@@ -685,7 +700,12 @@ HttpResponse handleRequest(
             const auto& toolArguments = arguments == paramsObject.end()
                 ? emptyParams
                 : arguments->second;
-            return jsonResponse(jsonRpcResult(id, invokeTool(projectSession, name, toolArguments)));
+            return jsonResponse(jsonRpcResult(id, invokeTool(
+                projectRuntime,
+                name,
+                toolArguments,
+                sessionState->second.projectGeneration
+            )));
         } catch (const palmier::project::CommandError& error) {
             return jsonResponse(jsonRpcError(id, -32602, error.what()));
         }
@@ -707,7 +727,7 @@ HttpResponse errorResponse(const HttpError& error) {
 }
 
 int runHttpServer(
-    palmier::project::ProjectSession& projectSession,
+    palmier::project::ProjectRuntime& projectRuntime,
     const HttpServerOptions& options,
     const std::function<std::string()>& sessionIdGenerator
 ) {
@@ -790,7 +810,7 @@ int runHttpServer(
             const auto request = readRequest(client.get());
             response = handleRequest(
                 request,
-                projectSession,
+                projectRuntime,
                 options,
                 sessionIdGenerator,
                 sessions,

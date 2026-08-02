@@ -4536,12 +4536,21 @@ def windows_mcp_project_session_contract() -> None:
     session_tests = read_text(
         "core/project-session/tests/project_session_tests.cpp"
     )
+    runtime_header = read_text(
+        "core/project-runtime/include/palmier/project/project_runtime.hpp"
+    )
+    runtime_source = read_text("core/project-runtime/project_runtime.cpp")
+    runtime_tests = read_text(
+        "core/project-runtime/tests/project_runtime_tests.cpp"
+    )
+    runtime_cmake = read_text("core/project-runtime/CMakeLists.txt")
     server_source = read_text("windows/mcp-http/mcp_http_server.cpp")
     server_main = read_text("windows/mcp-http/app/main.cpp")
     server_cmake = read_text("windows/mcp-http/CMakeLists.txt")
     e2e = read_text("windows/mcp-http/tests/mcp_http_e2e.py")
     root_cmake = read_text("CMakeLists.txt")
     adr = read_text("docs/windows/adr/0026-loopback-mcp-project-session.md")
+    runtime_adr = read_text("docs/windows/adr/0027-serial-project-runtime.md")
     readme = read_text("docs/windows/README.md")
     for token in [
         "class ProjectSession final",
@@ -4591,6 +4600,54 @@ def windows_mcp_project_session_contract() -> None:
         if token not in session_tests:
             raise ContractError(f"ProjectSession test missing token {token!r}")
     for token in [
+        "class ProjectRuntime final",
+        "ProjectRuntimeState",
+        "ProjectRuntimeTimelineResult",
+        "ProjectRuntimeCommandResult",
+        "projectGeneration(",
+        "ProjectRuntimeObserver",
+        "operationCommitted() noexcept",
+        "markPersisted(",
+        "void close() noexcept",
+    ]:
+        if token not in runtime_header:
+            raise ContractError(f"ProjectRuntime API missing token {token!r}")
+    for token in [
+        "maximumPendingOperations",
+        "reentrantRuntimeCall",
+        "runtime.session && runtime.session->dirty() && !allowDiscardDirty",
+        "projectGeneration <= runtime.projectGeneration",
+        "runtime.session.swap(candidate)",
+        "runtime.requireProjectGeneration(expectedProjectGeneration)",
+        "runtime.observer->operationCommitted()",
+        "runtime.publishedSnapshot({})",
+        "if (admissionObserver) admissionObserver->operationAdmitted()",
+        "condition.wait",
+    ]:
+        if token not in runtime_source:
+            raise ContractError(f"ProjectRuntime invariant missing token {token!r}")
+    for token in [
+        "mutationPublishesOneSessionState",
+        "dirtyAndGenerationGatesProtectReplacement",
+        "operationsAreSerializedAndQueuedCancellationDoesNotCommit",
+        "cancellationAfterCommitStillPublishesSuccess",
+        "reentrancyAndCloseAreTerminal",
+        "emptyRuntimeRefusesQueries",
+    ]:
+        if token not in runtime_tests:
+            raise ContractError(f"ProjectRuntime test missing token {token!r}")
+    for token in ["palmier_project_runtime", "project_runtime.serial_owner"]:
+        if token not in runtime_cmake:
+            raise ContractError(f"ProjectRuntime CMake missing token {token!r}")
+    for token in [
+        "exactly one `ProjectSession`",
+        "positive, monotonically increasing generation",
+        "refuses a dirty active project",
+        "project replacement invalidates\nthe old protocol session",
+    ]:
+        if token not in runtime_adr:
+            raise ContractError(f"ProjectRuntime ADR missing token {token!r}")
+    for token in [
         "INADDR_LOOPBACK",
         "SO_EXCLUSIVEADDRUSE",
         "maximumHeaderBytes",
@@ -4598,6 +4655,10 @@ def windows_mcp_project_session_contract() -> None:
         "maximumSessions",
         "sessionIdleTimeout",
         "pruneExpiredSessions",
+        "sessionState->second.projectGeneration != projectRuntime.projectGeneration()",
+        "MCP session belongs to a replaced project",
+        "runtime.getTimeline(query, expectedProjectGeneration)",
+        "runtime.undo(expectedProjectGeneration)",
         "SO_RCVTIMEO",
         "mediaType(",
         "validateOrigin",
@@ -4608,7 +4669,7 @@ def windows_mcp_project_session_contract() -> None:
     ]:
         if token not in server_source:
             raise ContractError(f"Windows MCP server invariant missing token {token!r}")
-    for token in ["--project", "--port", "--exit-after-last-session", "ProjectSession"]:
+    for token in ["--project", "--port", "--exit-after-last-session", "ProjectRuntime"]:
         if token not in server_main:
             raise ContractError(f"Windows MCP process missing token {token!r}")
     for token in [
@@ -4634,6 +4695,7 @@ def windows_mcp_project_session_contract() -> None:
             raise ContractError(f"Windows MCP E2E missing token {token!r}")
     for token in [
         "add_subdirectory(core/project-session)",
+        "add_subdirectory(core/project-runtime)",
         "add_subdirectory(windows/mcp-http)",
     ]:
         if token not in root_cmake:

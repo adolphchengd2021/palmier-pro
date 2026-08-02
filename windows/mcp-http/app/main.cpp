@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 
@@ -71,8 +72,9 @@ int wmain(int argumentCount, wchar_t* arguments[]) {
             throw std::runtime_error("--project is required");
         }
         auto document = palmier::project::readProjectPackage(projectPath, newGuid);
-        palmier::project::ProjectSession session(document, newGuid);
-        return palmier::mcp::runHttpServer(session, options, newGuid);
+        palmier::project::ProjectRuntime runtime;
+        static_cast<void>(runtime.install(std::move(document), 1, newGuid));
+        return palmier::mcp::runHttpServer(runtime, options, newGuid);
     } catch (const std::exception& error) {
         std::cerr << "PALMIER_WINDOWS_MCP_FAILED " << error.what() << '\n';
         return 1;

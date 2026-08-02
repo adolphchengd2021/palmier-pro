@@ -61,14 +61,16 @@ Windows Server build also does not prove Windows 10 19045 runtime compatibility;
 that remains a clean-VM gate.
 
 The default build also provides `palmier_windows_mcp`. It loads one project
-projection before binding `127.0.0.1:19789`, then exposes only
-`get_timeline`, `split_clips`, and `undo` through a shared in-memory
-`ProjectSession`. A real-process CTest verifies discovery, stable-ID split,
+into a bounded serial `ProjectRuntime` before binding `127.0.0.1:19789`, then
+exposes only `get_timeline`, `split_clips`, and `undo` through the runtime's
+single owned `ProjectSession`. MCP protocol sessions pin the active project
+generation so a future project replacement cannot silently retarget them. A
+real-process CTest verifies discovery, stable-ID split,
 cross-session readback, invalid-request isolation, shared undo, hostile-Origin
 refusal, graceful exit, and port release. Clips carrying persisted fields not
 represented by the current C++ projection are refused. This does not prove Qt
 integration, project persistence, Windows 10 runtime behavior, or the remaining
-MCP surface. See ADR 0026 and
+MCP surface. See ADR 0026, ADR 0027, and
 `contracts/mcp/v1/windows-technical-mvp.json`.
 
 The render boundary is also compiled in Windows CI.
