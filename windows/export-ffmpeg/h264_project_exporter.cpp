@@ -680,6 +680,15 @@ void writePackets(
             );
         }
         av_packet_rescale_ts(packet, codec->time_base, stream->time_base);
+        packet->duration = av_rescale_q(1, codec->time_base, stream->time_base);
+        if (packet->duration <= 0) {
+            av_packet_unref(packet);
+            fail(
+                H264ExportFailureCode::encodeFailed,
+                "writePacket",
+                "encoded packet duration is not representable"
+            );
+        }
         packet->stream_index = stream->index;
         const int writeResult = av_interleaved_write_frame(output, packet);
         av_packet_unref(packet);

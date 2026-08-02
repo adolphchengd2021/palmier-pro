@@ -4361,6 +4361,7 @@ def windows_h264_project_export_contract() -> None:
         'avcodec_find_encoder_by_name("h264_mf")',
         "av_compare_ts(",
         "frame->duration = 1",
+        "packet->duration = av_rescale_q(",
         "stream->averageFrameRate",
         "FfmpegVideoFrameReader reader",
         "verifyOutput(staging.path()",
