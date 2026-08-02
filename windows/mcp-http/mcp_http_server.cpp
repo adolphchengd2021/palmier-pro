@@ -488,11 +488,13 @@ Value invokeTool(
                 }
                 command.frames = std::move(frames);
             }
-            return toolSuccess(session.splitClips(command).payload);
+            auto result = session.splitClips(command);
+            return toolSuccess(std::move(*result.payload));
         }
         if (name == "undo") {
             rejectUnknownKeys(object, {}, name);
-            return toolSuccess(session.undo().payload);
+            auto result = session.undo();
+            return toolSuccess(std::move(*result.payload));
         }
         return toolFailure("toolNotImplemented", "tool is not implemented by the Windows technical MVP");
     } catch (const palmier::project::CommandError& error) {

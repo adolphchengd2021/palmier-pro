@@ -559,7 +559,7 @@ CommandResult ProjectSession::splitClips(
         revisionBefore,
         revisionAfter,
         actionId,
-        Value(std::move(payload)),
+        std::make_unique<Value>(std::move(payload)),
     };
     checkCancellation(cancellation);
 
@@ -608,7 +608,7 @@ CommandResult ProjectSession::undo(std::stop_token cancellation) {
         revisionBefore,
         revisionAfter,
         pending.actionId,
-        Value(std::move(payload)),
+        std::make_unique<Value>(std::move(payload)),
     };
     checkCancellation(cancellation);
 

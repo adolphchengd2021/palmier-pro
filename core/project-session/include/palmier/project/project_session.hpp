@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -36,7 +37,7 @@ struct CommandResult final {
     std::uint64_t revisionBefore;
     std::uint64_t revisionAfter;
     std::string actionId;
-    palmier::json::Value payload;
+    std::unique_ptr<palmier::json::Value> payload;
 };
 
 class CommandError final : public std::runtime_error {
