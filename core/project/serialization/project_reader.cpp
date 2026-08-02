@@ -632,7 +632,7 @@ const std::vector<Diagnostic>& ProjectDocument::diagnostics() const noexcept {
     return diagnostics_;
 }
 ProjectDocumentDisposition ProjectDocument::disposition() const noexcept {
-    return ProjectDocumentDisposition::readOnly;
+    return ProjectDocumentDisposition::safeEdits;
 }
 
 ProjectDocument readProject(std::string_view source, const IdGenerator& idGenerator) {

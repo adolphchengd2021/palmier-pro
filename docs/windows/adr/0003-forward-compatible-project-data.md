@@ -1,6 +1,6 @@
 # ADR 0003: Preserve project data across platform round trips
 
-- Status: Accepted invariant; macOS canary enforced, Windows pending
+- Status: Accepted invariant; macOS and bounded Windows canaries enforced
 - Date: 2026-07-31
 - Owner: Project core
 - Applies to: P0
@@ -37,9 +37,10 @@ manifest, entry, generation, import, and media-source layers. The declared
 canaries pass a production `NSDocument` Save As and reopen test in macOS CI.
 The verified reference is commit `29d98f8`, CI run `30644474474`.
 
-The Windows writer does not exist yet. It must implement the same identity and
-replacement rules and pass differential round trips before this invariant is
-complete across platforms.
+The Windows technical writer now commits the full DOM from an exact runtime
+snapshot and passes the declared canaries after edit, save, close, and reopen.
+The proof is bounded to the supported split operation and `project.json`; full
+known-field editing and package-wide `media.json` transactions remain pending.
 
 ## Required proof
 
@@ -55,4 +56,4 @@ Schema acceptance or parser-only round trips do not satisfy this proof.
 
 ## Revisit when
 
-- The macOS and Windows serializers both pass the canary round trip.
+- The supported Windows mutation surface or package transaction expands.

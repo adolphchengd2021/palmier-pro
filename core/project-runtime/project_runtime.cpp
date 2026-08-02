@@ -254,6 +254,23 @@ ProjectRuntimeTimelineResult ProjectRuntime::getTimeline(
     });
 }
 
+ProjectRuntimeSaveSnapshotResult ProjectRuntime::saveSnapshot(
+    std::optional<std::uint64_t> expectedProjectGeneration,
+    std::stop_token cancellation
+) {
+    return implementation_->invoke<ProjectRuntimeSaveSnapshotResult>([
+        expectedProjectGeneration,
+        cancellation
+    ](Implementation& runtime) {
+        checkCancellation(cancellation);
+        runtime.requireProjectGeneration(expectedProjectGeneration);
+        return ProjectRuntimeSaveSnapshotResult{
+            runtime.projectGeneration,
+            runtime.requireSession().saveSnapshot(cancellation),
+        };
+    });
+}
+
 ProjectRuntimeCommandResult ProjectRuntime::splitClips(
     SplitClipsCommand command,
     std::optional<std::uint64_t> expectedProjectGeneration,

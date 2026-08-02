@@ -248,6 +248,32 @@ void persistenceAcknowledgementPublishesOnlyOnChange() {
     );
 }
 
+void saveSnapshotCarriesExactRuntimeIdentity() {
+    ProjectRuntime runtime;
+    int nextId = 0;
+    runtime.install(projectDocument(), 7, [&] {
+        return "save-id-" + std::to_string(++nextId);
+    });
+    const auto split = runtime.splitClips(
+        SplitClipsCommand{
+            std::vector<SplitPoint>{{"target", 40}}, std::nullopt, std::nullopt,
+        },
+        7
+    );
+    const auto saved = runtime.saveSnapshot(7);
+    require(saved.projectGeneration == 7, "save snapshot generation");
+    require(saved.snapshot.revision == split.session->revision, "save snapshot revision");
+    require(saved.snapshot.stateId == split.session->stateId, "save snapshot state identity");
+    require(
+        saved.snapshot.source.find("timelines") != nullptr,
+        "save snapshot retains the full source document"
+    );
+    requireRuntimeError(
+        [&] { static_cast<void>(runtime.saveSnapshot(6)); },
+        "staleProjectGeneration"
+    );
+}
+
 void operationsAreSerializedAndQueuedCancellationDoesNotCommit() {
     auto observer = std::make_shared<RuntimeObserver>();
     ProjectRuntime runtime(observer);
@@ -372,6 +398,7 @@ int main() {
         mutationPublishesOneSessionState();
         dirtyAndGenerationGatesProtectReplacement();
         persistenceAcknowledgementPublishesOnlyOnChange();
+        saveSnapshotCarriesExactRuntimeIdentity();
         operationsAreSerializedAndQueuedCancellationDoesNotCommit();
         cancellationAfterCommitStillPublishesSuccess();
         reentrancyAndCloseAreTerminal();

@@ -56,7 +56,7 @@ void currentFixture(const std::filesystem::path& root) {
     });
     require(document.rootKind() == palmier::project::RootKind::current, "current root kind");
     require(
-        document.disposition() == palmier::project::ProjectDocumentDisposition::readOnly,
+        document.disposition() == palmier::project::ProjectDocumentDisposition::safeEdits,
         "reader disposition"
     );
     require(document.diagnostics().empty(), "unexpected current diagnostics");

@@ -384,10 +384,21 @@ private:
     std::size_t position_ = 0;
 };
 
-void appendCanonicalString(std::string& output, std::string_view value) {
+void checkCanonicalCancellation(std::stop_token cancellation) {
+    if (cancellation.stop_requested()) {
+        throw Error("JSON canonicalization cancelled");
+    }
+}
+
+void appendCanonicalString(
+    std::string& output,
+    std::string_view value,
+    std::stop_token cancellation
+) {
     constexpr char hex[] = "0123456789abcdef";
     output.push_back('"');
     for (const auto raw : value) {
+        checkCanonicalCancellation(cancellation);
         const auto byte = static_cast<unsigned char>(raw);
         switch (byte) {
         case '"': output += "\\\""; break;
@@ -410,7 +421,12 @@ void appendCanonicalString(std::string& output, std::string_view value) {
     output.push_back('"');
 }
 
-void appendCanonical(std::string& output, const Value& value) {
+void appendCanonical(
+    std::string& output,
+    const Value& value,
+    std::stop_token cancellation
+) {
+    checkCanonicalCancellation(cancellation);
     switch (value.kind()) {
     case Value::Kind::nullValue:
         output += "null";
@@ -422,7 +438,7 @@ void appendCanonical(std::string& output, const Value& value) {
         output += value.number().lexeme;
         return;
     case Value::Kind::string:
-        appendCanonicalString(output, value.string());
+        appendCanonicalString(output, value.string(), cancellation);
         return;
     case Value::Kind::array: {
         output.push_back('[');
@@ -432,7 +448,7 @@ void appendCanonical(std::string& output, const Value& value) {
                 output.push_back(',');
             }
             first = false;
-            appendCanonical(output, child);
+            appendCanonical(output, child, cancellation);
         }
         output.push_back(']');
         return;
@@ -445,9 +461,9 @@ void appendCanonical(std::string& output, const Value& value) {
                 output.push_back(',');
             }
             first = false;
-            appendCanonicalString(output, key);
+            appendCanonicalString(output, key, cancellation);
             output.push_back(':');
-            appendCanonical(output, child);
+            appendCanonical(output, child, cancellation);
         }
         output.push_back('}');
         return;
@@ -533,8 +549,12 @@ Value read(const std::filesystem::path& path) {
 }
 
 std::string canonical(const Value& value) {
+    return canonical(value, {});
+}
+
+std::string canonical(const Value& value, std::stop_token cancellation) {
     std::string output;
-    appendCanonical(output, value);
+    appendCanonical(output, value, cancellation);
     return output;
 }
 

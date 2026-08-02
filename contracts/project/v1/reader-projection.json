@@ -1,9 +1,9 @@
 {
   "contractVersion": 1,
   "sourceCommit": "5a3695cda5a37db6af6fc495187fd05f5fec4dd3",
-  "status": "read-only-prototype",
+  "status": "safe-edit-prototype",
   "sourceRepresentation": "full-json-dom",
-  "writerAvailable": false,
+  "writerAvailable": true,
   "projectionComplete": false,
   "rootKinds": [
     "current",

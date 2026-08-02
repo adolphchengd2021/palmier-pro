@@ -1532,9 +1532,9 @@ def windows_project_reader_contract() -> None:
         projection["sourceCommit"],
         "5a3695cda5a37db6af6fc495187fd05f5fec4dd3",
     )
-    require_equal("project reader status", projection["status"], "read-only-prototype")
+    require_equal("project reader status", projection["status"], "safe-edit-prototype")
     require_equal("project reader source", projection["sourceRepresentation"], "full-json-dom")
-    require_equal("project writer availability", projection["writerAvailable"], False)
+    require_equal("project writer availability", projection["writerAvailable"], True)
     require_equal("project projection completion", projection["projectionComplete"], False)
     require_equal("project root kinds", projection["rootKinds"], ["current", "legacy"])
     require_equal(
@@ -1578,6 +1578,7 @@ def windows_project_reader_contract() -> None:
         "palmier::json::Value source_",
         "EntityIdOrigin origin",
         "ProjectDocumentDisposition disposition() const noexcept",
+        "safeEdits",
     ]:
         if token not in model_header:
             raise ContractError(f"project reader model missing token {token!r}")
@@ -1636,10 +1637,57 @@ def windows_project_reader_contract() -> None:
         "strict, full JSON",
         "never falls back to legacy decoding",
         "injected generator",
-        "No Windows writer",
+        "ADR 0030",
     ]:
         if token not in adr:
             raise ContractError(f"project reader ADR missing token {token!r}")
+
+    writer_header = read_text(
+        "windows/project-package/include/palmier/project/windows_project_package_writer.hpp"
+    )
+    writer_source = read_text("windows/project-package/windows_project_package_writer.cpp")
+    writer_tests = read_text(
+        "windows/project-package/tests/windows_project_package_writer_tests.cpp"
+    )
+    writer_cmake = read_text("windows/project-package/CMakeLists.txt")
+    writer_adr = read_text("docs/windows/adr/0030-atomic-project-json-writer.md")
+    for token in [
+        "ProjectPackageWriteReceipt",
+        "runtimeAcknowledged",
+        "runtimeDirty",
+        "ProjectPackageWriteWarning",
+    ]:
+        if token not in writer_header:
+            raise ContractError(f"project writer header missing token {token!r}")
+    for token in [
+        "FlushFileBuffers",
+        "FileRenameInfo",
+        "destinationChanged",
+        "runtime.markPersisted",
+        "defaultMaximumProjectJsonBytes",
+    ]:
+        if token not in writer_source:
+            raise ContractError(f"project writer source missing token {token!r}")
+    for token in [
+        "editSaveRestartPreservesCanariesAndState",
+        "savingAnOlderSnapshotLeavesNewerRuntimeDirty",
+        "committedSaveReportsClosedRuntimeAsWarning",
+        "committedSaveConvertsUnexpectedAcknowledgementFailureToWarning",
+        "cancellationPreservesDestinationAndCleansStaging",
+        "concurrentExternalReplacementIsExcluded",
+    ]:
+        if token not in writer_tests:
+            raise ContractError(f"project writer tests missing token {token!r}")
+    if "project_package.write_restart_round_trip" not in writer_cmake:
+        raise ContractError("project writer CMake is missing the restart test")
+    for token in [
+        "same-volume sibling staging",
+        "single handle-based atomic replacement",
+        "save snapshot state ID",
+        "does not provide autosave",
+    ]:
+        if token not in writer_adr:
+            raise ContractError(f"project writer ADR missing token {token!r}")
 
 
 def windows_render_plan_contract() -> None:
@@ -4853,7 +4901,7 @@ def main() -> int:
         ("media schema and Swift source", media_source_contract),
         ("project fixtures and canaries", project_fixtures),
         ("Windows toolchain and compiled probe", windows_bootstrap_contract),
-        ("Windows read-only project reader", windows_project_reader_contract),
+        ("Windows safe-edit project document", windows_project_reader_contract),
         ("Windows render plan and D3D11 WARP", windows_render_plan_contract),
         ("Windows decoded-frame render adapter", windows_media_render_adapter_contract),
         ("Windows presentation video buffer", windows_presentation_video_buffer_contract),

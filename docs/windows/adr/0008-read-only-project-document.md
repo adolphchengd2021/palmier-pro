@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for the M0 Windows prototype.
+Accepted for the M0 reader. Write availability is superseded by ADR 0030.
 
 ## Decision
 
@@ -33,11 +33,14 @@ false: clip effects, transforms, fades, text, keyframes, view state, speakers,
 multicam data, media metadata, and other known or future fields remain available
 only through the full source DOM in this milestone.
 
+ADR 0030 changes the document disposition to `safeEdits`: the typed projection
+is still incomplete, while each domain operation must refuse entities whose
+unrepresented semantics it cannot preserve.
+
 ## Consequences
 
 - The prototype can inspect real current and legacy fixtures without losing
   unknown JSON values in memory.
 - Canonical source replay proves parser retention, not save compatibility.
-- No Windows writer or package mutation is permitted yet.
-- A future writer must merge changes into the full DOM and pass cross-platform
-  load-edit-save-reopen canaries before the read-only disposition can change.
+- The original milestone had no Windows writer. ADR 0030 adds a bounded
+  `project.json` writer without making the typed projection complete.

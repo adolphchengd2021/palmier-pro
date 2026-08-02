@@ -6,11 +6,12 @@ current macOS product. It is not a conditional Swift build.
 ## Current stage
 
 M0 establishes product decisions, compatibility contracts, fixtures, drift
-checks, the compiled MSVC contract probe, and a read-only C++ project document.
+checks, the compiled MSVC contract probe, and a safe-edit C++ project document.
 It now includes an optional read-only Qt shell, isolated media/audio prototypes,
-one bounded project-driven H.264 export slice, and a three-tool loopback MCP
-editing slice. It does not yet provide a persistent editor, project writer,
-audio export, integrated export UI, or installer.
+one bounded project-driven H.264 export slice, a three-tool loopback MCP editing
+slice, and an atomic `project.json` edit-save-restart slice. It does not yet
+provide a persistent editor UI, autosave, Save As, audio export, integrated
+export UI, or installer.
 
 - Requirements: `docs/WINDOWS_10_PORT_REQUIREMENTS.zh-CN.md`
 - Decisions: `docs/windows/adr/`
@@ -28,8 +29,8 @@ The audit verifies source snapshots, a supported local JSON Schema subset,
 fixture structure, and type-sensitive canaries. It is not a complete Draft
 2020-12 validator. A macOS integration test additionally requires declared
 unknown-field canaries to survive a production load, edit, `NSDocument` Save
-As, and reopen. Full known-field coverage and the future Windows writer remain
-separate gates.
+As, and reopen. The Windows writer now enforces the same declared canaries for
+its bounded safe-edit slice; full known-field coverage remains a separate gate.
 
 The media contract additionally compares every persisted Swift field signature,
 optionality, required decode field, `ClipType`, and `MediaSource` payload with
@@ -52,8 +53,9 @@ The C++ path uses one strict full-DOM parser, rejects duplicate keys and invalid
 UTF-8, checks the v1 boundary, and derives a read-only project projection for
 current and legacy fixtures. CTest compares the projection with an independent
 Python oracle, verifies canonical source retention including unknown fields,
-and covers Unicode paths and negative boundaries. The projection is explicitly
-incomplete and no writer exists; see ADR 0008 and
+and covers Unicode paths and negative boundaries. The projection remains
+incomplete, but supported `ProjectSession` edits can now save the full DOM with
+an atomic sibling replacement and restart proof; see ADR 0008, ADR 0030, and
 `contracts/project/v1/reader-projection.json`.
 
 This does not replace the Python schema and Swift-source audit. The GitHub
@@ -85,8 +87,10 @@ An atomic non-Qt mailbox assigns every runtime publication a monotonic token;
 one latest-only background projection refreshes the Qt model, invalidates stale
 playback on edits, and rejects a result unless its token is still current.
 Shutdown drains MCP, project loading, projection, preview, and the runtime
-without joining their workers on the GUI thread. Project persistence and a
-restart proof remain open; see ADR 0028 and ADR 0029.
+without joining their workers on the GUI thread. A background writer now saves
+an exact runtime snapshot and acknowledges only that state after the atomic disk
+commit. Autosave, Save As, close protection, and Qt save controls remain open;
+see ADR 0028, ADR 0029, and ADR 0030.
 
 The render boundary is also compiled in Windows CI.
 `core/render` defines the immutable v1 RenderPlan and CPU oracle;

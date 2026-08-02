@@ -79,7 +79,7 @@ struct Diagnostic final {
 };
 
 enum class ProjectDocumentDisposition {
-    readOnly,
+    safeEdits,
 };
 
 class ProjectDocument final {

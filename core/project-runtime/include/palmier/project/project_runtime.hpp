@@ -22,6 +22,11 @@ struct ProjectRuntimeTimelineResult final {
     palmier::json::Value timeline;
 };
 
+struct ProjectRuntimeSaveSnapshotResult final {
+    std::uint64_t projectGeneration;
+    ProjectSaveSnapshot snapshot;
+};
+
 struct ProjectRuntimeCommandResult final {
     std::uint64_t projectGeneration;
     CommandResult command;
@@ -65,6 +70,10 @@ public:
     std::uint64_t projectGeneration(std::stop_token cancellation = {});
     ProjectRuntimeTimelineResult getTimeline(
         const TimelineQuery& query = {},
+        std::optional<std::uint64_t> expectedProjectGeneration = {},
+        std::stop_token cancellation = {}
+    );
+    ProjectRuntimeSaveSnapshotResult saveSnapshot(
         std::optional<std::uint64_t> expectedProjectGeneration = {},
         std::stop_token cancellation = {}
     );

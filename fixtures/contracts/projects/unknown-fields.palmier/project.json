@@ -72,6 +72,23 @@
                 "clip",
                 1
               ]
+            },
+            {
+              "id": "clip-save-target",
+              "mediaRef": "media-canary-1",
+              "mediaType": "video",
+              "sourceClipType": "video",
+              "startFrame": 60,
+              "durationFrames": 60,
+              "trimStartFrame": 0,
+              "trimEndFrame": 0,
+              "speed": 1,
+              "volume": 1,
+              "opacity": 1,
+              "blendMode": "normal",
+              "linkGroupId": null,
+              "captionGroupId": null,
+              "multicamGroupId": null
             }
           ],
           "x-contract-track": true

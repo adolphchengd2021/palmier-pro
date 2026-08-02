@@ -65,6 +65,7 @@ Value parse(std::string_view source);
 Value parse(std::string_view source, std::stop_token cancellation);
 Value read(const std::filesystem::path& path);
 std::string canonical(const Value& value);
+std::string canonical(const Value& value, std::stop_token cancellation);
 std::string pathForDiagnostic(const std::filesystem::path& path) noexcept;
 
 }
