@@ -408,6 +408,7 @@ void removeLinkedGroupPrunesAndUndoesExactly() {
     require(removed.publication->undoDepth == 1, "remove undo depth");
     const auto& removedIds = at(*removed.payload, "removedClipIds").array();
     require(removedIds.size() == 2, "linked remove receipt");
+    require(at(*removed.payload, "clips").array().empty(), "remove receipt clips must be empty");
     require(
         at(*removed.payload, "notes").array().front().string().find("Track indices shifted")
             != std::string::npos,

@@ -1580,6 +1580,7 @@ CommandResult ProjectSession::removeClips(
     };
     auto payload = receiptBase(true, revisionBefore, revisionAfter, actionId);
     payload["removedClipIds"] = Value(std::move(removed));
+    payload.emplace("clips", Value(Array{}));
     if (prunedTrackCount > 0) {
         payload["notes"] = Value(Array{Value(
             "Track indices shifted - re-read get_timeline before the next index-based call."
