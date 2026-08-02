@@ -170,9 +170,20 @@ void exportsAndIndependentlyDecodesEveryFrame(
     require(video->codecName == "h264", "exported MP4 codec changed");
     require(video->width == 64 && video->height == 64, "exported dimensions changed");
     require(
+        video->averageFrameRate.numerator == 10
+            && video->averageFrameRate.denominator == 1,
+        "exported average frame cadence changed"
+    );
+    require(
         video->realFrameRate.numerator == 10
             && video->realFrameRate.denominator == 1,
         "exported frame cadence changed"
+    );
+    require(video->duration.has_value(), "exported stream duration is missing");
+    require(
+        *video->duration * video->timeBase.numerator * 10
+            == 5LL * video->timeBase.denominator,
+        "exported stream duration changed"
     );
 
     FfmpegVideoFrameReader reader(destination);

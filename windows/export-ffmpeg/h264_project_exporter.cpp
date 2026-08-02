@@ -727,7 +727,18 @@ std::uint64_t verifyOutput(
         || stream->codecName != "h264"
         || stream->width != static_cast<std::int32_t>(layer.canvasWidth)
         || stream->height != static_cast<std::int32_t>(layer.canvasHeight)
-        || !isExactRate(stream->realFrameRate, layer.framesPerSecond)) {
+        || !isExactRate(stream->averageFrameRate, layer.framesPerSecond)
+        || !isExactRate(stream->realFrameRate, layer.framesPerSecond)
+        || stream->timeBase.numerator <= 0
+        || stream->timeBase.denominator <= 0
+        || !stream->duration.has_value()
+        || *stream->duration <= 0
+        || av_compare_ts(
+            *stream->duration,
+            {stream->timeBase.numerator, stream->timeBase.denominator},
+            layer.durationFrames,
+            {1, layer.framesPerSecond}
+        ) != 0) {
         const std::string detail = stream == probe.streams.end()
             ? "encoded output has no video stream"
             : "encoded stream contract differs: codec="
@@ -741,7 +752,11 @@ std::uint64_t verifyOutput(
                 + ", realRate="
                 + rationalText(stream->realFrameRate)
                 + ", timeBase="
-                + rationalText(stream->timeBase);
+                + rationalText(stream->timeBase)
+                + ", duration="
+                + (stream->duration.has_value()
+                    ? std::to_string(*stream->duration)
+                    : "unknown");
         fail(
             H264ExportFailureCode::verificationFailed,
             "verifyProbe",
@@ -1160,6 +1175,7 @@ H264ProjectExportReceipt exportStaticProjectH264Impl(
             );
         }
         frame->pts = index;
+        frame->duration = 1;
         writePackets(
             codec.get(),
             output.get(),
