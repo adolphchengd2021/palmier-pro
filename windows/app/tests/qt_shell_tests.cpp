@@ -297,10 +297,12 @@ private slots:
             std::nullopt,
             std::nullopt,
         });
+        const auto splitRevision = split.session->revision;
+        const auto splitStateId = split.session->stateId;
         palmier::windows::ProjectPersistenceController persistence(
             runtime,
             mailbox,
-            [runtimeAcknowledged, split](
+            [runtimeAcknowledged, splitRevision, splitStateId](
                 palmier::project::ProjectRuntime&,
                 const std::filesystem::path&,
                 std::optional<std::uint64_t> generation,
@@ -308,8 +310,8 @@ private slots:
             ) {
                 return palmier::project::ProjectPackageWriteReceipt{
                     generation.value_or(0),
-                    split.session->revision,
-                    split.session->stateId,
+                    splitRevision,
+                    splitStateId,
                     1,
                     runtimeAcknowledged,
                     true,
