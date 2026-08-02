@@ -39,6 +39,7 @@ using palmier::media::AudioPlaybackOutcome;
 using palmier::media::AudioPlaybackSession;
 using palmier::media::AudioPlaybackStage;
 using palmier::media::AudioPlaybackState;
+using palmier::media::DecodeFrameStart;
 using palmier::media::FfmpegAudioFrameReader;
 using palmier::media::test_support::TemporaryDirectory;
 using palmier::media::test_support::require;
@@ -251,6 +252,23 @@ std::vector<std::byte> expectedPcm(const std::filesystem::path& input) {
     }
 }
 
+std::vector<std::byte> expectedPcm(
+    const std::filesystem::path& input,
+    DecodeFrameStart start
+) {
+    FfmpegAudioFrameReader reader(input, stereo48k(), start);
+    std::vector<std::byte> bytes;
+    for (;;) {
+        auto block = reader.nextBlock();
+        if (!block.has_value()) return bytes;
+        bytes.insert(
+            bytes.end(),
+            block->interleavedBytes.begin(),
+            block->interleavedBytes.end()
+        );
+    }
+}
+
 void automaticRenderClockCannotLoseProgressToCancellation() {
     auto state = std::make_shared<PlaybackStreamState>();
     PlaybackStream stream(state);
@@ -332,6 +350,31 @@ void playsRealPcmToOneTerminalAndAnchorsTheClock() {
     for (const DWORD thread : state->nativeThreads) {
         require(thread == state->constructedThread, "native call crossed device thread");
     }
+}
+
+void trimmedPlaybackAnchorsAndHandsOffTheSameSourceRange() {
+    TemporaryDirectory media;
+    const auto input = media.write(
+        "trimmed-patterned.wav",
+        palmier::media::test_fixtures::patternedPcmWav
+    );
+    const DecodeFrameStart start{1, {100, 1}};
+    const auto expected = expectedPcm(input, start);
+    auto state = std::make_shared<PlaybackStreamState>();
+    AudioPlaybackSession session(outputWorker(state));
+
+    const auto started = session.play(input, 12, start);
+    require(started.outcome == AudioPlaybackOutcome::changed, "trimmed audio play failed");
+    require(started.clockAnchor.value.timelineFrame == 12, "trimmed timeline anchor changed");
+    require(
+        started.clockAnchor.sourcePresentationTimestamp == 240,
+        "trimmed source anchor did not move to the requested frame"
+    );
+    const auto terminal = session.waitForTerminal(started.generation);
+    require(terminal.state == AudioPlaybackState::completed, "trimmed audio did not complete");
+    require(terminal.acceptedFrames == 1'056, "trimmed audio frame count changed");
+    std::lock_guard lock(state->mutex);
+    require(state->captured == expected, "trimmed playback changed the decoded source range");
 }
 
 void failedReplacementPreservesTheRunningGeneration() {
@@ -576,6 +619,10 @@ int main() {
         runCase(
             "playsRealPcmToOneTerminalAndAnchorsTheClock",
             playsRealPcmToOneTerminalAndAnchorsTheClock
+        );
+        runCase(
+            "trimmedPlaybackAnchorsAndHandsOffTheSameSourceRange",
+            trimmedPlaybackAnchorsAndHandsOffTheSameSourceRange
         );
         runCase(
             "failedReplacementPreservesTheRunningGeneration",

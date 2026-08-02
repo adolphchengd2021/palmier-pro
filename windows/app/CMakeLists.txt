@@ -201,8 +201,8 @@ if(BUILD_TESTING)
         malformedEarlierVisualCannotBeSkippedForLaterCandidate
     )
     add_palmier_qt_shell_test(
-        unsupported_timing_cannot_be_skipped
-        unsupportedTimingCannotBeSkippedForLaterCandidate
+        trimmed_timing_remains_first_candidate
+        trimmedTimingRemainsTheFirstPreviewCandidate
     )
     add_palmier_qt_shell_test(
         overlapping_visual_layer_is_explicitly_refused

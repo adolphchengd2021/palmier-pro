@@ -81,6 +81,12 @@ public:
         const std::filesystem::path& input,
         std::stop_token cancellation = {}
     );
+    PresentationAudioReceipt start(
+        std::uint64_t generation,
+        const std::filesystem::path& input,
+        DecodeFrameStart start,
+        std::stop_token cancellation = {}
+    );
     PresentationAudioReceipt fill(
         std::uint64_t generation,
         std::stop_token cancellation = {}
@@ -96,6 +102,12 @@ private:
         PresentationAudioOutcome outcome,
         std::uint32_t admittedFrames = 0
     ) const noexcept;
+    PresentationAudioReceipt startInternal(
+        std::uint64_t generation,
+        const std::filesystem::path& input,
+        std::optional<DecodeFrameStart> start,
+        std::stop_token cancellation
+    );
     void terminate(PresentationAudioDecodeState state);
 
     PresentationAudioDecodeLimits limits_;
@@ -104,6 +116,7 @@ private:
     std::size_t pendingFrameOffset_{};
     std::deque<DecodedAudioBlock> queue_;
     std::filesystem::path inputIdentity_;
+    std::optional<DecodeFrameStart> decodeStart_;
     std::uint64_t generation_{};
     std::uint32_t queuedFrames_{};
     PresentationAudioDecodeState state_{PresentationAudioDecodeState::idle};

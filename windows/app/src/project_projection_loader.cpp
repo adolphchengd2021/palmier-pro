@@ -37,8 +37,8 @@ bool supportedClip(const palmier::project::Clip& clip) {
     return checkedClipEnd(clip).has_value()
         && clip.mediaType == "video"
         && clip.sourceClipType == "video"
-        && clip.trimStartFrame == 0
-        && clip.trimEndFrame == 0
+        && clip.trimStartFrame >= 0
+        && clip.trimEndFrame >= 0
         && clip.speed == 1
         && std::isfinite(clip.opacity)
         && clip.opacity >= 0

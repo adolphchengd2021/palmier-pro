@@ -24,7 +24,8 @@
     "maximumBytes": 268435456,
     "maximumPixels": 8294400,
     "maximumFramesPerFill": 4,
-    "maximumConfigurableFramesPerFill": 32
+    "maximumConfigurableFramesPerFill": 32,
+    "maximumFramesBeforeSeekTarget": 4096
   },
   "errors": [
     "decodeLimitExceedsRenderBudget",
@@ -54,12 +55,13 @@
     "fillBudget": "one fill admits at most the configured 1 to 32 frames independent of queue capacity",
     "generation": "opening a replacement succeeds before the new generation clears queued or pending state",
     "inputIdentity": "the exact input path cannot change within one generation",
+    "sourceStart": "an exact-CFR source frame start is part of generation identity; the demuxer seeks backward, decoder state is flushed, pre-target frames are bounded, and the first published PTS must exactly match",
     "cancellation": "fill throws a cancelled media error after cancellation terminates and clears only the current generation",
     "handoff": "atomically select one immutable normalized frame from a generation and revision current audio clock before synchronous preview or export rendering",
     "selection": "the real three-frame fixture is selected at its exact PTS through the decode pump before CPU and WARP rendering"
   },
   "excluded": [
-    "seek and frame-rate conversion",
+    "frame-rate conversion and VFR mapping",
     "thread creation or executor scheduling",
     "physical-device audio synchronization and drift correction",
     "interactive swap-chain presentation",

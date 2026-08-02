@@ -42,6 +42,7 @@ struct Command final {
     CommandKind kind{CommandKind::close};
     std::filesystem::path input;
     std::int64_t timelineFrame{};
+    std::optional<DecodeFrameStart> decodeStart;
     std::uint64_t expectedGeneration{};
     std::stop_token cancellation;
     std::shared_ptr<CommandCompletion> completion;
@@ -51,6 +52,17 @@ struct PlaybackSourceAnchor final {
     std::int64_t presentationTimestamp{};
     Rational timeBase;
 };
+
+bool sameStart(
+    const std::optional<DecodeFrameStart>& lhs,
+    const std::optional<DecodeFrameStart>& rhs
+) noexcept {
+    if (lhs.has_value() != rhs.has_value()) return false;
+    return !lhs.has_value()
+        || (lhs->frameIndex == rhs->frameIndex
+            && lhs->frameRate.numerator == rhs->frameRate.numerator
+            && lhs->frameRate.denominator == rhs->frameRate.denominator);
+}
 
 void complete(
     const std::shared_ptr<CommandCompletion>& completion,
@@ -128,6 +140,14 @@ public:
         return command(CommandKind::play, input, timelineFrame, 0);
     }
 
+    AudioPlaybackReceipt play(
+        const std::filesystem::path& input,
+        std::int64_t timelineFrame,
+        DecodeFrameStart start
+    ) {
+        return command(CommandKind::play, input, timelineFrame, 0, {}, start);
+    }
+
     AudioPlaybackReceipt playExactGeneration(
         const std::filesystem::path& input,
         std::int64_t timelineFrame,
@@ -147,6 +167,30 @@ public:
             timelineFrame,
             generation,
             cancellation
+        );
+    }
+
+    AudioPlaybackReceipt playExactGeneration(
+        const std::filesystem::path& input,
+        std::int64_t timelineFrame,
+        DecodeFrameStart start,
+        std::uint64_t generation,
+        std::stop_token cancellation
+    ) {
+        if (generation == 0) {
+            auto value = snapshot();
+            value.outcome = AudioPlaybackOutcome::refused;
+            value.failure = AudioPlaybackFailureCode::invalidRequest;
+            value.hresult = E_INVALIDARG;
+            return value;
+        }
+        return command(
+            CommandKind::play,
+            input,
+            timelineFrame,
+            generation,
+            cancellation,
+            start
         );
     }
 
@@ -378,7 +422,8 @@ private:
         const std::filesystem::path& input,
         std::int64_t timelineFrame,
         std::uint64_t expectedGeneration,
-        std::stop_token cancellation = {}
+        std::stop_token cancellation = {},
+        std::optional<DecodeFrameStart> decodeStart = {}
     ) {
         auto completion = std::make_shared<CommandCompletion>();
         {
@@ -405,6 +450,7 @@ private:
                 kind,
                 input,
                 timelineFrame,
+                decodeStart,
                 expectedGeneration,
                 cancellation,
                 completion,
@@ -788,7 +834,11 @@ private:
             }
         );
         const auto previous = snapshot();
-        if (commandValue.input.empty() || commandValue.timelineFrame < 0) {
+        if (commandValue.input.empty() || commandValue.timelineFrame < 0
+            || (commandValue.decodeStart.has_value()
+                && (commandValue.decodeStart->frameIndex < 0
+                    || commandValue.decodeStart->frameRate.numerator <= 0
+                    || commandValue.decodeStart->frameRate.denominator <= 0))) {
             auto value = previous;
             value.outcome = AudioPlaybackOutcome::refused;
             value.failure = AudioPlaybackFailureCode::invalidRequest;
@@ -798,6 +848,7 @@ private:
         if (previous.state == AudioPlaybackState::playing
             && commandValue.input == input_
             && commandValue.timelineFrame == timelineFrame_
+            && sameStart(commandValue.decodeStart, decodeStart_)
             && (commandValue.expectedGeneration == 0
                 || commandValue.expectedGeneration == generation_)) {
             auto value = previous;
@@ -898,11 +949,20 @@ private:
                     {},
                 }
             );
-            candidate->start(
-                nextGeneration,
-                commandValue.input,
-                commandToken
-            );
+            if (commandValue.decodeStart.has_value()) {
+                candidate->start(
+                    nextGeneration,
+                    commandValue.input,
+                    *commandValue.decodeStart,
+                    commandToken
+                );
+            } else {
+                candidate->start(
+                    nextGeneration,
+                    commandValue.input,
+                    commandToken
+                );
+            }
         } catch (const MediaError& error) {
             const auto value = mediaFailureReceipt(
                 error,
@@ -1002,6 +1062,7 @@ private:
         generation_ = nextGeneration;
         input_ = commandValue.input;
         timelineFrame_ = commandValue.timelineFrame;
+        decodeStart_ = commandValue.decodeStart;
         sourceCursor_.reset();
         sourceAnchor_.reset();
         outputCursor_ = 0;
@@ -1468,6 +1529,7 @@ private:
     std::filesystem::path input_;
     std::uint64_t generation_{};
     std::int64_t timelineFrame_{};
+    std::optional<DecodeFrameStart> decodeStart_;
     std::optional<std::int64_t> sourceCursor_;
     std::optional<PlaybackSourceAnchor> sourceAnchor_;
     std::uint64_t outputCursor_{};
@@ -1491,6 +1553,14 @@ AudioPlaybackReceipt AudioPlaybackSession::play(
     return impl_->play(input, timelineFrame);
 }
 
+AudioPlaybackReceipt AudioPlaybackSession::play(
+    const std::filesystem::path& input,
+    std::int64_t timelineFrame,
+    DecodeFrameStart start
+) {
+    return impl_->play(input, timelineFrame, start);
+}
+
 AudioPlaybackReceipt AudioPlaybackSession::playExactGeneration(
     const std::filesystem::path& input,
     std::int64_t timelineFrame,
@@ -1500,6 +1570,22 @@ AudioPlaybackReceipt AudioPlaybackSession::playExactGeneration(
     return impl_->playExactGeneration(
         input,
         timelineFrame,
+        generation,
+        cancellation
+    );
+}
+
+AudioPlaybackReceipt AudioPlaybackSession::playExactGeneration(
+    const std::filesystem::path& input,
+    std::int64_t timelineFrame,
+    DecodeFrameStart start,
+    std::uint64_t generation,
+    std::stop_token cancellation
+) {
+    return impl_->playExactGeneration(
+        input,
+        timelineFrame,
+        start,
         generation,
         cancellation
     );

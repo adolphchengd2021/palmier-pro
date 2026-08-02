@@ -23,6 +23,17 @@ bool isTerminal(PresentationAudioDecodeState state) noexcept {
         || state == PresentationAudioDecodeState::failed;
 }
 
+bool sameStart(
+    const std::optional<DecodeFrameStart>& lhs,
+    const std::optional<DecodeFrameStart>& rhs
+) noexcept {
+    if (lhs.has_value() != rhs.has_value()) return false;
+    return !lhs.has_value()
+        || (lhs->frameIndex == rhs->frameIndex
+            && lhs->frameRate.numerator == rhs->frameRate.numerator
+            && lhs->frameRate.denominator == rhs->frameRate.denominator);
+}
+
 }
 
 PresentationAudioDecodeError::PresentationAudioDecodeError(
@@ -63,11 +74,29 @@ PresentationAudioReceipt PresentationAudioDecodePump::start(
     const std::filesystem::path& input,
     std::stop_token cancellation
 ) {
+    return startInternal(generation, input, {}, cancellation);
+}
+
+PresentationAudioReceipt PresentationAudioDecodePump::start(
+    std::uint64_t generation,
+    const std::filesystem::path& input,
+    DecodeFrameStart start,
+    std::stop_token cancellation
+) {
+    return startInternal(generation, input, start, cancellation);
+}
+
+PresentationAudioReceipt PresentationAudioDecodePump::startInternal(
+    std::uint64_t generation,
+    const std::filesystem::path& input,
+    std::optional<DecodeFrameStart> start,
+    std::stop_token cancellation
+) {
     if (generation == 0 || generation < generation_) {
         return receipt(PresentationAudioOutcome::stale);
     }
     if (generation == generation_) {
-        if (input != inputIdentity_) {
+        if (input != inputIdentity_ || !sameStart(start, decodeStart_)) {
             fail(
                 PresentationAudioDecodeErrorCode::changedInputWithinGeneration,
                 "audio input cannot change within one generation"
@@ -77,12 +106,20 @@ PresentationAudioReceipt PresentationAudioDecodePump::start(
     }
 
     auto nextInputIdentity = input;
-    auto nextReader = std::make_unique<FfmpegAudioFrameReader>(
-        input,
-        limits_.targetFormat,
-        limits_.decode,
-        cancellation
-    );
+    auto nextReader = start.has_value()
+        ? std::make_unique<FfmpegAudioFrameReader>(
+            input,
+            limits_.targetFormat,
+            *start,
+            limits_.decode,
+            cancellation
+        )
+        : std::make_unique<FfmpegAudioFrameReader>(
+            input,
+            limits_.targetFormat,
+            limits_.decode,
+            cancellation
+        );
     if (cancellation.stop_requested()) {
         throw MediaError(MediaFailureCode::cancelled, "before-audio-generation-commit", 0);
     }
@@ -92,6 +129,7 @@ PresentationAudioReceipt PresentationAudioDecodePump::start(
     queue_.clear();
     queuedFrames_ = 0;
     inputIdentity_.swap(nextInputIdentity);
+    decodeStart_ = start;
     generation_ = generation;
     state_ = PresentationAudioDecodeState::ready;
     return receipt(PresentationAudioOutcome::changed);

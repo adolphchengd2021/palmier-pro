@@ -909,8 +909,7 @@ H264ProjectExportReceipt exportStaticProjectH264Impl(
             error.code + " at " + error.jsonPointer
         );
     }
-    if (layer.sourceStartFrame != 0
-        || layer.canvasWidth < 2
+    if (layer.canvasWidth < 2
         || layer.canvasHeight < 2
         || (layer.canvasWidth % 2) != 0
         || (layer.canvasHeight % 2) != 0) {
@@ -1109,6 +1108,10 @@ H264ProjectExportReceipt exportStaticProjectH264Impl(
     try {
         reader = std::make_unique<media::FfmpegVideoFrameReader>(
             request.input,
+            media::DecodeFrameStart{
+                layer.sourceStartFrame,
+                {layer.framesPerSecond, 1},
+            },
             media::DecodeLimits{},
             cancellation
         );
@@ -1145,9 +1148,12 @@ H264ProjectExportReceipt exportStaticProjectH264Impl(
                 "source ended before the compiled clip"
             );
         }
+        const std::int64_t timelineFrame = layer.timelineStartFrame + index;
+        const auto plan = project_render::makeRenderPlan(layer, timelineFrame);
+        const auto expectedSourceFrame = plan.layers().front().sourceFrame;
         requireExactTimestamp(
             *decoded,
-            index,
+            expectedSourceFrame,
             layer.framesPerSecond,
             "decodeSource",
             H264ExportFailureCode::unsupportedSourceTiming
@@ -1165,11 +1171,11 @@ H264ProjectExportReceipt exportStaticProjectH264Impl(
                 );
             }
         }();
-        const std::int64_t timelineFrame = layer.timelineStartFrame + index;
-        const auto plan = project_render::makeRenderPlan(layer, timelineFrame);
         const auto resolver = [&](std::string_view mediaId, std::int64_t sourceFrame)
             -> const render::SourceFrame* {
-            return mediaId == layer.mediaId && sourceFrame == index ? &source : nullptr;
+            return mediaId == layer.mediaId && sourceFrame == expectedSourceFrame
+                ? &source
+                : nullptr;
         };
         const auto rendered = [&] {
             try {

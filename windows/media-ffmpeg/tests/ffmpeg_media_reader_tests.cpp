@@ -21,6 +21,7 @@ namespace {
 
 using palmier::media::AlphaMode;
 using palmier::media::DecodeLimits;
+using palmier::media::DecodeFrameStart;
 using palmier::media::FfmpegMediaReader;
 using palmier::media::FfmpegAudioFrameReader;
 using palmier::media::FfmpegVideoFrameReader;
@@ -263,6 +264,54 @@ void decodesPresentationOrderedFrames(const std::filesystem::path& input) {
     );
 }
 
+void seeksToExactPresentationFrame(const std::filesystem::path& input) {
+    FfmpegVideoFrameReader reader(input, DecodeFrameStart{1, {10, 1}});
+    const auto frame = reader.nextFrame();
+    require(frame.has_value(), "seeked video ended before its target");
+    require(frame->presentationTimestamp == 1'024, "seeked video returned the wrong PTS");
+    require(
+        frame->rgba8[0] == 0 && frame->rgba8[1] == 255
+            && frame->rgba8[2] == 255 && frame->rgba8[3] == 255,
+        "seeked video returned the wrong source pixels"
+    );
+    const auto next = reader.nextFrame();
+    require(next.has_value(), "seeked video lost its following frame");
+    require(next->presentationTimestamp == 2'048, "seeked cursor did not remain ordered");
+    require(!reader.nextFrame().has_value(), "seeked video has extra frames");
+
+    requireError(
+        [&] {
+            static_cast<void>(FfmpegVideoFrameReader(
+                input,
+                DecodeFrameStart{-1, {10, 1}}
+            ));
+        },
+        MediaFailureCode::invalidSeekTarget
+    );
+    requireError(
+        [&] {
+            static_cast<void>(FfmpegVideoFrameReader(
+                input,
+                DecodeFrameStart{1, {11, 1}}
+            ));
+        },
+        MediaFailureCode::unsupportedSourceTiming
+    );
+    std::stop_source cancellation;
+    cancellation.request_stop();
+    requireError(
+        [&] {
+            static_cast<void>(FfmpegVideoFrameReader(
+                input,
+                DecodeFrameStart{1, {10, 1}},
+                {},
+                cancellation.get_token()
+            ));
+        },
+        MediaFailureCode::cancelled
+    );
+}
+
 void cancellationTerminatesCursor(const std::filesystem::path& input) {
     FfmpegVideoFrameReader reader(input);
     require(reader.nextFrame().has_value(), "cursor did not decode its first frame");
@@ -338,6 +387,38 @@ void decodesExactCanonicalPcm(const std::filesystem::path& input) {
         require(sampleAt(decoded, index) == patternedSample(index), "PCM sample changed");
     }
     require(!reader.nextBlock().has_value(), "audio EOF is not stable");
+}
+
+void seeksAudioToExactProjectFrame(const std::filesystem::path& input) {
+    const PcmFormat mono24k{
+        24'000,
+        1,
+        16,
+        16,
+        2,
+        0x4,
+        PcmSampleEncoding::integer,
+        true,
+    };
+    FfmpegAudioFrameReader reader(
+        input,
+        mono24k,
+        DecodeFrameStart{1, {100, 1}}
+    );
+    const auto block = reader.nextBlock();
+    require(block.has_value(), "seeked audio ended before its target");
+    require(block->startOutputSample == 240, "seeked audio returned the wrong sample");
+    require(
+        block->sourcePresentationTimestamp == 240
+            && block->sourceTimeBase.numerator == 1
+            && block->sourceTimeBase.denominator == 24'000,
+        "seeked audio returned the wrong source anchor"
+    );
+    require(block->frameCount != 0, "seeked audio returned an empty block");
+    require(
+        sampleAt(block->interleavedBytes, 0) == patternedSample(240),
+        "seeked audio returned the wrong source sample"
+    );
 }
 
 void resamplesAndRemixesCanonicalPcm(const std::filesystem::path& input) {
@@ -622,8 +703,10 @@ int main() {
         decodesPlayableAac(h264Aac);
         decodesStraightAlphaAndRotation(qtrle);
         decodesPresentationOrderedFrames(opaqueThreeFrames);
+        seeksToExactPresentationFrame(opaqueThreeFrames);
         cancellationTerminatesCursor(opaqueThreeFrames);
         decodesExactCanonicalPcm(patternedPcm);
+        seeksAudioToExactProjectFrame(patternedPcm);
         resamplesAndRemixesCanonicalPcm(patternedPcm);
         audioCursorCancellationIsTerminal(patternedPcm);
         validatesAudioFailureBoundaries(qtrle);

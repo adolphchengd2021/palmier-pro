@@ -29,6 +29,7 @@ public:
     virtual AudioPlaybackReceipt playExactGeneration(
         const std::filesystem::path& input,
         std::int64_t timelineFrame,
+        std::optional<DecodeFrameStart> decodeStart,
         std::uint64_t generation,
         std::stop_token cancellation
     ) = 0;
@@ -126,6 +127,13 @@ public:
         audio::FrameRate timelineFrameRate,
         std::stop_token cancellation = {}
     );
+    HeadlessAvPlaybackReceipt play(
+        const std::filesystem::path& input,
+        std::int64_t timelineFrame,
+        audio::FrameRate timelineFrameRate,
+        DecodeFrameStart start,
+        std::stop_token cancellation = {}
+    );
     HeadlessAvPlaybackReceipt tick(
         std::uint64_t expectedGeneration,
         std::stop_token cancellation = {}
@@ -157,6 +165,13 @@ private:
         std::int32_t mediaFailureCode = -1
     );
     HeadlessAvPlaybackReceipt cancelCurrent();
+    HeadlessAvPlaybackReceipt playInternal(
+        const std::filesystem::path& input,
+        std::int64_t timelineFrame,
+        audio::FrameRate timelineFrameRate,
+        std::optional<DecodeFrameStart> decodeStart,
+        std::stop_token cancellation
+    );
 
     mutable std::mutex mutex_;
     mutable std::mutex operationMutex_;
@@ -168,6 +183,7 @@ private:
     std::uint64_t generation_{};
     std::int64_t timelineFrame_{};
     audio::FrameRate timelineFrameRate_;
+    std::optional<DecodeFrameStart> decodeStart_;
     HeadlessAvPlaybackState state_{HeadlessAvPlaybackState::idle};
     std::optional<HeadlessAvPlaybackReceipt> closeReceipt_;
     bool closeRequested_{};

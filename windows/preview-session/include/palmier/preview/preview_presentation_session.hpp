@@ -97,6 +97,7 @@ public:
         const std::filesystem::path& input,
         std::int64_t timelineFrame,
         audio::FrameRate timelineFrameRate,
+        media::DecodeFrameStart decodeStart,
         std::stop_token cancellation
     ) = 0;
     virtual media::HeadlessAvPlaybackReceipt tick(

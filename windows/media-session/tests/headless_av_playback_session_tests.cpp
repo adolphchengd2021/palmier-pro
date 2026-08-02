@@ -74,7 +74,9 @@ struct FakeAudioState final {
     std::uint64_t sampleDelta{};
     std::int32_t sourceTimeBaseNumerator{1};
     std::int32_t sourceTimeBaseDenominator{40};
+    std::int64_t sourcePresentationTimestamp{};
     std::int64_t timelineFrame{};
+    std::optional<palmier::media::DecodeFrameStart> decodeStart;
     std::mutex gateMutex;
     std::condition_variable gateCondition;
     bool gateNextPlay{};
@@ -101,7 +103,7 @@ AudioPlaybackReceipt audioReceipt(
                 state.clockFrequency,
                 state.timelineFrame,
             },
-            0,
+            state.sourcePresentationTimestamp,
             state.sourceTimeBaseNumerator,
             state.sourceTimeBaseDenominator,
             0,
@@ -119,6 +121,7 @@ public:
     AudioPlaybackReceipt playExactGeneration(
         const std::filesystem::path&,
         std::int64_t timelineFrame,
+        std::optional<palmier::media::DecodeFrameStart> decodeStart,
         std::uint64_t generation,
         std::stop_token cancellation
     ) override {
@@ -158,6 +161,10 @@ public:
         }
         state_->generation = generation;
         state_->timelineFrame = timelineFrame;
+        state_->decodeStart = decodeStart;
+        state_->sourcePresentationTimestamp = decodeStart.has_value()
+            ? decodeStart->frameIndex * 4
+            : 0;
         if (state_->failAfterCommit) {
             state_->failAfterCommit = false;
             state_->state = AudioPlaybackState::failed;
@@ -283,6 +290,36 @@ void playsAndTicksOneRealVideoGeneration() {
     require(playback->close().state == HeadlessAvPlaybackState::closed, "close failed");
     require(playback->close().state == HeadlessAvPlaybackState::closed, "repeat close changed");
     require(state->closeCalls == 1, "repeat close reached audio twice");
+}
+
+void startsVideoAndAudioAtTheSameTrimmedFrame() {
+    TemporaryDirectory media;
+    const auto input = media.write(
+        "trimmed-av.mov",
+        palmier::media::test_fixtures::qtrleOpaqueThreeFrames
+    );
+    auto state = std::make_shared<FakeAudioState>();
+    auto playback = session(state);
+    const palmier::media::DecodeFrameStart start{1, {10, 1}};
+
+    const auto started = playback->play(input, 0, {10, 1}, start);
+    require(started.outcome == HeadlessAvPlaybackOutcome::changed, "trimmed play failed");
+    require(
+        state->decodeStart.has_value()
+            && state->decodeStart->frameIndex == 1
+            && state->sourcePresentationTimestamp == 4,
+        "trimmed source start did not reach audio"
+    );
+    const auto tick = playback->tick(started.generation);
+    require(tick.frame.has_value(), "trimmed clock returned no video frame");
+    require(
+        tick.frame->presentationTimestamp == 1'024,
+        "trimmed clock selected the wrong source frame"
+    );
+    require(
+        tick.hasTargetTimelineFrame && tick.targetTimelineFrame == 0,
+        "trimmed source start shifted the project timeline"
+    );
 }
 
 void failedReplacementPreservesTheActiveGeneration() {
@@ -529,6 +566,7 @@ void validatesRequestsCancellationAndConcurrentClose() {
 int main() {
     try {
         playsAndTicksOneRealVideoGeneration();
+        startsVideoAndAudioAtTheSameTrimmedFrame();
         failedReplacementPreservesTheActiveGeneration();
         boundsCatchUpAndDeliversOnlyTheLatestFrame();
         noSampleAndAudioTerminalsDoNotGuessVideoTime();

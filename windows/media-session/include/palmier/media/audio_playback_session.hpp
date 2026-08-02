@@ -2,6 +2,7 @@
 
 #include "palmier/audio/audio_clock.hpp"
 #include "palmier/audio/wasapi_output_worker.hpp"
+#include "palmier/media/ffmpeg_media_reader.hpp"
 
 #include <Windows.h>
 
@@ -105,9 +106,21 @@ public:
         const std::filesystem::path& input,
         std::int64_t timelineFrame = 0
     );
+    AudioPlaybackReceipt play(
+        const std::filesystem::path& input,
+        std::int64_t timelineFrame,
+        DecodeFrameStart start
+    );
     AudioPlaybackReceipt playExactGeneration(
         const std::filesystem::path& input,
         std::int64_t timelineFrame,
+        std::uint64_t generation,
+        std::stop_token cancellation = {}
+    );
+    AudioPlaybackReceipt playExactGeneration(
+        const std::filesystem::path& input,
+        std::int64_t timelineFrame,
+        DecodeFrameStart start,
         std::uint64_t generation,
         std::stop_token cancellation = {}
     );

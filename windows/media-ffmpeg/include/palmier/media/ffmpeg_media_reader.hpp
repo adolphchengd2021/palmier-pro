@@ -94,14 +94,21 @@ struct DecodedAudioBlock final {
 struct DecodeLimits final {
     std::uint64_t maximumPixels{67'108'864};
     std::uint32_t maximumPacketsBeforeFrame{4'096};
+    std::uint32_t maximumFramesBeforeSeekTarget{4'096};
     std::int64_t maximumProbeBytes{5 * 1024 * 1024};
     std::int64_t maximumAnalyzeMicroseconds{5'000'000};
     std::uint32_t maximumAudioFramesPerBlock{65'536};
 };
 
+struct DecodeFrameStart final {
+    std::int64_t frameIndex{};
+    Rational frameRate;
+};
+
 enum class MediaFailureCode {
     invalidLimits,
     unsupportedInputProtocol,
+    invalidSeekTarget,
     cancelled,
     openFailed,
     streamInfoFailed,
@@ -115,6 +122,9 @@ enum class MediaFailureCode {
     conversionFailed,
     unsupportedAudioFormat,
     discontinuousAudioTimestamp,
+    unsupportedSourceTiming,
+    seekFailed,
+    seekTargetUnavailable,
 };
 
 class MediaError final : public std::runtime_error {
@@ -140,6 +150,12 @@ public:
         const DecodeLimits& limits = {},
         std::stop_token cancellation = {}
     );
+    FfmpegVideoFrameReader(
+        const std::filesystem::path& input,
+        DecodeFrameStart start,
+        const DecodeLimits& limits = {},
+        std::stop_token cancellation = {}
+    );
     ~FfmpegVideoFrameReader();
 
     FfmpegVideoFrameReader(const FfmpegVideoFrameReader&) = delete;
@@ -161,6 +177,13 @@ public:
     FfmpegAudioFrameReader(
         const std::filesystem::path& input,
         audio::PcmFormat targetFormat,
+        const DecodeLimits& limits = {},
+        std::stop_token cancellation = {}
+    );
+    FfmpegAudioFrameReader(
+        const std::filesystem::path& input,
+        audio::PcmFormat targetFormat,
+        DecodeFrameStart start,
         const DecodeLimits& limits = {},
         std::stop_token cancellation = {}
     );

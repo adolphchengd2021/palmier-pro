@@ -124,9 +124,16 @@ public:
         const std::filesystem::path& input,
         std::int64_t timelineFrame,
         audio::FrameRate timelineFrameRate,
+        media::DecodeFrameStart decodeStart,
         std::stop_token cancellation
     ) override {
-        return playback_.play(input, timelineFrame, timelineFrameRate, cancellation);
+        return playback_.play(
+            input,
+            timelineFrame,
+            timelineFrameRate,
+            decodeStart,
+            cancellation
+        );
     }
 
     media::HeadlessAvPlaybackReceipt tick(
@@ -302,7 +309,7 @@ PreviewPresentationReceipt PreviewPresentationSession::play(
         );
     }
     if (settings.renderLayer.framesPerSecond <= 0
-        || settings.renderLayer.sourceStartFrame != 0
+        || settings.renderLayer.sourceStartFrame < 0
         || timelineFrameRate.denominator != 1
         || timelineFrameRate.numerator
             != static_cast<std::uint32_t>(settings.renderLayer.framesPerSecond)) {
@@ -329,6 +336,10 @@ PreviewPresentationReceipt PreviewPresentationSession::play(
         input,
         timelineFrame,
         timelineFrameRate,
+        media::DecodeFrameStart{
+            settings.renderLayer.sourceStartFrame,
+            {settings.renderLayer.framesPerSecond, 1},
+        },
         operation->cancellation.get_token()
     );
     const auto playbackOutcome = outcomeFor(playback.outcome);

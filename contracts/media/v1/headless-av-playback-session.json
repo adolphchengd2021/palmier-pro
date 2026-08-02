@@ -69,6 +69,7 @@
     "postCommitTerminal": "an audio failure after exact-generation commit advances the coordinator to that generation, terminates its video candidate, and permits the next exact generation",
     "interruption": "cancel and close request the active operation stop handle before waiting for the state lock; exact-generation audio preparation receives that same stop token",
     "clock": "one cached generation-matched audio position is read per tick and passed unchanged to the presentation selector",
+    "sourceStart": "one exact source-frame request is part of generation identity and is passed unchanged to both video and audio preparation before commit",
     "tick": "selection and at most the configured bounded fill calls continue until an early frame, video EOF, no progress, or budget exhaustion",
     "delivery": "one tick returns only its latest selected frame and counts every older selected or superseded due frame as dropped",
     "terminal": "video EOF does not end audio; audio completion, cancellation, invalidation, or failure terminates the A/V generation without extrapolating a clock",
@@ -79,7 +80,7 @@
     "interactive swap-chain presentation",
     "physical-device audible A/V synchronization",
     "final hardware endpoint position at audio completion",
-    "seek, scrub, speed change, and drift correction",
+    "interactive scrub, speed change, and drift correction",
     "device recovery",
     "Windows 10 runtime certification"
   ]

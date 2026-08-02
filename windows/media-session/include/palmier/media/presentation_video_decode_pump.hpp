@@ -24,8 +24,10 @@ struct PresentationVideoDecodeLimits final {
     DecodeLimits decode{
         render::maximumRenderFramePixels,
         4'096,
+        4'096,
         5 * 1024 * 1024,
         5'000'000,
+        65'536,
     };
     std::size_t maximumFramesPerFill{4};
 };
@@ -83,6 +85,12 @@ public:
         const std::filesystem::path& input,
         std::stop_token cancellation = {}
     );
+    PresentationVideoReceipt start(
+        std::uint64_t generation,
+        const std::filesystem::path& input,
+        DecodeFrameStart start,
+        std::stop_token cancellation = {}
+    );
     PresentationVideoFillReceipt fill(
         std::uint64_t generation,
         std::stop_token cancellation = {}
@@ -112,6 +120,12 @@ private:
         PresentationVideoOutcome outcome,
         std::size_t admittedFrames
     ) const noexcept;
+    PresentationVideoReceipt startInternal(
+        std::uint64_t generation,
+        const std::filesystem::path& input,
+        std::optional<DecodeFrameStart> start,
+        std::stop_token cancellation
+    );
     void terminate(PresentationVideoDecodeState state);
 
     PresentationVideoDecodeLimits limits_;
@@ -119,6 +133,7 @@ private:
     std::unique_ptr<FfmpegVideoFrameReader> reader_;
     std::optional<DecodedVideoFrame> pendingFrame_;
     std::filesystem::path inputIdentity_;
+    std::optional<DecodeFrameStart> decodeStart_;
     StartCommitCheckpoint startCommitCheckpoint_;
     PresentationVideoDecodeState state_{PresentationVideoDecodeState::idle};
 };

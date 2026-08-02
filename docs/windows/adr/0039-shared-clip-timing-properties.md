@@ -32,18 +32,18 @@ remain intact. Save persists the resulting DOM; Undo and Redo restore exact
 before and after states. Failed, cancelled, and exact no-op requests do not add
 history or invalidate Redo.
 
-The Windows MCP inventory does not expose `set_clip_properties` yet. The current
-preview cursor cannot seek nonzero source trims or general speed safely, so
-advertising the full macOS tool would claim an edit/playback loop that is not
-implemented. MCP exposure follows the complete property schema and seek-capable
-preview/export path, not a Windows-only `trim_clips` tool.
+The Windows MCP inventory does not expose `set_clip_properties` yet. ADR 0040
+subsequently adds exact-CFR source-head seeking, while general speed remains
+unsupported. Advertising the full macOS tool would still claim a property
+schema and retimed edit/playback loop that are not implemented. MCP exposure
+follows that complete contract, not a Windows-only `trim_clips` tool.
 
 ## Consequences
 
 - Qt and future MCP property editing reuse one mutation and history owner.
 - Linked A/V timing, duration-dependent authored data, persistence, and exact
   history are covered before interactive trim handles are added.
-- A timing edit can make the current prototype preview explicitly unavailable
-  until source seeking and retiming reach the shared render path.
+- A speed edit can make the current prototype preview explicitly unavailable
+  until retiming reaches the shared render path.
 - Manual Windows UI verification remains required for focus, field editing,
   disabled states, selection changes, Undo/Redo, close, and lifecycle behavior.

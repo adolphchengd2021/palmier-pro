@@ -34,7 +34,8 @@ using palmier::media::test_support::require;
 
 palmier::project::ProjectDocument document(
     std::string_view fps = "10",
-    std::string_view duration = "5"
+    std::string_view duration = "5",
+    std::string_view trimStart = "0"
 ) {
     const std::string source = std::string(R"({
         "timelines":[{
@@ -47,7 +48,9 @@ palmier::project::ProjectDocument document(
                     "sourceClipType":"video","startFrame":0,
                     "durationFrames":)"
         + std::string(duration)
-        + R"(,"trimStartFrame":0,"trimEndFrame":0,"speed":1,
+        + R"(,"trimStartFrame":)"
+        + std::string(trimStart)
+        + R"(,"trimEndFrame":0,"speed":1,
                     "opacity":0.75,"blendMode":"normal",
                     "transform":{
                         "centerX":0.5,"centerY":0.5,"width":1,"height":1,
@@ -217,6 +220,23 @@ void exportsAndIndependentlyDecodesEveryFrame(
     }
     require(frames == 5, "independent output decode frame count changed");
     require(maximumRed > minimumRed, "exported video lost visible pixel variation");
+}
+
+void exportsFromTheCompiledSourceStart(
+    const std::filesystem::path& input,
+    const std::filesystem::path& destination
+) {
+    const auto receipt = palmier::exporting::exportStaticProjectH264(
+        document("10", "4", "1"),
+        request(input, destination)
+    );
+    require(receipt.encodedFrames == 4, "trimmed export frame count changed");
+    require(receipt.verifiedFrames == 4, "trimmed export verification count changed");
+
+    FfmpegVideoFrameReader reader(destination);
+    std::uint64_t decodedFrames{};
+    while (reader.nextFrame()) ++decodedFrames;
+    require(decodedFrames == 4, "trimmed output did not contain four frames");
 }
 
 void selectedClipWorkflowExportsAndIndependentlyDecodes(
@@ -692,6 +712,10 @@ int main(int argumentCount, char* arguments[]) {
         try {
             const auto destination = directory.path() / "export.mp4";
             exportsAndIndependentlyDecodesEveryFrame(input, destination);
+            exportsFromTheCompiledSourceStart(
+                input,
+                directory.path() / "trimmed-export.mp4"
+            );
             requireNoStagingFiles(directory.path());
             selectedClipWorkflowExportsAndIndependentlyDecodes(directory);
             replacementInstallsOnlyVerifiedOutput(directory, input);

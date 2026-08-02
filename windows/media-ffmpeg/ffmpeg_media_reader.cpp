@@ -243,6 +243,50 @@ Rational rational(AVRational value) {
     return {value.num, value.den};
 }
 
+AVRational frameDuration(const DecodeFrameStart& start) {
+    return {start.frameRate.denominator, start.frameRate.numerator};
+}
+
+void validateDecodeFrameStart(const DecodeFrameStart& start) {
+    if (start.frameIndex < 0
+        || start.frameRate.numerator <= 0
+        || start.frameRate.denominator <= 0) {
+        fail(MediaFailureCode::invalidSeekTarget, "validate-seek-target");
+    }
+}
+
+bool exactFrameRate(const AVStream& stream, const DecodeFrameStart& start) {
+    const AVRational expected{
+        start.frameRate.numerator,
+        start.frameRate.denominator,
+    };
+    return stream.avg_frame_rate.num > 0
+        && stream.avg_frame_rate.den > 0
+        && stream.r_frame_rate.num > 0
+        && stream.r_frame_rate.den > 0
+        && av_cmp_q(stream.avg_frame_rate, expected) == 0
+        && av_cmp_q(stream.r_frame_rate, expected) == 0;
+}
+
+std::int64_t seekTimestamp(
+    const DecodeFrameStart& start,
+    AVRational timeBase
+) {
+    if (timeBase.num <= 0 || timeBase.den <= 0) {
+        fail(MediaFailureCode::unsupportedSourceTiming, "seek-time-base");
+    }
+    const auto timestamp = av_rescale_q_rnd(
+        start.frameIndex,
+        frameDuration(start),
+        timeBase,
+        static_cast<AVRounding>(AV_ROUND_DOWN | AV_ROUND_PASS_MINMAX)
+    );
+    if (timestamp < 0) {
+        fail(MediaFailureCode::unsupportedSourceTiming, "seek-timestamp-overflow");
+    }
+    return timestamp;
+}
+
 ColorMetadata colorMetadata(const AVCodecParameters& parameters) {
     return {
         static_cast<std::int32_t>(parameters.color_primaries),
@@ -378,6 +422,7 @@ FormatOwner openInput(
             std::numeric_limits<std::int64_t>::max()
         )
         || limits.maximumPacketsBeforeFrame == 0
+        || limits.maximumFramesBeforeSeekTarget == 0
         || limits.maximumProbeBytes <= 0
         || limits.maximumAnalyzeMicroseconds <= 0
         || limits.maximumAudioFramesPerBlock == 0
@@ -705,7 +750,8 @@ public:
         DecodeLimits limits,
         AVMediaType mediaType,
         MediaFailureCode missingStreamCode,
-        std::stop_token cancellation
+        std::stop_token cancellation,
+        std::optional<DecodeFrameStart> start = {}
     ) : limits_(limits), interrupt_{cancellation}, format_(nullptr) {
         format_ = openInput(input, limits_, interrupt_);
         streamIndex_ = av_find_best_stream(
@@ -755,6 +801,19 @@ public:
         if (packet_.get() == nullptr || frame_.get() == nullptr) {
             fail(MediaFailureCode::resourceLimitExceeded, "allocate-decode-buffer");
         }
+        if (start.has_value()) {
+            validateDecodeFrameStart(*start);
+            if (mediaType == AVMEDIA_TYPE_VIDEO
+                && !exactFrameRate(*stream_, *start)) {
+                fail(
+                    MediaFailureCode::unsupportedSourceTiming,
+                    "validate-video-frame-rate"
+                );
+            }
+            if (start->frameIndex != 0) {
+                seek(*start, cancellation);
+            }
+        }
         requireNotCancelled(cancellation, "after-decoder-setup");
     }
 
@@ -778,6 +837,39 @@ public:
     AVStream& stream() const noexcept { return *stream_; }
 
 private:
+    void seek(
+        const DecodeFrameStart& start,
+        std::stop_token cancellation
+    ) {
+        requireNotCancelled(cancellation, "before-seek");
+        interrupt_.cancellation = cancellation;
+        const auto target = seekTimestamp(start, stream_->time_base);
+        const int result = avformat_seek_file(
+            format_.get(),
+            streamIndex_,
+            (std::numeric_limits<std::int64_t>::min)(),
+            target,
+            target,
+            AVSEEK_FLAG_BACKWARD
+        );
+        if (result < 0) {
+            if (cancellation.stop_requested() || result == AVERROR_EXIT) {
+                fail(MediaFailureCode::cancelled, "seek", result);
+            }
+            fail(MediaFailureCode::seekFailed, "seek", result);
+        }
+        avcodec_flush_buffers(codec_.get());
+        av_packet_unref(packet_.get());
+        av_frame_unref(frame_.get());
+        packetCount_ = 0;
+        packetPending_ = false;
+        drainPending_ = false;
+        drainSent_ = false;
+        receiveMustProgress_ = false;
+        exhausted_ = false;
+        requireNotCancelled(cancellation, "after-seek");
+    }
+
     AVFrame* decodeNext(std::stop_token cancellation) {
         for (;;) {
             requireNotCancelled(cancellation, "receive-frame");
@@ -962,13 +1054,15 @@ public:
     Impl(
         const std::filesystem::path& input,
         DecodeLimits limits,
-        std::stop_token cancellation
-    ) : limits_(limits), cursor_(
+        std::stop_token cancellation,
+        std::optional<DecodeFrameStart> start = {}
+    ) : limits_(limits), start_(start), cursor_(
         input,
         limits,
         AVMEDIA_TYPE_VIDEO,
         MediaFailureCode::noVideoStream,
-        cancellation
+        cancellation,
+        start
     ) {}
 
     std::optional<DecodedVideoFrame> nextFrame(std::stop_token cancellation) {
@@ -976,17 +1070,58 @@ public:
             std::rethrow_exception(terminalError_);
         }
         try {
-            AVFrame* frame = cursor_.nextFrame(cancellation);
-            if (frame == nullptr) {
-                return std::nullopt;
+            for (;;) {
+                AVFrame* frame = cursor_.nextFrame(cancellation);
+                if (frame == nullptr) {
+                    if (start_.has_value()) {
+                        fail(
+                            MediaFailureCode::seekTargetUnavailable,
+                            "seek-video-target-eof"
+                        );
+                    }
+                    return std::nullopt;
+                }
+                if (start_.has_value()) {
+                    if (frame->best_effort_timestamp == AV_NOPTS_VALUE
+                        || cursor_.stream().time_base.num <= 0
+                        || cursor_.stream().time_base.den <= 0) {
+                        fail(
+                            MediaFailureCode::unsupportedSourceTiming,
+                            "seek-video-timestamp"
+                        );
+                    }
+                    const int comparison = av_compare_ts(
+                        frame->best_effort_timestamp,
+                        cursor_.stream().time_base,
+                        start_->frameIndex,
+                        frameDuration(*start_)
+                    );
+                    if (comparison < 0) {
+                        if (framesBeforeTarget_ >= limits_.maximumFramesBeforeSeekTarget) {
+                            fail(
+                                MediaFailureCode::resourceLimitExceeded,
+                                "seek-video-frame-budget"
+                            );
+                        }
+                        ++framesBeforeTarget_;
+                        continue;
+                    }
+                    if (comparison > 0) {
+                        fail(
+                            MediaFailureCode::seekTargetUnavailable,
+                            "seek-video-target-gap"
+                        );
+                    }
+                    start_.reset();
+                }
+                return convertFrame(
+                    *frame,
+                    cursor_.stream(),
+                    limits_,
+                    scale_,
+                    cancellation
+                );
             }
-            return convertFrame(
-                *frame,
-                cursor_.stream(),
-                limits_,
-                scale_,
-                cancellation
-            );
         } catch (...) {
             terminalError_ = std::current_exception();
             throw;
@@ -995,9 +1130,11 @@ public:
 
 private:
     DecodeLimits limits_;
+    std::optional<DecodeFrameStart> start_;
     SoftwareFrameReader cursor_;
     ScaleOwner scale_;
     std::exception_ptr terminalError_;
+    std::uint32_t framesBeforeTarget_{};
 };
 
 class FfmpegAudioFrameReader::Impl final {
@@ -1006,17 +1143,61 @@ public:
         const std::filesystem::path& input,
         audio::PcmFormat targetFormat,
         DecodeLimits limits,
-        std::stop_token cancellation
+        std::stop_token cancellation,
+        std::optional<DecodeFrameStart> start = {}
     ) : targetFormat_(targetFormat),
         targetSampleFormat_(sampleFormat(targetFormat_)),
         limits_(limits),
+        start_(start),
         cursor_(
             input,
             limits,
             AVMEDIA_TYPE_AUDIO,
             MediaFailureCode::noAudioStream,
-            cancellation
-        ) {}
+            cancellation,
+            start
+        ) {
+        if (start_.has_value()) {
+            const auto target = av_rescale_q_rnd(
+                start_->frameIndex,
+                frameDuration(*start_),
+                AVRational{1, static_cast<int>(targetFormat_.sampleRate)},
+                static_cast<AVRounding>(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX)
+            );
+            if (target < 0
+                || av_compare_ts(
+                    target,
+                    AVRational{1, static_cast<int>(targetFormat_.sampleRate)},
+                    start_->frameIndex,
+                    frameDuration(*start_)
+                ) != 0) {
+                fail(
+                    MediaFailureCode::unsupportedSourceTiming,
+                    "seek-audio-sample-mapping"
+                );
+            }
+            targetOutputSample_ = target;
+            const auto sourceTimestamp = av_rescale_q_rnd(
+                start_->frameIndex,
+                frameDuration(*start_),
+                cursor_.stream().time_base,
+                static_cast<AVRounding>(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX)
+            );
+            if (sourceTimestamp < 0
+                || av_compare_ts(
+                    sourceTimestamp,
+                    cursor_.stream().time_base,
+                    start_->frameIndex,
+                    frameDuration(*start_)
+                ) != 0) {
+                fail(
+                    MediaFailureCode::unsupportedSourceTiming,
+                    "seek-audio-source-mapping"
+                );
+            }
+            targetSourceTimestamp_ = sourceTimestamp;
+        }
+    }
 
     ~Impl() { av_channel_layout_uninit(&sourceLayout_); }
 
@@ -1032,10 +1213,32 @@ public:
                 requireNotCancelled(cancellation, "before-audio-decode");
                 AVFrame* frame = cursor_.nextFrame(cancellation);
                 if (frame == nullptr) {
-                    return drain(cancellation);
+                    auto drained = drain(cancellation);
+                    if (drained.has_value() && applyStart(*drained)) {
+                        return drained;
+                    }
+                    if (targetOutputSample_.has_value()) {
+                        if (drained.has_value()) {
+                            continue;
+                        }
+                        fail(
+                            MediaFailureCode::seekTargetUnavailable,
+                            "seek-audio-target-eof"
+                        );
+                    }
+                    return drained;
+                }
+                if (targetOutputSample_.has_value()) {
+                    if (framesBeforeTarget_ >= limits_.maximumFramesBeforeSeekTarget) {
+                        fail(
+                            MediaFailureCode::resourceLimitExceeded,
+                            "seek-audio-frame-budget"
+                        );
+                    }
+                    ++framesBeforeTarget_;
                 }
                 auto converted = convert(*frame, cancellation);
-                if (converted.frameCount != 0) {
+                if (converted.frameCount != 0 && applyStart(converted)) {
                     return converted;
                 }
             }
@@ -1046,6 +1249,45 @@ public:
     }
 
 private:
+    bool applyStart(DecodedAudioBlock& block) {
+        if (!targetOutputSample_.has_value()) {
+            return true;
+        }
+        const auto end = checkedAddSamples(
+            block.startOutputSample,
+            block.frameCount,
+            "seek-audio-block-end"
+        );
+        if (end <= *targetOutputSample_) {
+            return false;
+        }
+        if (block.startOutputSample > *targetOutputSample_) {
+            fail(
+                MediaFailureCode::seekTargetUnavailable,
+                "seek-audio-target-gap"
+            );
+        }
+        const auto skipped = *targetOutputSample_ - block.startOutputSample;
+        if (skipped < 0
+            || static_cast<std::uint64_t>(skipped) >= block.frameCount) {
+            fail(MediaFailureCode::seekTargetUnavailable, "seek-audio-trim");
+        }
+        const std::size_t skippedBytes = static_cast<std::size_t>(skipped)
+            * block.format.blockAlign;
+        block.interleavedBytes.erase(
+            block.interleavedBytes.begin(),
+            block.interleavedBytes.begin()
+                + static_cast<std::ptrdiff_t>(skippedBytes)
+        );
+        block.startOutputSample = *targetOutputSample_;
+        block.sourcePresentationTimestamp = *targetSourceTimestamp_;
+        block.frameCount -= static_cast<std::uint32_t>(skipped);
+        targetOutputSample_.reset();
+        targetSourceTimestamp_.reset();
+        start_.reset();
+        return true;
+    }
+
     void configure(const AVFrame& frame) {
         if (frame.sample_rate <= 0 || frame.nb_samples <= 0
             || frame.format < 0 || frame.ch_layout.nb_channels > 32
@@ -1272,13 +1514,17 @@ private:
     audio::PcmFormat targetFormat_;
     AVSampleFormat targetSampleFormat_{AV_SAMPLE_FMT_NONE};
     DecodeLimits limits_;
+    std::optional<DecodeFrameStart> start_;
     SoftwareFrameReader cursor_;
     ResampleOwner resampler_;
     AVChannelLayout sourceLayout_{};
     std::exception_ptr terminalError_;
     std::optional<std::int64_t> sourceAnchorTimestamp_;
     std::optional<std::int64_t> nextOutputSample_;
+    std::optional<std::int64_t> targetOutputSample_;
+    std::optional<std::int64_t> targetSourceTimestamp_;
     std::int64_t sourceFramesRead_{};
+    std::uint32_t framesBeforeTarget_{};
     int sourceSampleRate_{};
     int sourceSampleFormat_{-1};
     bool sourceConfigured_{};
@@ -1334,6 +1580,13 @@ FfmpegVideoFrameReader::FfmpegVideoFrameReader(
     std::stop_token cancellation
 ) : impl_(std::make_unique<Impl>(input, limits, cancellation)) {}
 
+FfmpegVideoFrameReader::FfmpegVideoFrameReader(
+    const std::filesystem::path& input,
+    DecodeFrameStart start,
+    const DecodeLimits& limits,
+    std::stop_token cancellation
+) : impl_(std::make_unique<Impl>(input, limits, cancellation, start)) {}
+
 FfmpegVideoFrameReader::~FfmpegVideoFrameReader() = default;
 
 std::optional<DecodedVideoFrame> FfmpegVideoFrameReader::nextFrame(
@@ -1352,6 +1605,20 @@ FfmpegAudioFrameReader::FfmpegAudioFrameReader(
     targetFormat,
     limits,
     cancellation
+)) {}
+
+FfmpegAudioFrameReader::FfmpegAudioFrameReader(
+    const std::filesystem::path& input,
+    audio::PcmFormat targetFormat,
+    DecodeFrameStart start,
+    const DecodeLimits& limits,
+    std::stop_token cancellation
+) : impl_(std::make_unique<Impl>(
+    input,
+    targetFormat,
+    limits,
+    cancellation,
+    start
 )) {}
 
 FfmpegAudioFrameReader::~FfmpegAudioFrameReader() = default;

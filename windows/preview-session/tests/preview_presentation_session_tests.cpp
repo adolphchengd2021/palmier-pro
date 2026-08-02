@@ -122,6 +122,7 @@ struct PlaybackState final {
     bool failClose{};
     bool failCancel{};
     std::int64_t targetTimelineFrame{};
+    std::optional<palmier::media::DecodeFrameStart> decodeStart;
     std::function<void()> afterTick;
     std::mutex mutex;
     std::condition_variable condition;
@@ -136,10 +137,12 @@ public:
         const std::filesystem::path&,
         std::int64_t,
         palmier::audio::FrameRate,
+        palmier::media::DecodeFrameStart decodeStart,
         std::stop_token cancellation
     ) override {
         std::unique_lock lock(state_->mutex);
         ++state_->playCalls;
+        state_->decodeStart = decodeStart;
         if (state_->blockNextPlay) {
             state_->playEntered = true;
             state_->condition.notify_all();
@@ -757,20 +760,29 @@ void invalidAndStaleRequestsDoNotReachOwnedPorts() {
         "invalid settings were accepted"
     );
     require(fixture.playback->playCalls == 0, "invalid settings reached playback");
-    auto unseekable = settings();
-    unseekable.renderLayer.sourceStartFrame = 1;
+    auto seekable = settings();
+    seekable.renderLayer.sourceStartFrame = 1;
     require(
-        fixture.session->play("input.mov", 0, {10, 1}, unseekable).outcome
-            == PreviewPresentationOutcome::refused,
-        "nonzero source start was accepted before seek support"
+        fixture.session->play("input.mov", 0, {10, 1}, seekable).outcome
+            == PreviewPresentationOutcome::changed,
+        "nonzero source start was not forwarded to seek support"
     );
-    require(fixture.playback->playCalls == 0, "nonzero source start reached playback");
-    start(fixture);
+    require(fixture.playback->playCalls == 1, "source seek skipped playback");
     require(
-        fixture.session->tick(2).outcome == PreviewPresentationOutcome::stale,
+        fixture.playback->decodeStart.has_value()
+            && fixture.playback->decodeStart->frameIndex == 1
+            && fixture.playback->decodeStart->frameRate.numerator == 10
+            && fixture.playback->decodeStart->frameRate.denominator == 1,
+        "source seek mapping changed before playback"
+    );
+
+    Fixture staleFixture;
+    start(staleFixture);
+    require(
+        staleFixture.session->tick(2).outcome == PreviewPresentationOutcome::stale,
         "stale generation was accepted"
     );
-    require(fixture.playback->tickCalls == 0, "stale generation reached playback");
+    require(staleFixture.playback->tickCalls == 0, "stale generation reached playback");
 }
 
 void terminalSurfaceStopsPlayback() {

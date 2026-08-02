@@ -1421,7 +1421,7 @@ private slots:
         QVERIFY(!preview.candidate.has_value());
     }
 
-    void unsupportedTimingCannotBeSkippedForLaterCandidate() {
+    void trimmedTimingRemainsTheFirstPreviewCandidate() {
         palmier::windows::ProjectPreviewProjection preview;
         std::exception_ptr failure;
         std::jthread worker([&] {
@@ -1431,12 +1431,20 @@ private slots:
                     source,
                     [] { return std::string("generated"); }
                 );
-                const palmier::project::MediaManifest manifest{{{
-                    "media-two",
-                    "video",
-                    {palmier::project::MediaSourceKind::project, "project.json"},
-                    true,
-                }}};
+                const palmier::project::MediaManifest manifest{{
+                    {
+                        "media-one",
+                        "video",
+                        {palmier::project::MediaSourceKind::project, "project.json"},
+                        true,
+                    },
+                    {
+                        "media-two",
+                        "video",
+                        {palmier::project::MediaSourceKind::project, "project.json"},
+                        true,
+                    },
+                }};
                 preview = palmier::windows::projectPreviewForActiveTimeline(
                     document,
                     manifest,
@@ -1451,10 +1459,11 @@ private slots:
         if (failure) std::rethrow_exception(failure);
         QCOMPARE(
             preview.availability,
-            palmier::windows::PreviewCandidateAvailability::unsupported
+            palmier::windows::PreviewCandidateAvailability::ready
         );
-        QCOMPARE(preview.reasonCode, std::string("unsupportedClipTiming"));
-        QVERIFY(!preview.candidate.has_value());
+        QVERIFY(preview.candidate.has_value());
+        QCOMPARE(preview.candidate->clipId, std::string("trimmed"));
+        QCOMPARE(preview.candidate->renderLayer.sourceStartFrame, std::int64_t{1});
     }
 
     void overlappingVisualLayerIsExplicitlyRefused() {

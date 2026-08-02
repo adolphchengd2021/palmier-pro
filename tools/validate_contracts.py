@@ -2552,6 +2552,7 @@ def validate_ffmpeg_presentation_pipeline_contract(
             "maximumPixels": 8294400,
             "maximumFramesPerFill": 4,
             "maximumConfigurableFramesPerFill": 32,
+            "maximumFramesBeforeSeekTarget": 4096,
         },
     )
     require_equal(
@@ -2593,6 +2594,7 @@ def validate_ffmpeg_presentation_pipeline_contract(
             "fillBudget": "one fill admits at most the configured 1 to 32 frames independent of queue capacity",
             "generation": "opening a replacement succeeds before the new generation clears queued or pending state",
             "inputIdentity": "the exact input path cannot change within one generation",
+            "sourceStart": "an exact-CFR source frame start is part of generation identity; the demuxer seeks backward, decoder state is flushed, pre-target frames are bounded, and the first published PTS must exactly match",
             "cancellation": "fill throws a cancelled media error after cancellation terminates and clears only the current generation",
             "handoff": "atomically select one immutable normalized frame from a generation and revision current audio clock before synchronous preview or export rendering",
             "selection": "the real three-frame fixture is selected at its exact PTS through the decode pump before CPU and WARP rendering",
@@ -2602,7 +2604,7 @@ def validate_ffmpeg_presentation_pipeline_contract(
         "FFmpeg pipeline exclusions",
         contract.get("excluded"),
         [
-            "seek and frame-rate conversion",
+            "frame-rate conversion and VFR mapping",
             "thread creation or executor scheduling",
             "physical-device audio synchronization and drift correction",
             "interactive swap-chain presentation",
@@ -2639,6 +2641,8 @@ def windows_ffmpeg_presentation_pipeline_contract() -> None:
 
     for token in [
         "class FfmpegVideoFrameReader final",
+        "struct DecodeFrameStart final",
+        "maximumFramesBeforeSeekTarget{4'096}",
         "std::optional<DecodedVideoFrame> nextFrame(",
         "FfmpegVideoFrameReader(const FfmpegVideoFrameReader&) = delete;",
         "FfmpegVideoFrameReader(FfmpegVideoFrameReader&&) = delete;",
@@ -2656,11 +2660,17 @@ def windows_ffmpeg_presentation_pipeline_contract() -> None:
         "std::rethrow_exception(terminalError_)",
         'requireNotCancelled(cancellation, "after-decoder-setup")',
         "FfmpegVideoFrameReader reader(input, limits, cancellation)",
+        "avformat_seek_file(",
+        "avcodec_flush_buffers(codec_.get())",
+        '"seek-video-frame-budget"',
+        '"seek-video-target-gap"',
     ]:
         if token not in ffmpeg_source:
             raise ContractError(f"FFmpeg cursor source missing token {token!r}")
     for token in [
         "decodesPresentationOrderedFrames",
+        "seeksToExactPresentationFrame",
+        "seeked video returned the wrong source pixels",
         "cancellationTerminatesCursor",
         "end of stream is not stable",
         "first-frame compatibility changed",
@@ -2694,6 +2704,7 @@ def windows_ffmpeg_presentation_pipeline_contract() -> None:
         "std::unique_ptr<FfmpegVideoFrameReader> reader_",
         "std::optional<DecodedVideoFrame> pendingFrame_",
         "std::filesystem::path inputIdentity_",
+        "std::optional<DecodeFrameStart> decodeStart_",
         "maximumFramesPerFill{4}",
         "render::maximumRenderFramePixels",
         "PresentationVideoSelection select(",
@@ -2704,7 +2715,8 @@ def windows_ffmpeg_presentation_pipeline_contract() -> None:
     for token in [
         "generation == buffer_.generation()",
         "input != inputIdentity_",
-        "auto nextReader = std::make_unique<FfmpegVideoFrameReader>(",
+        "std::make_unique<FfmpegVideoFrameReader>(",
+        "sameStart(start, decodeStart_)",
         "startCommitCheckpoint_()",
         "before-generation-commit",
         "pendingFrame_ = reader_->nextFrame(cancellation)",
@@ -2829,6 +2841,16 @@ def windows_ffmpeg_presentation_pipeline_contract() -> None:
     ]:
         if token not in adr:
             raise ContractError(f"FFmpeg pipeline ADR missing token {token!r}")
+    seek_adr = read_text("docs/windows/adr/0040-bounded-exact-cfr-source-seeking.md")
+    for token in [
+        "DecodeFrameStart",
+        "flushes decoder state",
+        "first returned video frame",
+        "trims one crossing",
+        "makeRenderPlan",
+    ]:
+        if token not in seek_adr:
+            raise ContractError(f"source-seek ADR missing token {token!r}")
 
 
 def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
@@ -2895,6 +2917,7 @@ def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
             "maximumAudioFramesPerDecodedBlock": 65536,
             "maximumPumpCapacityFrames": 4194304,
             "maximumFramesPerFill": 65536,
+            "maximumFramesBeforeSeekTarget": 4096,
             "maximumQueuedAudioBytes": 268435456,
             "testPumpCapacityFrames": 150,
             "testMaximumFramesPerFill": 50,
@@ -2921,6 +2944,8 @@ def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
         "std::optional<DecodedAudioBlock> nextBlock(",
         "maximumAudioFramesPerBlock{65'536}",
         "discontinuousAudioTimestamp",
+        "unsupportedSourceTiming",
+        "seekTargetUnavailable",
     ]:
         if token not in ffmpeg_header:
             raise ContractError(f"FFmpeg audio API missing token {token!r}")
@@ -2935,6 +2960,9 @@ def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
         "audio-pts-discontinuity",
         "sourceAnchorTimestamp_",
         "sourceFramesRead_",
+        "targetOutputSample_",
+        "targetSourceTimestamp_",
+        '"seek-audio-frame-budget"',
         "maximumConfigurableAudioFramesPerBlock",
         "swresample_version() == LIBSWRESAMPLE_VERSION_INT",
     ]:
@@ -2942,6 +2970,8 @@ def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
             raise ContractError(f"FFmpeg audio source missing token {token!r}")
     for token in [
         "decodesExactCanonicalPcm",
+        "seeksAudioToExactProjectFrame",
+        "seeked audio returned the wrong source anchor",
         "resamplesAndRemixesCanonicalPcm",
         "audioCursorCancellationIsTerminal",
         "validatesAudioFailureBoundaries",
@@ -2984,13 +3014,15 @@ def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
         "std::unique_ptr<FfmpegAudioFrameReader> reader_",
         "std::optional<DecodedAudioBlock> pendingBlock_",
         "std::deque<DecodedAudioBlock> queue_",
+        "std::optional<DecodeFrameStart> decodeStart_",
         "pendingFrameOffset_",
         "queuedFrames_",
     ]:
         if token not in pump_header:
             raise ContractError(f"audio pump API missing token {token!r}")
     for token in [
-        "auto nextReader = std::make_unique<FfmpegAudioFrameReader>(",
+        "std::make_unique<FfmpegAudioFrameReader>(",
+        "sameStart(start, decodeStart_)",
         "before-audio-generation-commit",
         "before-audio-block-admission",
         "PresentationAudioDecodeState::blocked",
@@ -3081,7 +3113,8 @@ def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
     for token in [
         "std::jthread worker_",
         "output_->configuration(commandToken)",
-        "commandValue.input,\n                commandToken",
+        "candidate->start(",
+        "commandValue.decodeStart",
         "prebuffer(",
         "output_->installGeneration(",
         "commandValue.expectedGeneration != nextGeneration",
@@ -3110,6 +3143,7 @@ def windows_ffmpeg_wasapi_audio_pipeline_contract() -> None:
         "automatic fake cancellation blocked later progress",
         'std::cout << "RUN " << name << std::endl',
         "playsRealPcmToOneTerminalAndAnchorsTheClock",
+        "trimmedPlaybackAnchorsAndHandsOffTheSameSourceRange",
         "failedReplacementPreservesTheRunningGeneration",
         "successfulReplacementFlushesOldPcmAndUsesAnExactGeneration",
         "exactGenerationRestartsAnOtherwiseIdenticalRequest",
@@ -3224,7 +3258,7 @@ def windows_headless_av_playback_contract() -> None:
             "interactive swap-chain presentation",
             "physical-device audible A/V synchronization",
             "final hardware endpoint position at audio completion",
-            "seek, scrub, speed change, and drift correction",
+            "interactive scrub, speed change, and drift correction",
             "device recovery",
             "Windows 10 runtime certification",
         ],
@@ -3284,6 +3318,8 @@ def windows_headless_av_playback_contract() -> None:
             raise ContractError(f"audio exact-generation invariant missing token {token!r}")
     for token in [
         "playsAndTicksOneRealVideoGeneration",
+        "startsVideoAndAudioAtTheSameTrimmedFrame",
+        "tick.frame->presentationTimestamp == 1'024",
         "failedReplacementPreservesTheActiveGeneration",
         "boundsCatchUpAndDeliversOnlyTheLatestFrame",
         "noSampleAndAudioTerminalsDoNotGuessVideoTime",
@@ -3546,7 +3582,8 @@ def windows_preview_presentation_session_contract() -> None:
         "surface_->present(",
         "pendingRenderedSourceTimestamp_ != sourceTimestamp",
         "pendingRenderedTargetFrame_ != targetFrame",
-        "settings.renderLayer.sourceStartFrame != 0",
+        "settings.renderLayer.sourceStartFrame < 0",
+        "media::DecodeFrameStart{",
         "sourceMappingChanged",
         "isSurfaceTerminal(surface.outcome)",
         "terminalSurfaceReceipt_ = surface",
@@ -4146,8 +4183,8 @@ def windows_qt_read_only_shell_contract() -> None:
         "unsupportedVisualPropertiesAreNotSilentlyDropped",
         "malformed_earlier_visual_cannot_be_skipped",
         "malformedEarlierVisualCannotBeSkippedForLaterCandidate",
-        "unsupported_timing_cannot_be_skipped",
-        "unsupportedTimingCannotBeSkippedForLaterCandidate",
+        "trimmed_timing_remains_first_candidate",
+        "trimmedTimingRemainsTheFirstPreviewCandidate",
         "overlapping_visual_layer_is_explicitly_refused",
         "overlappingVisualLayerIsExplicitlyRefused",
         "add_palmier_qt_shell_test(model_publishes_track_layout modelPublishesReadOnlyTrackLayout)",
@@ -4421,8 +4458,8 @@ def windows_qt_read_only_shell_contract() -> None:
         "unsupportedMasking",
         "malformedEarlierVisualCannotBeSkippedForLaterCandidate",
         "malformedVisualProperty",
-        "unsupportedTimingCannotBeSkippedForLaterCandidate",
-        "unsupportedClipTiming",
+        "trimmedTimingRemainsTheFirstPreviewCandidate",
+        "preview.candidate->renderLayer.sourceStartFrame",
         "overlappingVisualLayerIsExplicitlyRefused",
         "overlappingVisibleLayer",
         "failurePreservesPreviousModel",

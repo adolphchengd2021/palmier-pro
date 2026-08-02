@@ -116,10 +116,11 @@ The first `set_clip_properties` domain slice owns duration, source-head trim,
 source-tail trim, and speed in that same session. It propagates timing across
 linked clips, preserves text-partner trim/speed, clamps duration-dependent fades
 and keyframes, rescales text word timings, saves the full source DOM, and shares
-Undo/Redo. Qt exposes these fields on the existing serial edit executor. MCP does
-not expose a partial property tool, and the prototype preview still refuses
-nonzero trim or general speed until its cursor can seek and retime safely; see
-ADR 0039.
+Undo/Redo. Qt exposes these fields on the existing serial edit executor. Exact-CFR
+source-head trim now reaches the same bounded FFmpeg seek path for video, audio,
+preview, and selected-clip H.264 export. General speed and VFR remain explicit
+refusals, and MCP does not expose a partial property tool; see ADR 0039 and ADR
+0040.
 
 The same Qt workflow stages the Release executable through CMake install, runs
 the pinned `windeployqt` QML deployment, requires the complete app-local FFmpeg
@@ -146,10 +147,10 @@ compositor or prove multi-layer composition, physical-GPU behavior, or Windows
 10 runtime behavior. The first production-owned video-only encoder consumes
 this exact compiler and render entry point, records and locks a sibling staging
 MP4's file identity, independently decodes it, and commits that verified object
-with one handle-based rename. It accepts
-only one exact-CFR source at source frame zero and the locked `h264_mf` encoder;
-audio, VFR, trim seeking, H.265, and release approval remain open at the
-low-level boundary. The Qt shell now owns one background selected-clip export
+with one handle-based rename. It accepts one exact-CFR source, including a
+nonzero compiled source start, and the locked `h264_mf` encoder. Audio export,
+VFR, speed changes, H.265, and release approval remain open at the low-level
+boundary. The Qt shell now owns one background selected-clip export
 job, captures an immutable live runtime snapshot, resolves the media reference
 through the shared package-safe resolver, supports cancellation and shutdown
 drain, and reports a committed result from an older revision as

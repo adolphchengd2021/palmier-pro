@@ -19,6 +19,17 @@ bool isTerminal(PresentationVideoDecodeState state) noexcept {
         || state == PresentationVideoDecodeState::failed;
 }
 
+bool sameStart(
+    const std::optional<DecodeFrameStart>& lhs,
+    const std::optional<DecodeFrameStart>& rhs
+) noexcept {
+    if (lhs.has_value() != rhs.has_value()) return false;
+    return !lhs.has_value()
+        || (lhs->frameIndex == rhs->frameIndex
+            && lhs->frameRate.numerator == rhs->frameRate.numerator
+            && lhs->frameRate.denominator == rhs->frameRate.denominator);
+}
+
 }
 
 PresentationVideoDecodeError::PresentationVideoDecodeError(
@@ -56,11 +67,30 @@ PresentationVideoReceipt PresentationVideoDecodePump::start(
     const std::filesystem::path& input,
     std::stop_token cancellation
 ) {
+    return startInternal(generation, input, {}, cancellation);
+}
+
+PresentationVideoReceipt PresentationVideoDecodePump::start(
+    std::uint64_t generation,
+    const std::filesystem::path& input,
+    DecodeFrameStart start,
+    std::stop_token cancellation
+) {
+    return startInternal(generation, input, start, cancellation);
+}
+
+PresentationVideoReceipt PresentationVideoDecodePump::startInternal(
+    std::uint64_t generation,
+    const std::filesystem::path& input,
+    std::optional<DecodeFrameStart> start,
+    std::stop_token cancellation
+) {
     if (generation < buffer_.generation()) {
         return buffer_.start(generation);
     }
     if (generation == buffer_.generation()) {
-        if (generation != 0 && input != inputIdentity_) {
+        if (generation != 0
+            && (input != inputIdentity_ || !sameStart(start, decodeStart_))) {
             fail(
                 PresentationVideoDecodeErrorCode::changedInputWithinGeneration,
                 "video input cannot change within one generation"
@@ -70,11 +100,18 @@ PresentationVideoReceipt PresentationVideoDecodePump::start(
     }
 
     auto nextInputIdentity = input;
-    auto nextReader = std::make_unique<FfmpegVideoFrameReader>(
-        input,
-        limits_.decode,
-        cancellation
-    );
+    auto nextReader = start.has_value()
+        ? std::make_unique<FfmpegVideoFrameReader>(
+            input,
+            *start,
+            limits_.decode,
+            cancellation
+        )
+        : std::make_unique<FfmpegVideoFrameReader>(
+            input,
+            limits_.decode,
+            cancellation
+        );
     if (startCommitCheckpoint_) {
         startCommitCheckpoint_();
     }
@@ -89,6 +126,7 @@ PresentationVideoReceipt PresentationVideoDecodePump::start(
     reader_ = std::move(nextReader);
     pendingFrame_.reset();
     inputIdentity_.swap(nextInputIdentity);
+    decodeStart_ = start;
     state_ = PresentationVideoDecodeState::ready;
     return receipt;
 }
