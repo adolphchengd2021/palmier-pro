@@ -32,7 +32,7 @@ struct ColorMetadata final {
 };
 
 bool isPrototypeSrgbColor(const ColorMetadata& color) noexcept;
-bool isPrototypeBt709VideoColor(const ColorMetadata& color) noexcept;
+bool isPrototypeBt709RgbColor(const ColorMetadata& color) noexcept;
 
 enum class AlphaMode {
     opaque,

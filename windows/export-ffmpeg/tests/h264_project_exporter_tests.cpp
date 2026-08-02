@@ -182,8 +182,8 @@ void exportsAndIndependentlyDecodesEveryFrame(
     while (const auto frame = reader.nextFrame()) {
         ++frames;
         require(
-            palmier::media::isPrototypeBt709VideoColor(frame->color),
-            "exported BT.709 metadata changed"
+            palmier::media::isPrototypeBt709RgbColor(frame->color),
+            "decoded BT.709 RGB metadata changed"
         );
         for (std::size_t index = 0; index < frame->rgba8.size(); index += 4) {
             minimumRed = (std::min)(minimumRed, frame->rgba8[index]);

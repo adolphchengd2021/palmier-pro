@@ -18,6 +18,7 @@ extern "C" {
 #include <libavutil/error.h>
 #include <libavutil/frame.h>
 #include <libavutil/mathematics.h>
+#include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/pixfmt.h>
 #include <libavutil/samplefmt.h>
@@ -113,6 +114,10 @@ public:
 
     SwsContext* get() const { return value_; }
     void replaceCached(SwsContext* value) noexcept { value_ = value; }
+    void reset(SwsContext* value) noexcept {
+        sws_freeContext(value_);
+        value_ = value;
+    }
 
     bool configurationMatches(
         std::int32_t width,
@@ -466,6 +471,14 @@ enum class DecodeColorMode {
     bt709Video,
 };
 
+bool isPrototypeBt709YuvColor(const ColorMetadata& color) noexcept {
+    return color.primaries == AVCOL_PRI_BT709
+        && color.transfer == AVCOL_TRC_BT709
+        && color.matrix == AVCOL_SPC_BT709
+        && color.range == AVCOL_RANGE_MPEG
+        && color.chromaLocation == AVCHROMA_LOC_LEFT;
+}
+
 std::optional<DecodeColorMode> decodeColorMode(
     const AVFrame& frame,
     const ColorMetadata& color
@@ -481,9 +494,82 @@ std::optional<DecodeColorMode> decodeColorMode(
             ? std::optional{DecodeColorMode::srgbRgb}
             : std::nullopt;
     }
-    return isPrototypeBt709VideoColor(color)
+    const auto format = static_cast<AVPixelFormat>(frame.format);
+    const bool supportedFormat = format == AV_PIX_FMT_YUV420P
+        || format == AV_PIX_FMT_NV12;
+    return supportedFormat && isPrototypeBt709YuvColor(color)
         ? std::optional{DecodeColorMode::bt709Video}
         : std::nullopt;
+}
+
+void configureBt709Scale(
+    ScaleOwner& scale,
+    std::int32_t width,
+    std::int32_t height,
+    AVPixelFormat sourceFormat,
+    const ColorMetadata& color
+) {
+    SwsContext* configured = sws_alloc_context();
+    if (configured == nullptr) {
+        fail(MediaFailureCode::conversionFailed, "allocate-converter");
+    }
+    const auto setOption = [&](const char* name, std::int64_t value) {
+        const int result = av_opt_set_int(configured, name, value, 0);
+        if (result < 0) {
+            sws_freeContext(configured);
+            fail(MediaFailureCode::conversionFailed, "configure-converter", result);
+        }
+    };
+    int horizontalChroma{};
+    int verticalChroma{};
+    const int chromaResult = av_chroma_location_enum_to_pos(
+        &horizontalChroma,
+        &verticalChroma,
+        static_cast<AVChromaLocation>(color.chromaLocation)
+    );
+    if (chromaResult < 0) {
+        sws_freeContext(configured);
+        fail(
+            MediaFailureCode::unsupportedColorMetadata,
+            "frame-chroma-location",
+            chromaResult
+        );
+    }
+    setOption("srcw", width);
+    setOption("srch", height);
+    setOption("dstw", width);
+    setOption("dsth", height);
+    setOption("src_format", sourceFormat);
+    setOption("dst_format", AV_PIX_FMT_RGBA);
+    setOption(
+        "sws_flags",
+        SWS_BILINEAR | SWS_ACCURATE_RND | SWS_FULL_CHR_H_INT
+    );
+    setOption("src_range", 0);
+    setOption("dst_range", 1);
+    setOption("src_h_chr_pos", horizontalChroma);
+    setOption("src_v_chr_pos", verticalChroma);
+    const int initResult = sws_init_context(configured, nullptr, nullptr);
+    if (initResult < 0) {
+        sws_freeContext(configured);
+        fail(MediaFailureCode::conversionFailed, "initialize-converter", initResult);
+    }
+    const int* coefficients = sws_getCoefficients(SWS_CS_ITU709);
+    const int colorResult = sws_setColorspaceDetails(
+        configured,
+        coefficients,
+        0,
+        coefficients,
+        1,
+        0,
+        1 << 16,
+        1 << 16
+    );
+    if (colorResult < 0) {
+        sws_freeContext(configured);
+        fail(MediaFailureCode::conversionFailed, "configure-converter", colorResult);
+    }
+    scale.reset(configured);
 }
 
 std::size_t checkedFrameBytes(
@@ -533,41 +619,31 @@ DecodedVideoFrame convertFrame(
         sourceFormat,
         color
     );
-    auto* cachedScale = sws_getCachedContext(
-        scale.get(),
-        frame.width,
-        frame.height,
-        sourceFormat,
-        frame.width,
-        frame.height,
-        AV_PIX_FMT_RGBA,
-        SWS_POINT,
-        nullptr,
-        nullptr,
-        nullptr
-    );
-    scale.replaceCached(cachedScale);
-    if (scale.get() == nullptr) {
-        fail(MediaFailureCode::conversionFailed, "create-converter");
-    }
     if (configureScale && *colorMode == DecodeColorMode::bt709Video) {
-        const int* coefficients = sws_getCoefficients(SWS_CS_ITU709);
-        const int colorResult = sws_setColorspaceDetails(
-            scale.get(),
-            coefficients,
-            0,
-            coefficients,
-            1,
-            0,
-            1 << 16,
-            1 << 16
+        configureBt709Scale(
+            scale,
+            frame.width,
+            frame.height,
+            sourceFormat,
+            color
         );
-        if (colorResult < 0) {
-            fail(
-                MediaFailureCode::conversionFailed,
-                "configure-converter",
-                colorResult
-            );
+    } else if (configureScale) {
+        auto* cachedScale = sws_getCachedContext(
+            scale.get(),
+            frame.width,
+            frame.height,
+            sourceFormat,
+            frame.width,
+            frame.height,
+            AV_PIX_FMT_RGBA,
+            SWS_POINT,
+            nullptr,
+            nullptr,
+            nullptr
+        );
+        scale.replaceCached(cachedScale);
+        if (scale.get() == nullptr) {
+            fail(MediaFailureCode::conversionFailed, "create-converter");
         }
     }
     if (configureScale) {
@@ -605,7 +681,15 @@ DecodedVideoFrame convertFrame(
     }
     result.timeBase = rational(stream.time_base);
     result.displayTransform = displayTransform(frame, *stream.codecpar);
-    result.color = color;
+    result.color = *colorMode == DecodeColorMode::bt709Video
+        ? ColorMetadata{
+            color.primaries,
+            color.transfer,
+            AVCOL_SPC_RGB,
+            AVCOL_RANGE_JPEG,
+            AVCHROMA_LOC_UNSPECIFIED,
+        }
+        : color;
     result.alphaMode = alphaMode(frame, *stream.codecpar);
     return result;
 }
@@ -1209,11 +1293,12 @@ bool isPrototypeSrgbColor(const ColorMetadata& color) noexcept {
             || color.range == AVCOL_RANGE_UNSPECIFIED);
 }
 
-bool isPrototypeBt709VideoColor(const ColorMetadata& color) noexcept {
+bool isPrototypeBt709RgbColor(const ColorMetadata& color) noexcept {
     return color.primaries == AVCOL_PRI_BT709
         && color.transfer == AVCOL_TRC_BT709
-        && color.matrix == AVCOL_SPC_BT709
-        && color.range == AVCOL_RANGE_MPEG;
+        && color.matrix == AVCOL_SPC_RGB
+        && color.range == AVCOL_RANGE_JPEG
+        && color.chromaLocation == AVCHROMA_LOC_UNSPECIFIED;
 }
 
 MediaError::MediaError(

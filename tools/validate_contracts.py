@@ -4376,9 +4376,11 @@ def windows_h264_project_export_contract() -> None:
         if token not in source:
             raise ContractError(f"H.264 export invariant missing token {token!r}")
     for token in [
-        "isPrototypeBt709VideoColor",
+        "isPrototypeBt709RgbColor",
         "DecodeColorMode::bt709Video",
-        "sws_setColorspaceDetails(",
+        "configureBt709Scale(",
+        'setOption("src_h_chr_pos"',
+        'setOption("src_v_chr_pos"',
         "scale.recordConfiguration(",
     ]:
         if token not in media_header and token not in media_source:

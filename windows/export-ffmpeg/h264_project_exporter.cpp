@@ -940,6 +940,7 @@ H264ProjectExportReceipt exportStaticProjectH264Impl(
     codec->color_trc = AVCOL_TRC_BT709;
     codec->colorspace = AVCOL_SPC_BT709;
     codec->color_range = AVCOL_RANGE_MPEG;
+    codec->chroma_sample_location = AVCHROMA_LOC_LEFT;
     if ((output.get()->oformat->flags & AVFMT_GLOBALHEADER) != 0) {
         codec->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
@@ -997,6 +998,7 @@ H264ProjectExportReceipt exportStaticProjectH264Impl(
     frame->color_trc = codec->color_trc;
     frame->colorspace = codec->colorspace;
     frame->color_range = codec->color_range;
+    frame->chroma_location = codec->chroma_sample_location;
     const int frameBufferResult = av_frame_get_buffer(frame.get(), 32);
     if (frameBufferResult < 0) {
         failFfmpeg(
