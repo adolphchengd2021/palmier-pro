@@ -52,6 +52,7 @@ struct ProjectSessionSnapshot final {
     std::uint64_t stateId;
     std::uint64_t persistedStateId;
     std::size_t undoDepth;
+    std::size_t redoDepth;
 
     bool dirty() const noexcept { return stateId != persistedStateId; }
 };
@@ -110,6 +111,7 @@ public:
         std::stop_token cancellation = {}
     );
     CommandResult undo(std::stop_token cancellation = {});
+    CommandResult redo(std::stop_token cancellation = {});
 
     ProjectSessionSnapshot snapshot(std::stop_token cancellation = {}) const;
     ProjectSaveSnapshot saveSnapshot(std::stop_token cancellation = {}) const;
@@ -140,6 +142,24 @@ private:
         std::unique_ptr<TimelineSnapshot> timeline;
         std::vector<std::string> createdClipIds;
         std::uint64_t beforeStateId;
+
+        UndoEntry(
+            std::string actionId,
+            std::vector<TrackSnapshot> tracks,
+            std::unique_ptr<TimelineSnapshot> timeline,
+            std::vector<std::string> createdClipIds,
+            std::uint64_t beforeStateId
+        );
+        UndoEntry(const UndoEntry& other);
+        UndoEntry(UndoEntry&&) noexcept = default;
+        UndoEntry& operator=(UndoEntry&&) noexcept = default;
+    };
+
+    struct RedoEntry final {
+        UndoEntry undo;
+        std::vector<TrackSnapshot> tracks;
+        std::unique_ptr<TimelineSnapshot> timeline;
+        std::uint64_t afterStateId;
     };
 
     std::shared_ptr<const ProjectSessionSnapshot> preparePublication(
@@ -155,6 +175,7 @@ private:
     std::vector<std::string> unsafeClipIds_;
     std::set<std::string, std::less<>> sessionGeneratedClipIds_;
     std::vector<UndoEntry> undoJournal_;
+    std::vector<RedoEntry> redoJournal_;
     std::uint64_t revision_ = 0;
     std::uint64_t stateId_ = 0;
     std::uint64_t persistedStateId_ = 0;

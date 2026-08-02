@@ -17,6 +17,7 @@ class ProjectEditingController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(bool canUndo READ canUndo NOTIFY canUndoChanged)
+    Q_PROPERTY(bool canRedo READ canRedo NOTIFY canRedoChanged)
     Q_PROPERTY(QString errorCode READ errorCode NOTIFY errorCodeChanged)
     Q_PROPERTY(QString errorMessage READ errorMessage NOTIFY errorMessageChanged)
 
@@ -30,6 +31,7 @@ public:
 
     bool busy() const noexcept;
     bool canUndo() const noexcept;
+    bool canRedo() const noexcept;
     QString errorCode() const;
     QString errorMessage() const;
 
@@ -44,19 +46,22 @@ public:
     );
     Q_INVOKABLE void removeClip(const QString& clipId);
     Q_INVOKABLE void undo();
+    Q_INVOKABLE void redo();
     Q_INVOKABLE bool requestShutdown();
 
 signals:
     void busyChanged();
     void canUndoChanged();
+    void canRedoChanged();
     void errorCodeChanged();
     void errorMessageChanged();
     void operationFinished(bool succeeded);
     void clipRemoved(const QString& clipId);
+    void historyRestored();
     void shutdownReady();
 
 private:
-    enum class Operation { split, move, remove, undo };
+    enum class Operation { split, move, remove, undo, redo };
 
     void start(
         Operation operation,
@@ -68,6 +73,7 @@ private:
     void refreshFromMailbox();
     void setBusy(bool value);
     void setCanUndo(bool value);
+    void setCanRedo(bool value);
     void setErrorCode(QString value);
     void setErrorMessage(QString value);
 
@@ -77,6 +83,7 @@ private:
     std::stop_source stopSource_;
     bool busy_{};
     bool canUndo_{};
+    bool canRedo_{};
     bool shutdownRequested_{};
     QString errorCode_;
     QString errorMessage_;

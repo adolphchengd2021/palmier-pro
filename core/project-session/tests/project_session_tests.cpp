@@ -689,6 +689,26 @@ void publicationPreparationFailureDoesNotCommit() {
     failPublication = false;
     static_cast<void>(session.undo());
     require(session.stateId() == 0, "undo remains available after publication failure");
+    failPublication = true;
+    try {
+        static_cast<void>(session.redo());
+        throw std::runtime_error("expected redo publication preparation failure");
+    } catch (const std::bad_alloc&) {
+    }
+    require(
+        session.stateId() == 0
+            && session.snapshot().undoDepth == 0
+            && session.snapshot().redoDepth == 1
+            && palmier::json::canonical(session.snapshot().document.source()) == baseline,
+        "redo publication failure must retain the undone state and redo entry"
+    );
+    failPublication = false;
+    static_cast<void>(session.redo());
+    require(
+        palmier::json::canonical(session.snapshot().document.source()) == splitSource,
+        "redo remains available after publication failure"
+    );
+    static_cast<void>(session.undo());
 
     const auto secondSplit = session.splitClips(SplitClipsCommand{
         std::vector<SplitPoint>{{"target", 60}}, std::nullopt, std::nullopt,
@@ -1094,6 +1114,190 @@ void cancelledUndoPreservesHistory(const std::filesystem::path& root) {
     require(session.revision() == 2, "undo remains available after cancellation");
 }
 
+void redoRestoresSplitMoveAndRemoveExactly() {
+    const std::string source = R"({
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{
+            "id":"track","type":"video","x-track":{"keep":true},"clips":[{
+                "id":"clip","mediaRef":"media","mediaType":"video",
+                "sourceClipType":"video","startFrame":0,"durationFrames":120,
+                "x-clip":{"keep":true}
+            }]
+        }]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"],
+        "x-root":{"keep":true}
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    int nextId{};
+    ProjectSession session(document, [&] { return "history-id-" + std::to_string(++nextId); });
+    const auto baseline = palmier::json::canonical(session.snapshot().document.source());
+
+    const auto split = session.splitClips(SplitClipsCommand{
+        std::vector<SplitPoint>{{"clip", 60}}, std::nullopt, std::nullopt,
+    });
+    const auto splitState = palmier::json::canonical(session.snapshot().document.source());
+    const auto timeline = session.getTimeline();
+    const auto rightId = at(clipAt(timeline, 1), "id").string();
+    const auto move = session.moveClips(MoveClipsCommand{{
+        ClipMove{rightId, std::nullopt, std::int64_t{200}},
+    }});
+    const auto movedState = palmier::json::canonical(session.snapshot().document.source());
+    const auto remove = session.removeClips(RemoveClipsCommand{{"clip"}});
+    const auto removedState = palmier::json::canonical(session.snapshot().document.source());
+    auto state = session.snapshot();
+    require(state.undoDepth == 3 && state.redoDepth == 0, "forward history depths");
+
+    require(session.undo().actionId == remove.actionId, "remove undo identity");
+    require(
+        palmier::json::canonical(session.snapshot().document.source()) == movedState,
+        "remove undo exact state"
+    );
+    require(session.undo().actionId == move.actionId, "move undo identity");
+    require(
+        palmier::json::canonical(session.snapshot().document.source()) == splitState,
+        "move undo exact state"
+    );
+    require(session.undo().actionId == split.actionId, "split undo identity");
+    state = session.snapshot();
+    require(
+        palmier::json::canonical(state.document.source()) == baseline
+            && state.undoDepth == 0
+            && state.redoDepth == 3,
+        "complete undo history"
+    );
+
+    require(session.redo().actionId == split.actionId, "split redo identity");
+    require(
+        palmier::json::canonical(session.snapshot().document.source()) == splitState,
+        "split redo exact state"
+    );
+    require(at(clipAt(session.getTimeline(), 1), "id").string() == rightId, "redo changed split ID");
+    require(session.redo().actionId == move.actionId, "move redo identity");
+    require(
+        palmier::json::canonical(session.snapshot().document.source()) == movedState,
+        "move redo exact state"
+    );
+    require(session.redo().actionId == remove.actionId, "remove redo identity");
+    state = session.snapshot();
+    require(
+        palmier::json::canonical(state.document.source()) == removedState
+            && state.revision == 9
+            && state.undoDepth == 3
+            && state.redoDepth == 0,
+        "complete redo history"
+    );
+    requireCommandError([&] { static_cast<void>(session.redo()); }, "nothingToRedo");
+}
+
+void changedEditInvalidatesRedoButFailuresAndNoOpsPreserveIt() {
+    const std::string source = R"({
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{
+            "id":"track","type":"video","clips":[{
+                "id":"clip","mediaRef":"media","mediaType":"video",
+                "sourceClipType":"video","startFrame":0,"durationFrames":120
+            }]
+        }]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    int nextId{};
+    ProjectSession session(document, [&] { return "branch-id-" + std::to_string(++nextId); });
+    static_cast<void>(session.splitClips(SplitClipsCommand{
+        std::vector<SplitPoint>{{"clip", 60}}, std::nullopt, std::nullopt,
+    }));
+    static_cast<void>(session.undo());
+    require(session.snapshot().redoDepth == 1, "undo did not create redo history");
+    requireCommandError(
+        [&] { static_cast<void>(session.removeClips(RemoveClipsCommand{{"missing"}})); },
+        "clipNotFound"
+    );
+    const auto noOp = session.moveClips(MoveClipsCommand{{
+        ClipMove{"clip", std::nullopt, std::int64_t{0}},
+    }});
+    require(!noOp.changed && noOp.publication->redoDepth == 1, "no-op cleared redo history");
+    static_cast<void>(session.moveClips(MoveClipsCommand{{
+        ClipMove{"clip", std::nullopt, std::int64_t{10}},
+    }}));
+    require(session.snapshot().redoDepth == 0, "changed edit retained stale redo history");
+    requireCommandError([&] { static_cast<void>(session.redo()); }, "nothingToRedo");
+}
+
+void persistenceKeepsHistoryAndUsesRestoredStateIdentity() {
+    const std::string source = R"({
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{
+            "id":"track","type":"video","clips":[{
+                "id":"clip","mediaRef":"media","mediaType":"video",
+                "sourceClipType":"video","startFrame":0,"durationFrames":120
+            }]
+        }]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    int nextId{};
+    ProjectSession session(document, [&] { return "persist-id-" + std::to_string(++nextId); });
+    static_cast<void>(session.splitClips(SplitClipsCommand{
+        std::vector<SplitPoint>{{"clip", 60}}, std::nullopt, std::nullopt,
+    }));
+    static_cast<void>(session.undo());
+    const auto persistedBaseline = session.markPersisted(0);
+    require(!persistedBaseline->dirty() && persistedBaseline->redoDepth == 1, "save cleared redo");
+    static_cast<void>(session.redo());
+    require(session.stateId() == 1 && session.dirty(), "redo did not restore dirty state identity");
+    const auto persistedSplit = session.markPersisted(1);
+    require(!persistedSplit->dirty() && persistedSplit->undoDepth == 1, "save cleared undo");
+    static_cast<void>(session.undo());
+    require(session.stateId() == 0 && session.dirty(), "undo did not restore dirty baseline");
+    static_cast<void>(session.redo());
+    require(session.stateId() == 1 && !session.dirty(), "redo did not restore persisted identity");
+}
+
+void redoCancellationAfterPublicationDoesNotCommit() {
+    const std::string source = R"({
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{
+            "id":"track","type":"video","clips":[{
+                "id":"clip","mediaRef":"media","mediaType":"video",
+                "sourceClipType":"video","startFrame":0,"durationFrames":120
+            }]
+        }]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    std::stop_source cancellation;
+    bool cancelPublication{};
+    int nextId{};
+    ProjectSession session(
+        document,
+        [&] { return "cancel-redo-id-" + std::to_string(++nextId); },
+        [&](palmier::project::ProjectSessionSnapshot snapshot) {
+            if (cancelPublication) cancellation.request_stop();
+            return std::make_shared<const palmier::project::ProjectSessionSnapshot>(
+                std::move(snapshot)
+            );
+        }
+    );
+    static_cast<void>(session.splitClips(SplitClipsCommand{
+        std::vector<SplitPoint>{{"clip", 60}}, std::nullopt, std::nullopt,
+    }));
+    static_cast<void>(session.undo());
+    const auto baseline = palmier::json::canonical(session.snapshot().document.source());
+    cancelPublication = true;
+    requireCommandError(
+        [&] { static_cast<void>(session.redo(cancellation.get_token())); },
+        "cancelled"
+    );
+    const auto cancelled = session.snapshot();
+    require(
+        cancelled.revision == 2
+            && cancelled.undoDepth == 0
+            && cancelled.redoDepth == 1
+            && palmier::json::canonical(cancelled.document.source()) == baseline,
+        "redo cancellation after publication committed state"
+    );
+}
+
 }
 
 int wmain(int argumentCount, wchar_t* arguments[]) {
@@ -1127,6 +1331,10 @@ int wmain(int argumentCount, wchar_t* arguments[]) {
         cancellationDuringPlanningDoesNotCommit(root);
         extremeTimingIsRefusedBeforeCommit();
         cancelledUndoPreservesHistory(root);
+        redoRestoresSplitMoveAndRemoveExactly();
+        changedEditInvalidatesRedoButFailuresAndNoOpsPreserveIt();
+        persistenceKeepsHistoryAndUsesRestoredStateIdentity();
+        redoCancellationAfterPublicationDoesNotCommit();
         std::cout << "PALMIER_PROJECT_SESSION_TESTS_OK\n";
         return 0;
     } catch (const std::exception& error) {

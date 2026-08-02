@@ -162,6 +162,10 @@ private slots:
             &editing,
             &palmier::windows::ProjectEditingController::operationFinished
         );
+        QSignalSpy historyRestored(
+            &editing,
+            &palmier::windows::ProjectEditingController::historyRestored
+        );
 
         editing.splitClip(QStringLiteral("clip"), QStringLiteral("10"));
         QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 5000);
@@ -177,13 +181,29 @@ private slots:
         editing.undo();
         QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 2, 5000);
         QCOMPARE(finished.at(1).at(0).toBool(), true);
+        QCOMPARE(historyRestored.count(), 1);
         QVERIFY(!editing.canUndo());
+        QVERIFY(editing.canRedo());
         snapshot = runtime->snapshot(4);
         QCOMPARE(
             snapshot.session->document.project().timelines.front().tracks.front().clips.size(),
             std::size_t{1}
         );
         QCOMPARE(snapshot.session->undoDepth, std::size_t{0});
+
+        editing.redo();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 3, 5000);
+        QCOMPARE(finished.at(2).at(0).toBool(), true);
+        QCOMPARE(historyRestored.count(), 2);
+        QVERIFY(editing.canUndo());
+        QVERIFY(!editing.canRedo());
+        snapshot = runtime->snapshot(4);
+        QCOMPARE(
+            snapshot.session->document.project().timelines.front().tracks.front().clips.size(),
+            std::size_t{2}
+        );
+        QCOMPARE(snapshot.session->undoDepth, std::size_t{1});
+        QCOMPARE(snapshot.session->redoDepth, std::size_t{0});
 
         const std::vector<QString> malformedFrames{
             QStringLiteral("-1"),
@@ -197,18 +217,18 @@ private slots:
             QCOMPARE(finished.last().at(0).toBool(), false);
             QCOMPARE(editing.errorCode(), QStringLiteral("invalidArguments"));
         }
-        QCOMPARE(finished.count(), 2 + static_cast<int>(malformedFrames.size()));
+        QCOMPARE(finished.count(), 3 + static_cast<int>(malformedFrames.size()));
         editing.splitClip(
             QStringLiteral("clip"),
             QStringLiteral("9223372036854775807")
         );
         QTRY_COMPARE_WITH_TIMEOUT(
             finished.count(),
-            3 + static_cast<int>(malformedFrames.size()),
+            4 + static_cast<int>(malformedFrames.size()),
             5000
         );
         QCOMPARE(editing.errorCode(), QStringLiteral("invalidSplitFrame"));
-        QCOMPARE(runtime->snapshot(4).session->revision, std::uint64_t{2});
+        QCOMPARE(runtime->snapshot(4).session->revision, std::uint64_t{3});
         QVERIFY(editing.requestShutdown());
     }
 
@@ -1810,6 +1830,8 @@ private slots:
         QVERIFY(root->findChild<QObject*>(QStringLiteral("moveFrameField")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("moveClipButton")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("removeClipButton")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("undoButton")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("redoButton")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("previewViewport")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("previewErrorState")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("emptyState")) != nullptr);

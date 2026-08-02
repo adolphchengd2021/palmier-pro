@@ -10,7 +10,7 @@ checks, the compiled MSVC contract probe, and a safe-edit C++ project document.
 It now includes an optional Qt project shell, isolated media/audio prototypes,
 one bounded project-driven H.264 export slice, a five-tool loopback MCP editing
 slice, and an atomic `project.json` edit-save-restart slice with stable-ID Split,
-Move, Remove, Undo, explicit Save, and dirty-close protection in Qt. The Qt workflow also
+Move, Remove, shared Undo/Redo, explicit Save, and dirty-close protection in Qt. The Qt workflow also
 builds an unsigned x64 prototype installer with a runtime hash manifest and
 distribution evidence, then tests isolated staging, install, launch, uninstall,
    and external user-data preservation. It now also owns the active package
@@ -102,6 +102,14 @@ pool, blocks dirty project replacement, waits for an admitted save during close,
    atomically installs a new destination, and switches identity only after the
    exact runtime snapshot is acknowledged. Autosave and broader concurrent media
    mutation coordination remain open; see ADR 0028 through ADR 0031 and ADR 0035.
+
+The shared session also keeps a process-local Redo branch for Split, Move, and
+Remove. Undo captures the exact post-action source DOM; Redo restores that state
+without replaying command arguments, including stable generated IDs. A changed
+edit clears Redo only at commit, while failures, cancellation, stale requests,
+and exact Move no-ops preserve it. Qt consumes the published undo/redo depths on
+the existing serial edit executor. MCP intentionally remains on the macOS-compatible
+five-tool inventory, which exposes Undo but not Redo; see ADR 0038.
 
 The same Qt workflow stages the Release executable through CMake install, runs
 the pinned `windeployqt` QML deployment, requires the complete app-local FFmpeg

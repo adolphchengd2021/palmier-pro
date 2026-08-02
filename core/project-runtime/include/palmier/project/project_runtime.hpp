@@ -96,6 +96,10 @@ public:
         std::optional<std::uint64_t> expectedProjectGeneration = {},
         std::stop_token cancellation = {}
     );
+    ProjectRuntimeCommandResult redo(
+        std::optional<std::uint64_t> expectedProjectGeneration = {},
+        std::stop_token cancellation = {}
+    );
     ProjectRuntimeState markPersisted(
         std::uint64_t stateId,
         std::optional<std::uint64_t> expectedProjectGeneration = {},

@@ -603,6 +603,12 @@ void editSaveRestartPreservesCanariesAndState(const std::filesystem::path& root)
     } catch (const CommandError& error) {
         require(error.code == "nothingToUndo", "restart returned the wrong undo boundary");
     }
+    try {
+        static_cast<void>(reopened.redo(12));
+        throw std::runtime_error("restart unexpectedly retained a redo action");
+    } catch (const CommandError& error) {
+        require(error.code == "nothingToRedo", "restart returned the wrong redo boundary");
+    }
 
     const auto removed = reopened.removeClips(RemoveClipsCommand{{movedClipId}}, 12);
     require(removed.command.changed && removed.session->revision == 1, "remove did not update runtime");

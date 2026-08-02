@@ -520,6 +520,27 @@ Object receiptBase(
 CommandError::CommandError(std::string codeValue, std::string detail)
     : std::runtime_error(std::move(detail)), code(std::move(codeValue)) {}
 
+ProjectSession::UndoEntry::UndoEntry(
+    std::string actionIdValue,
+    std::vector<TrackSnapshot> trackSnapshots,
+    std::unique_ptr<TimelineSnapshot> timelineSnapshot,
+    std::vector<std::string> createdIds,
+    std::uint64_t stateId
+) : actionId(std::move(actionIdValue)),
+    tracks(std::move(trackSnapshots)),
+    timeline(std::move(timelineSnapshot)),
+    createdClipIds(std::move(createdIds)),
+    beforeStateId(stateId) {}
+
+ProjectSession::UndoEntry::UndoEntry(const UndoEntry& other)
+    : actionId(other.actionId),
+      tracks(other.tracks),
+      timeline(other.timeline
+          ? std::make_unique<TimelineSnapshot>(*other.timeline)
+          : nullptr),
+      createdClipIds(other.createdClipIds),
+      beforeStateId(other.beforeStateId) {}
+
 ProjectSession::ProjectSession(
     const ProjectDocument& document,
     IdGenerator idGenerator,
@@ -911,6 +932,7 @@ CommandResult ProjectSession::splitClips(
         stateAfter,
         persistedStateId_,
         undoJournal_.size() + 1,
+        0,
     });
     CommandResult result{
         true,
@@ -934,6 +956,7 @@ CommandResult ProjectSession::splitClips(
     stateId_ = stateAfter;
     ++nextStateId_;
     undoJournal_.push_back(std::move(undoEntry));
+    redoJournal_.clear();
     return result;
 }
 
@@ -1080,6 +1103,7 @@ CommandResult ProjectSession::moveClips(
             stateId_,
             persistedStateId_,
             undoJournal_.size(),
+            redoJournal_.size(),
         });
         checkCancellation(cancellation);
         return CommandResult{
@@ -1387,6 +1411,7 @@ CommandResult ProjectSession::moveClips(
         stateAfter,
         persistedStateId_,
         undoJournal_.size() + 1,
+        0,
     });
     CommandResult result{
         true,
@@ -1410,6 +1435,7 @@ CommandResult ProjectSession::moveClips(
     stateId_ = stateAfter;
     ++nextStateId_;
     undoJournal_.push_back(std::move(undoEntry));
+    redoJournal_.clear();
     return result;
 }
 
@@ -1592,6 +1618,7 @@ CommandResult ProjectSession::removeClips(
         stateAfter,
         persistedStateId_,
         undoJournal_.size() + 1,
+        0,
     });
     CommandResult result{
         true,
@@ -1613,6 +1640,7 @@ CommandResult ProjectSession::removeClips(
     stateId_ = stateAfter;
     ++nextStateId_;
     undoJournal_.push_back(std::move(undoEntry));
+    redoJournal_.clear();
     return result;
 }
 
@@ -1644,6 +1672,40 @@ CommandResult ProjectSession::undo(std::stop_token cancellation) {
             throw CommandError("staleUndo", "the project structure no longer matches the undo action");
         }
     }
+    std::vector<TrackSnapshot> redoTracks;
+    std::unique_ptr<TimelineSnapshot> redoTimeline;
+    if (pending.timeline) {
+        const auto timelineIndex = pending.timeline->timelineIndex;
+        const auto& timeline = project_.timelines[timelineIndex];
+        redoTimeline = std::make_unique<TimelineSnapshot>(TimelineSnapshot{
+            timelineIndex,
+            timeline,
+            sourceTimelineFor(*source_, rootKind_, timeline.id.value),
+        });
+    } else {
+        redoTracks.reserve(pending.tracks.size());
+        for (const auto& snapshot : pending.tracks) {
+            const auto& timeline = project_.timelines[snapshot.timelineIndex];
+            const auto& track = timeline.tracks[snapshot.trackIndex];
+            redoTracks.push_back({
+                snapshot.timelineIndex,
+                snapshot.trackIndex,
+                track.clips,
+                Value(sourceClipsForTrack(
+                    *source_,
+                    rootKind_,
+                    timeline.id.value,
+                    track.id.value
+                )),
+            });
+        }
+    }
+    RedoEntry redoEntry{
+        UndoEntry(pending),
+        std::move(redoTracks),
+        std::move(redoTimeline),
+        stateId_,
+    };
     const auto revisionBefore = revision_;
     const auto revisionAfter = revisionBefore + 1;
     Project planned = project_;
@@ -1676,6 +1738,7 @@ CommandResult ProjectSession::undo(std::stop_token cancellation) {
     for (const auto& clipId : pending.createdClipIds) {
         plannedGeneratedClipIds.erase(clipId);
     }
+    redoJournal_.reserve(redoJournal_.size() + 1);
     auto payload = receiptBase(true, revisionBefore, revisionAfter, pending.actionId);
     payload.emplace("clips", Value(Array{}));
     payload["notes"] = Value(Array{Value("Re-read get_timeline after undo.")});
@@ -1685,6 +1748,7 @@ CommandResult ProjectSession::undo(std::stop_token cancellation) {
         pending.beforeStateId,
         persistedStateId_,
         undoJournal_.size() - 1,
+        redoJournal_.size() + 1,
     });
     CommandResult result{
         true,
@@ -1697,13 +1761,113 @@ CommandResult ProjectSession::undo(std::stop_token cancellation) {
     checkCancellation(cancellation);
 
     static_assert(std::is_nothrow_move_assignable_v<Project>);
+    static_assert(std::is_nothrow_move_constructible_v<RedoEntry>);
     static_assert(noexcept(source_.swap(plannedSource)));
     project_ = std::move(planned);
     source_.swap(plannedSource);
     sessionGeneratedClipIds_.swap(plannedGeneratedClipIds);
     revision_ = revisionAfter;
     stateId_ = pending.beforeStateId;
+    redoJournal_.push_back(std::move(redoEntry));
     undoJournal_.pop_back();
+    return result;
+}
+
+CommandResult ProjectSession::redo(std::stop_token cancellation) {
+    std::scoped_lock lock(mutex_);
+    checkCancellation(cancellation);
+    if (redoJournal_.empty()) {
+        throw CommandError("nothingToRedo", "there is no Windows project action to redo");
+    }
+    if (revision_ >= maximumRevision) {
+        throw CommandError("revisionOverflow", "project revision cannot advance");
+    }
+    const auto& pending = redoJournal_.back();
+    if (pending.timeline) {
+        if (
+            pending.timeline->timelineIndex >= project_.timelines.size()
+            || project_.timelines[pending.timeline->timelineIndex].id.value
+                != pending.timeline->timeline.id.value
+        ) {
+            throw CommandError("staleRedo", "the project timeline no longer matches the redo action");
+        }
+    }
+    for (const auto& snapshot : pending.tracks) {
+        checkCancellation(cancellation);
+        if (
+            snapshot.timelineIndex >= project_.timelines.size()
+            || snapshot.trackIndex >= project_.timelines[snapshot.timelineIndex].tracks.size()
+        ) {
+            throw CommandError("staleRedo", "the project structure no longer matches the redo action");
+        }
+    }
+
+    Project planned = project_;
+    auto plannedSource = std::make_unique<Value>(*source_);
+    if (pending.timeline) {
+        planned.timelines[pending.timeline->timelineIndex] = pending.timeline->timeline;
+        sourceTimelineFor(
+            *plannedSource,
+            rootKind_,
+            pending.timeline->timeline.id.value
+        ) = pending.timeline->sourceTimeline;
+    } else {
+        for (const auto& snapshot : pending.tracks) {
+            const auto& timeline = project_.timelines[snapshot.timelineIndex];
+            const auto& track = timeline.tracks[snapshot.trackIndex];
+            if (snapshot.sourceClips.kind() != Value::Kind::array) {
+                throw CommandError("staleRedo", "redo source snapshot is not a clip array");
+            }
+            planned.timelines[snapshot.timelineIndex].tracks[snapshot.trackIndex].clips =
+                snapshot.clips;
+            sourceClipsForTrack(
+                *plannedSource,
+                rootKind_,
+                timeline.id.value,
+                track.id.value
+            ) = snapshot.sourceClips.array();
+        }
+    }
+    auto plannedGeneratedClipIds = sessionGeneratedClipIds_;
+    plannedGeneratedClipIds.insert(
+        pending.undo.createdClipIds.begin(),
+        pending.undo.createdClipIds.end()
+    );
+    UndoEntry undoEntry(pending.undo);
+    undoJournal_.reserve(undoJournal_.size() + 1);
+    const auto revisionBefore = revision_;
+    const auto revisionAfter = revisionBefore + 1;
+    auto payload = receiptBase(true, revisionBefore, revisionAfter, pending.undo.actionId);
+    payload.emplace("clips", Value(Array{}));
+    payload["notes"] = Value(Array{Value("Re-read get_timeline after redo.")});
+    auto publication = preparePublication({
+        ProjectDocument(*plannedSource, rootKind_, planned, diagnostics_),
+        revisionAfter,
+        pending.afterStateId,
+        persistedStateId_,
+        undoJournal_.size() + 1,
+        redoJournal_.size() - 1,
+    });
+    CommandResult result{
+        true,
+        revisionBefore,
+        revisionAfter,
+        pending.undo.actionId,
+        std::make_unique<Value>(std::move(payload)),
+        std::move(publication),
+    };
+    checkCancellation(cancellation);
+
+    static_assert(std::is_nothrow_move_assignable_v<Project>);
+    static_assert(std::is_nothrow_move_constructible_v<UndoEntry>);
+    static_assert(noexcept(source_.swap(plannedSource)));
+    project_ = std::move(planned);
+    source_.swap(plannedSource);
+    sessionGeneratedClipIds_.swap(plannedGeneratedClipIds);
+    revision_ = revisionAfter;
+    stateId_ = pending.afterStateId;
+    undoJournal_.push_back(std::move(undoEntry));
+    redoJournal_.pop_back();
     return result;
 }
 
@@ -1716,6 +1880,7 @@ ProjectSessionSnapshot ProjectSession::snapshot(std::stop_token cancellation) co
         stateId_,
         persistedStateId_,
         undoJournal_.size(),
+        redoJournal_.size(),
     };
 }
 
@@ -1741,6 +1906,7 @@ std::shared_ptr<const ProjectSessionSnapshot> ProjectSession::markPersisted(
         stateId_,
         stateId,
         undoJournal_.size(),
+        redoJournal_.size(),
     });
     persistedStateId_ = stateId;
     return publication;

@@ -82,6 +82,11 @@ ApplicationWindow {
             window.selectedTrackId = ""
             window.selectedMediaType = ""
         }
+        function onHistoryRestored() {
+            window.selectedClipId = ""
+            window.selectedTrackId = ""
+            window.selectedMediaType = ""
+        }
     }
 
     Connections {
@@ -241,11 +246,20 @@ ApplicationWindow {
                 onClicked: persistenceCoordinator.cancelSave()
             }
             Button {
+                objectName: "undoButton"
                 text: qsTr("Undo")
                 enabled: editingCoordinator.canUndo && !editingCoordinator.busy
                     && !projectCoordinator.loading
                     && !exportCoordinator.exporting
                 onClicked: editingCoordinator.undo()
+            }
+            Button {
+                objectName: "redoButton"
+                text: qsTr("Redo")
+                enabled: editingCoordinator.canRedo && !editingCoordinator.busy
+                    && !projectCoordinator.loading
+                    && !exportCoordinator.exporting
+                onClicked: editingCoordinator.redo()
             }
             Button {
                 objectName: "exportSelectedClipButton"

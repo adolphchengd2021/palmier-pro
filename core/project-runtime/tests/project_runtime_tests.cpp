@@ -137,14 +137,31 @@ void mutationPublishesOneSessionState() {
 
     const auto undo = runtime.undo();
     require(undo.command.revisionAfter == 2, "undo receipt");
-    require(undo.session->stateId == 0 && !undo.session->dirty(), "undo publication");
+    require(
+        undo.session->stateId == 0 && !undo.session->dirty() && undo.session->redoDepth == 1,
+        "undo publication"
+    );
     require(
         runtime.getTimeline().timeline.find("tracks")->array().front()
             .find("clips")->array().size() == 1,
         "undo restores runtime state"
     );
+    const auto redo = runtime.redo();
+    require(redo.command.revisionAfter == 3, "redo receipt");
+    require(
+        redo.session->stateId == 1
+            && redo.session->dirty()
+            && redo.session->undoDepth == 1
+            && redo.session->redoDepth == 0,
+        "redo publication"
+    );
+    require(
+        runtime.getTimeline().timeline.find("tracks")->array().front()
+            .find("clips")->array().size() == 2,
+        "redo restores runtime state"
+    );
     const auto publications = observer->publications();
-    require(publications.size() == 3, "install, split, and undo each publish once");
+    require(publications.size() == 4, "install, split, undo, and redo each publish once");
     require(
         publications[0].projectGeneration == 1
         && publications[0].revision == 0
@@ -155,7 +172,9 @@ void mutationPublishesOneSessionState() {
         publications[1].revision == 1
         && publications[1].stateId == 1
         && publications[2].revision == 2
-        && publications[2].stateId == 0,
+        && publications[2].stateId == 0
+        && publications[3].revision == 3
+        && publications[3].stateId == 1,
         "mutation publications preserve exact session identity"
     );
 }

@@ -371,6 +371,29 @@ ProjectRuntimeCommandResult ProjectRuntime::undo(
     });
 }
 
+ProjectRuntimeCommandResult ProjectRuntime::redo(
+    std::optional<std::uint64_t> expectedProjectGeneration,
+    std::stop_token cancellation
+) {
+    return implementation_->invoke<ProjectRuntimeCommandResult>([
+        expectedProjectGeneration,
+        cancellation
+    ](Implementation& runtime) {
+        checkCancellation(cancellation);
+        runtime.requireProjectGeneration(expectedProjectGeneration);
+        auto result = runtime.requireSession().redo(cancellation);
+        if (runtime.observer) runtime.observer->operationCommitted();
+        auto state = result.publication;
+        ProjectRuntimeCommandResult published{
+            runtime.projectGeneration,
+            std::move(result),
+            std::move(state),
+        };
+        runtime.publishState({published.projectGeneration, published.session});
+        return published;
+    });
+}
+
 ProjectRuntimeState ProjectRuntime::markPersisted(
     std::uint64_t stateId,
     std::optional<std::uint64_t> expectedProjectGeneration,

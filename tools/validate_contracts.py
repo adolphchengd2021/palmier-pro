@@ -1672,6 +1672,7 @@ def windows_project_reader_contract() -> None:
         "editSaveRestartPreservesCanariesAndState",
         "move did not update runtime",
         "remove did not update runtime",
+        "restart unexpectedly retained a redo action",
         "savingAnOlderSnapshotLeavesNewerRuntimeDirty",
         "committedSaveReportsClosedRuntimeAsWarning",
         "committedSaveConvertsUnexpectedAcknowledgementFailureToWarning",
@@ -4256,11 +4257,14 @@ def windows_qt_read_only_shell_contract() -> None:
     for token in [
         "Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)",
         "Q_PROPERTY(bool canUndo READ canUndo NOTIFY canUndoChanged)",
+        "Q_PROPERTY(bool canRedo READ canRedo NOTIFY canRedoChanged)",
         "moveClip(",
         "removeClip(const QString& clipId)",
         "clipRemoved(const QString& clipId)",
+        "void historyRestored()",
         "splitClip(const QString& clipId, const QString& frameText)",
         "Q_INVOKABLE void undo()",
+        "Q_INVOKABLE void redo()",
     ]:
         if token not in editing_header:
             raise ContractError(f"Qt editing API missing token {token!r}")
@@ -4272,8 +4276,11 @@ def windows_qt_read_only_shell_contract() -> None:
         "runtime->removeClips(",
         "runtime->splitClips(",
         "runtime->undo(generation, cancellation)",
+        "runtime->redo(generation, cancellation)",
         "publication.session->undoDepth > 0",
+        "publication.session->redoDepth > 0",
         "if (shutdownRequested_) emit shutdownReady()",
+        "emit historyRestored()",
     ]:
         if token not in editing_source:
             raise ContractError(f"Qt editing invariant missing token {token!r}")
@@ -4368,12 +4375,16 @@ def windows_qt_read_only_shell_contract() -> None:
         "editingCoordinator.moveClip(",
         "editingCoordinator.removeClip(",
         "function onClipRemoved(clipId)",
+        "function onHistoryRestored()",
         "editingCoordinator.splitClip(",
         'objectName: "moveTrackField"',
         'objectName: "moveFrameField"',
         'objectName: "moveClipButton"',
         'objectName: "removeClipButton"',
+        'objectName: "undoButton"',
+        'objectName: "redoButton"',
         "editingCoordinator.undo()",
+        "editingCoordinator.redo()",
         "modelData.stableId",
         "clip: true",
     ]:
@@ -4426,6 +4437,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "persistenceWorkerRetainsRuntimeAfterControllerTeardown",
         "dirtyRuntimeRefusesProjectReplacement",
         "editingControllerSplitsAndUndoesByStableId",
+        "QSignalSpy historyRestored",
         "editingControllerMovesByStableIdAndPreservesNoOpHistory",
         "editingControllerRemovesByStableIdAndUndoes",
         "persistenceShutdownRefreshesAuthoritativeDirtyState",
@@ -5022,11 +5034,13 @@ def windows_mcp_project_session_contract() -> None:
     service_adr = read_text("docs/windows/adr/0028-stoppable-embedded-mcp-service.md")
     move_adr = read_text("docs/windows/adr/0036-atomic-move-clips.md")
     remove_adr = read_text("docs/windows/adr/0037-atomic-remove-clips.md")
+    redo_adr = read_text("docs/windows/adr/0038-exact-redo-history.md")
     readme = read_text("docs/windows/README.md")
     for token in [
         "class ProjectSession final",
         "ProjectSessionSnapshot",
         "std::size_t undoDepth",
+        "std::size_t redoDepth",
         "ProjectSaveSnapshot",
         "TimelineQuery",
         "MoveClipsCommand",
@@ -5039,6 +5053,7 @@ def windows_mcp_project_session_contract() -> None:
         "markPersisted(",
         "revision() const",
         "dirty() const",
+        "CommandResult redo(",
     ]:
         if token not in session_header:
             raise ContractError(f"ProjectSession API missing token {token!r}")
@@ -5046,6 +5061,7 @@ def windows_mcp_project_session_contract() -> None:
         "unsafeClipIds(document)",
         "CommandResult ProjectSession::moveClips(",
         "CommandResult ProjectSession::removeClips(",
+        "CommandResult ProjectSession::redo(",
         "linked clips must preserve their frame offsets",
         "moved clips overlap on a destination track",
         "destination overlap would change a linked clip",
@@ -5056,11 +5072,14 @@ def windows_mcp_project_session_contract() -> None:
         "undoJournal_.push_back",
         "undoJournal_.size() + 1",
         "undoJournal_.size() - 1",
+        "redoJournal_",
+        "nothingToRedo",
         "project_ = std::move(planned)",
         "source_.swap(plannedSource)",
         "stateId_ = pending.beforeStateId",
         "return stateId_ != persistedStateId_",
         "Re-read get_timeline after undo.",
+        "Re-read get_timeline after redo.",
         "checkCancellation(cancellation)",
         "preparePublication({",
         "ProjectDocument(*plannedSource, rootKind_, planned, diagnostics_)",
@@ -5093,11 +5112,16 @@ def windows_mcp_project_session_contract() -> None:
         "cancellationDuringPlanningDoesNotCommit",
         "extremeTimingIsRefusedBeforeCommit",
         "cancelledUndoPreservesHistory",
+        "redoRestoresSplitMoveAndRemoveExactly",
+        "changedEditInvalidatesRedoButFailuresAndNoOpsPreserveIt",
+        "persistenceKeepsHistoryAndUsesRestoredStateIdentity",
+        "redoCancellationAfterPublicationDoesNotCommit",
         "publicationPreparationFailureDoesNotCommit",
         "split publication failure must preserve the exact session",
         "move publication failure must preserve the exact session",
         "remove publication failure must preserve the exact session",
         "undo publication failure must retain the committed split and undo entry",
+        "redo publication failure must retain the undone state and redo entry",
         "persistence publication failure must not acknowledge the state",
     ]:
         if token not in session_tests:
@@ -5109,6 +5133,7 @@ def windows_mcp_project_session_contract() -> None:
         "ProjectRuntimeCommandResult",
         "moveClips(",
         "removeClips(",
+        "redo(",
         "projectGeneration(",
         "ProjectRuntimeObserver",
         "operationCommitted() noexcept",
@@ -5126,6 +5151,7 @@ def windows_mcp_project_session_contract() -> None:
         "runtime.session.swap(candidate)",
         "runtime.requireProjectGeneration(expectedProjectGeneration)",
         "runtime.observer->operationCommitted()",
+        "runtime.requireSession().redo(cancellation)",
         "observer->statePublished(state)",
         "auto state = result.publication",
         "if (admissionObserver) admissionObserver->operationAdmitted()",
@@ -5140,7 +5166,7 @@ def windows_mcp_project_session_contract() -> None:
         "dirtyAndGenerationGatesProtectReplacement",
         "operationsAreSerializedAndQueuedCancellationDoesNotCommit",
         "cancellationAfterCommitStillPublishesSuccess",
-        "install, split, and undo each publish once",
+        "install, split, undo, and redo each publish once",
         "late cancellation cannot suppress committed state publication",
         "persistenceAcknowledgementPublishesOnlyOnChange",
         "unchanged persistence acknowledgement must not republish state",
@@ -5271,6 +5297,20 @@ def windows_mcp_project_session_contract() -> None:
     for token in ["five-tool loopback MCP", "ADR 0026", "ADR 0036", "ADR 0037"]:
         if token not in readme:
             raise ContractError(f"Windows README missing token {token!r}")
+    for token in [
+        "exact post-action state",
+        "original action ID",
+        "generated clip IDs",
+        "exact Move no-op",
+        "both undo and redo depths",
+        "MCP does not gain a `redo` tool",
+        "selected stable ID may no longer exist",
+    ]:
+        if token not in redo_adr:
+            raise ContractError(f"Windows redo ADR missing token {token!r}")
+    for token in ["shared Undo/Redo", "process-local Redo branch", "ADR 0038"]:
+        if token not in readme:
+            raise ContractError(f"Windows README missing redo token {token!r}")
     for token in [
         "one atomic `ProjectSession` operation",
         "stable clip IDs",

@@ -43,6 +43,7 @@ ProjectEditingController::~ProjectEditingController() {
 
 bool ProjectEditingController::busy() const noexcept { return busy_; }
 bool ProjectEditingController::canUndo() const noexcept { return canUndo_; }
+bool ProjectEditingController::canRedo() const noexcept { return canRedo_; }
 QString ProjectEditingController::errorCode() const { return errorCode_; }
 QString ProjectEditingController::errorMessage() const { return errorMessage_; }
 
@@ -63,6 +64,7 @@ void ProjectEditingController::observeRuntimePublication(
         return;
     }
     setCanUndo(publication.session->undoDepth > 0);
+    setCanRedo(publication.session->redoDepth > 0);
 }
 
 void ProjectEditingController::splitClip(
@@ -140,6 +142,16 @@ void ProjectEditingController::undo() {
     start(Operation::undo);
 }
 
+void ProjectEditingController::redo() {
+    if (!canRedo_) {
+        setErrorCode(QStringLiteral("nothingToRedo"));
+        setErrorMessage(QStringLiteral("There is no edit to redo."));
+        emit operationFinished(false);
+        return;
+    }
+    start(Operation::redo);
+}
+
 void ProjectEditingController::start(
     Operation operation,
     QString clipId,
@@ -182,6 +194,9 @@ void ProjectEditingController::start(
             setErrorMessage(std::move(result.errorMessage));
         }
         if (succeeded && operation == Operation::remove) emit clipRemoved(clipId);
+        if (succeeded && (operation == Operation::undo || operation == Operation::redo)) {
+            emit historyRestored();
+        }
         emit operationFinished(succeeded);
         if (shutdownRequested_) emit shutdownReady();
     });
@@ -230,7 +245,11 @@ void ProjectEditingController::start(
                 );
                 return EditResult{std::move(result.session), {}, {}};
             }
-            auto result = runtime->undo(generation, cancellation);
+            if (operation == Operation::undo) {
+                auto result = runtime->undo(generation, cancellation);
+                return EditResult{std::move(result.session), {}, {}};
+            }
+            auto result = runtime->redo(generation, cancellation);
             return EditResult{std::move(result.session), {}, {}};
         } catch (const project::CommandError& error) {
             return EditResult{
@@ -279,9 +298,11 @@ void ProjectEditingController::refreshFromMailbox() {
         || publication->projectGeneration != projectGeneration_
     ) {
         setCanUndo(false);
+        setCanRedo(false);
         return;
     }
     setCanUndo(publication->session->undoDepth > 0);
+    setCanRedo(publication->session->redoDepth > 0);
 }
 
 void ProjectEditingController::setBusy(bool value) {
@@ -294,6 +315,12 @@ void ProjectEditingController::setCanUndo(bool value) {
     if (canUndo_ == value) return;
     canUndo_ = value;
     emit canUndoChanged();
+}
+
+void ProjectEditingController::setCanRedo(bool value) {
+    if (canRedo_ == value) return;
+    canRedo_ = value;
+    emit canRedoChanged();
 }
 
 void ProjectEditingController::setErrorCode(QString value) {
