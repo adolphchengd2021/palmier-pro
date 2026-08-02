@@ -59,6 +59,17 @@ const Value& clipAt(const Value& timeline, std::size_t index) {
     return at(firstTrack(timeline), "clips").array().at(index);
 }
 
+const Value& firstSourceTrack(const palmier::project::ProjectDocument& document) {
+    return at(at(document.source(), "timelines").array().front(), "tracks").array().front();
+}
+
+const Value& sourceClipAt(
+    const palmier::project::ProjectDocument& document,
+    std::size_t index
+) {
+    return at(firstSourceTrack(document), "clips").array().at(index);
+}
+
 std::int64_t integer(const Value& value) {
     require(value.kind() == Value::Kind::number, "expected JSON number");
     require(value.number().integer.has_value(), "expected JSON integer");
@@ -81,6 +92,7 @@ void explicitSplitAndUndo(const std::filesystem::path& root) {
     int nextId = 0;
     auto session = fixtureSession(root, nextId);
     const auto baseline = palmier::json::canonical(session.getTimeline());
+    const auto baselineSource = palmier::json::canonical(session.snapshot().document.source());
     const auto result = session.splitClips(SplitClipsCommand{
         std::vector<SplitPoint>{{"clip-main-1", 60}}, std::nullopt, std::nullopt,
     });
@@ -99,12 +111,155 @@ void explicitSplitAndUndo(const std::filesystem::path& root) {
     require(integer(at(right, "startFrame")) == 60, "right start");
     require(integer(at(right, "durationFrames")) == 90, "right duration");
     require(integer(at(right, "trimStartFrame")) == 60, "right trim start");
+    const auto splitSnapshot = session.snapshot();
+    require(splitSnapshot.revision == 1 && splitSnapshot.stateId == 1, "split snapshot identity");
+    require(splitSnapshot.dirty(), "split snapshot dirty state");
+    require(at(sourceClipAt(splitSnapshot.document, 0), "id").string() == "clip-main-1", "source left ID");
+    require(integer(at(sourceClipAt(splitSnapshot.document, 0), "durationFrames")) == 60, "source left duration");
+    require(at(sourceClipAt(splitSnapshot.document, 1), "id").string() == "session-id-2", "source right ID");
+    require(integer(at(sourceClipAt(splitSnapshot.document, 1), "trimStartFrame")) == 60, "source right trim");
 
     const auto undo = session.undo();
     require(undo.changed && undo.revisionAfter == 2, "undo revision");
     require(!session.dirty(), "undo to baseline should clear dirty");
     require(palmier::json::canonical(session.getTimeline()) == baseline, "undo exact restore");
+    require(
+        palmier::json::canonical(session.snapshot().document.source()) == baselineSource,
+        "undo exact source restore"
+    );
     requireCommandError([&] { static_cast<void>(session.undo()); }, "nothingToUndo");
+}
+
+void sourceCanariesAndPersistedIdentity() {
+    const std::string source = R"({
+        "timelines":[{
+            "id":"timeline","fps":30,"width":1920,"height":1080,
+            "tracks":[{
+                "id":"track","type":"video","x-track":{"keep":true},"clips":[
+                    {"id":"target","mediaRef":"media","mediaType":"video",
+                     "sourceClipType":"video","startFrame":0,"durationFrames":120,
+                     "speed":1,"opacity":1,"blendMode":"normal"},
+                    {"id":"canary","mediaRef":"other","mediaType":"video",
+                     "sourceClipType":"video","startFrame":200,"durationFrames":30,
+                     "x-clip":{"nested":[1,"two",null]}}
+                ]
+            }],
+            "x-timeline":{"keep":"timeline"}
+        }],
+        "activeTimelineId":"timeline","openTimelineIds":["timeline"],
+        "x-root":{"keep":"root"}
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    int nextId = 0;
+    ProjectSession session(document, [&] {
+        return "state-id-" + std::to_string(++nextId);
+    });
+    const auto baseline = session.snapshot();
+    const auto baselineCanary = palmier::json::canonical(sourceClipAt(baseline.document, 1));
+    const auto baselineRoot = palmier::json::canonical(at(baseline.document.source(), "x-root"));
+
+    static_cast<void>(session.splitClips(SplitClipsCommand{
+        std::vector<SplitPoint>{{"target", 40}}, std::nullopt, std::nullopt,
+    }));
+    const auto saved = session.saveSnapshot();
+    require(saved.revision == 1 && saved.stateId == 1, "save snapshot identity");
+    const auto split = session.snapshot();
+    require(
+        palmier::json::canonical(sourceClipAt(split.document, 2)) == baselineCanary,
+        "unrelated clip canary must remain exact"
+    );
+    require(
+        palmier::json::canonical(at(split.document.source(), "x-root")) == baselineRoot,
+        "root canary must remain exact"
+    );
+    require(
+        palmier::json::canonical(at(firstSourceTrack(split.document), "x-track"))
+            == R"({"keep":true})",
+        "track canary must remain exact"
+    );
+
+    const auto reparsed = palmier::project::readProject(saved.source, [] {
+        return std::string("unexpected-reopen-id");
+    });
+    require(
+        reparsed.project().timelines.front().tracks.front().clips.at(1).id.origin
+            == palmier::project::EntityIdOrigin::persisted,
+        "saved right ID must become persisted after reopen"
+    );
+
+    session.markPersisted(saved.stateId);
+    require(!session.dirty(), "saved split state must be clean");
+    static_cast<void>(session.splitClips(SplitClipsCommand{
+        std::vector<SplitPoint>{{"state-id-2", 80}}, std::nullopt, std::nullopt,
+    }));
+    require(session.stateId() == 2 && session.dirty(), "new split must create dirty state");
+    session.markPersisted(saved.stateId);
+    require(session.dirty(), "stale save completion must not clear newer state");
+    static_cast<void>(session.undo());
+    require(session.stateId() == saved.stateId && !session.dirty(), "undo to saved state must be clean");
+    static_cast<void>(session.undo());
+    require(session.stateId() == 0 && session.dirty(), "undo past saved state must be dirty");
+    session.markPersisted(0);
+    require(!session.dirty(), "persisted baseline must be clean");
+    requireCommandError([&] { session.markPersisted(999); }, "unknownProjectState");
+}
+
+void unstableWriteParentsAreRefused() {
+    const auto makeSession = [](std::string source) {
+        auto document = palmier::project::readProject(source, [] {
+            return std::string("synthesized-parent");
+        });
+        return ProjectSession(document, [] { return std::string("generated"); });
+    };
+    auto unstableTimeline = makeSession(R"({
+        "timelines":[{"fps":30,"width":1920,"height":1080,"tracks":[{
+            "id":"track","type":"video","clips":[{
+                "id":"clip","mediaRef":"media","startFrame":0,"durationFrames":100
+            }]
+        }]}],"activeTimelineId":"synthesized-parent","openTimelineIds":[]
+    })");
+    requireCommandError(
+        [&] {
+            static_cast<void>(unstableTimeline.splitClips(SplitClipsCommand{
+                std::vector<SplitPoint>{{"clip", 50}}, std::nullopt, std::nullopt,
+            }));
+        },
+        "unstableTimelineId"
+    );
+
+    auto unstableTrack = makeSession(R"({
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{
+            "type":"video","clips":[{
+                "id":"clip","mediaRef":"media","startFrame":0,"durationFrames":100
+            }]
+        }]}],"activeTimelineId":"timeline","openTimelineIds":[]
+    })");
+    requireCommandError(
+        [&] {
+            static_cast<void>(unstableTrack.splitClips(SplitClipsCommand{
+                std::vector<SplitPoint>{{"clip", 50}}, std::nullopt, std::nullopt,
+            }));
+        },
+        "unstableTrackId"
+    );
+
+    auto legacy = makeSession(R"({
+        "id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{
+            "id":"track","type":"video","clips":[{
+                "id":"clip","mediaRef":"media","startFrame":0,"durationFrames":100
+            }]
+        }]
+    })");
+    requireCommandError(
+        [&] {
+            static_cast<void>(legacy.splitClips(SplitClipsCommand{
+                std::vector<SplitPoint>{{"clip", 50}}, std::nullopt, std::nullopt,
+            }));
+        },
+        "unsupportedProjectWriteRoot"
+    );
 }
 
 void invalidBatchDoesNotMutate(const std::filesystem::path& root) {
@@ -373,6 +528,8 @@ int wmain(int argumentCount, wchar_t* arguments[]) {
         }
         const std::filesystem::path root(arguments[1]);
         explicitSplitAndUndo(root);
+        sourceCanariesAndPersistedIdentity();
+        unstableWriteParentsAreRefused();
         invalidBatchDoesNotMutate(root);
         duplicateAndMultipleCutsAreOneAction(root);
         trackModeResolvesClip(root);

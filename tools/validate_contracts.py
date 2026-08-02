@@ -4545,9 +4545,13 @@ def windows_mcp_project_session_contract() -> None:
     readme = read_text("docs/windows/README.md")
     for token in [
         "class ProjectSession final",
+        "ProjectSessionSnapshot",
+        "ProjectSaveSnapshot",
         "TimelineQuery",
         "SplitClipsCommand",
         "CommandResult",
+        "saveSnapshot(",
+        "markPersisted(",
         "revision() const",
         "dirty() const",
     ]:
@@ -4560,6 +4564,9 @@ def windows_mcp_project_session_contract() -> None:
         "unsupportedClipSemantics",
         "undoJournal_.push_back",
         "project_ = std::move(planned)",
+        "source_ = std::move(plannedSource)",
+        "stateId_ = pending.beforeStateId",
+        "return stateId_ != persistedStateId_",
         "Re-read get_timeline after undo.",
         "checkCancellation(cancellation)",
     ]:
@@ -4567,6 +4574,8 @@ def windows_mcp_project_session_contract() -> None:
             raise ContractError(f"ProjectSession invariant missing token {token!r}")
     for token in [
         "explicitSplitAndUndo",
+        "sourceCanariesAndPersistedIdentity",
+        "unstableWriteParentsAreRefused",
         "invalidBatchDoesNotMutate",
         "duplicateAndMultipleCutsAreOneAction",
         "trackModeResolvesClip",

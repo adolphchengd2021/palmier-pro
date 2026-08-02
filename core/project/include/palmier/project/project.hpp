@@ -11,6 +11,8 @@
 
 namespace palmier::project {
 
+class ProjectSession;
+
 enum class EntityIdOrigin {
     persisted,
     synthesized,
@@ -82,6 +84,11 @@ enum class ProjectDocumentDisposition {
 
 class ProjectDocument final {
 public:
+    ProjectDocument(const ProjectDocument&) = default;
+    ProjectDocument(ProjectDocument&&) noexcept = default;
+    ProjectDocument& operator=(const ProjectDocument&) = default;
+    ProjectDocument& operator=(ProjectDocument&&) noexcept = default;
+
     const palmier::json::Value& source() const noexcept;
     RootKind rootKind() const noexcept;
     const Project& project() const noexcept;
@@ -105,6 +112,7 @@ private:
         const std::function<std::string()>& idGenerator,
         std::stop_token cancellation
     );
+    friend class ProjectSession;
 
     palmier::json::Value source_;
     RootKind rootKind_;

@@ -230,6 +230,135 @@ ClipLocation uniqueClipLocation(const Timeline& timeline, std::string_view id) {
     return *found;
 }
 
+Object& requireSourceObject(Value& value, std::string_view label) {
+    if (value.kind() != Value::Kind::object) {
+        throw CommandError("sourceModelMismatch", std::string(label) + " is not an object");
+    }
+    return value.object();
+}
+
+Array& requireSourceArray(Object& object, std::string_view key) {
+    const auto field = object.find(std::string(key));
+    if (field == object.end() || field->second.kind() != Value::Kind::array) {
+        throw CommandError(
+            "sourceModelMismatch",
+            "project source is missing array field: " + std::string(key)
+        );
+    }
+    return field->second.array();
+}
+
+Value& uniqueSourceEntity(Array& values, std::string_view id, std::string_view label) {
+    Value* found = nullptr;
+    for (auto& value : values) {
+        auto& object = requireSourceObject(value, label);
+        const auto idField = object.find("id");
+        if (
+            idField == object.end()
+            || idField->second.kind() != Value::Kind::string
+            || idField->second.string() != id
+        ) {
+            continue;
+        }
+        if (found != nullptr) {
+            throw CommandError(
+                "ambiguousSourceId",
+                std::string(label) + " ID is duplicated in project source: " + std::string(id)
+            );
+        }
+        found = &value;
+    }
+    if (found == nullptr) {
+        throw CommandError(
+            "sourceModelMismatch",
+            std::string(label) + " is missing from project source: " + std::string(id)
+        );
+    }
+    return *found;
+}
+
+Array& sourceClipsForTrack(
+    Value& source,
+    RootKind rootKind,
+    std::string_view timelineId,
+    std::string_view trackId
+) {
+    if (rootKind != RootKind::current) {
+        throw CommandError(
+            "unsupportedProjectWriteRoot",
+            "the Windows mutation slice does not write legacy project roots"
+        );
+    }
+    auto& root = requireSourceObject(source, "project root");
+    auto& timelines = requireSourceArray(root, "timelines");
+    auto& timeline = requireSourceObject(
+        uniqueSourceEntity(timelines, timelineId, "timeline"),
+        "timeline"
+    );
+    auto& tracks = requireSourceArray(timeline, "tracks");
+    auto& track = requireSourceObject(
+        uniqueSourceEntity(tracks, trackId, "track"),
+        "track"
+    );
+    return requireSourceArray(track, "clips");
+}
+
+Value sourceClipPiece(const Value& original, const Clip& piece) {
+    if (original.kind() != Value::Kind::object) {
+        throw CommandError("sourceModelMismatch", "source clip is not an object");
+    }
+    auto object = original.object();
+    object["id"] = Value(piece.id.value);
+    object["startFrame"] = Value(integerNumber(piece.startFrame));
+    object["durationFrames"] = Value(integerNumber(piece.durationFrames));
+    object["trimStartFrame"] = Value(integerNumber(piece.trimStartFrame));
+    object["trimEndFrame"] = Value(integerNumber(piece.trimEndFrame));
+    if (piece.linkGroupId) {
+        object["linkGroupId"] = Value(*piece.linkGroupId);
+    } else {
+        object.erase("linkGroupId");
+    }
+    return Value(std::move(object));
+}
+
+Array splitSourceClips(
+    const Array& sourceClips,
+    const std::map<std::string, std::vector<Clip>, std::less<>>& piecesByClip
+) {
+    std::set<std::string, std::less<>> replaced;
+    Array result;
+    result.reserve(sourceClips.size() + piecesByClip.size());
+    for (const auto& sourceClip : sourceClips) {
+        if (sourceClip.kind() != Value::Kind::object) {
+            result.push_back(sourceClip);
+            continue;
+        }
+        const auto id = sourceClip.object().find("id");
+        if (id == sourceClip.object().end() || id->second.kind() != Value::Kind::string) {
+            result.push_back(sourceClip);
+            continue;
+        }
+        const auto pieces = piecesByClip.find(id->second.string());
+        if (pieces == piecesByClip.end()) {
+            result.push_back(sourceClip);
+            continue;
+        }
+        if (!replaced.insert(id->second.string()).second) {
+            throw CommandError(
+                "ambiguousSourceId",
+                "clip ID is duplicated in project source: " + id->second.string()
+            );
+        }
+        for (const auto& piece : pieces->second) {
+            result.push_back(sourceClipPiece(sourceClip, piece));
+        }
+    }
+    if (replaced.size() != piecesByClip.size()) {
+        throw CommandError("sourceModelMismatch", "a split clip is missing from project source");
+    }
+    return result;
+}
+
 Object receiptBase(
     bool changed,
     std::uint64_t revisionBefore,
@@ -254,7 +383,10 @@ CommandError::CommandError(std::string codeValue, std::string detail)
     : std::runtime_error(std::move(detail)), code(std::move(codeValue)) {}
 
 ProjectSession::ProjectSession(const ProjectDocument& document, IdGenerator idGenerator)
-    : project_(document.project()),
+    : source_(document.source()),
+      rootKind_(document.rootKind()),
+      project_(document.project()),
+      diagnostics_(document.diagnostics()),
       idGenerator_(std::move(idGenerator)),
       unsafeClipIds_(unsafeClipIds(document)) {
     if (!idGenerator_) {
@@ -457,6 +589,28 @@ CommandResult ProjectSession::splitClips(
         affectedTracks.insert(location.trackIndex);
     }
 
+    if (rootKind_ != RootKind::current) {
+        throw CommandError(
+            "unsupportedProjectWriteRoot",
+            "the Windows mutation slice does not write legacy project roots"
+        );
+    }
+    if (timeline.id.origin != EntityIdOrigin::persisted) {
+        throw CommandError(
+            "unstableTimelineId",
+            "split requires a persisted active timeline ID"
+        );
+    }
+    for (const auto trackIndex : affectedTracks) {
+        if (timeline.tracks[trackIndex].id.origin != EntityIdOrigin::persisted) {
+            throw CommandError(
+                "unstableTrackId",
+                "split requires a persisted affected track ID"
+            );
+        }
+    }
+
+    Value plannedSource = source_;
     Project planned = project_;
     auto& plannedTimeline = activeTimeline(planned);
     std::set<std::string, std::less<>> usedIds;
@@ -485,6 +639,10 @@ CommandResult ProjectSession::splitClips(
     Array changedClips;
     std::vector<TrackSnapshot> snapshots;
     snapshots.reserve(affectedTracks.size());
+    std::map<
+        std::size_t,
+        std::map<std::string, std::vector<Clip>, std::less<>>
+    > sourcePiecesByTrack;
     const auto timelineIndex = static_cast<std::size_t>(
         std::distance(project_.timelines.begin(), std::find_if(
             project_.timelines.begin(),
@@ -494,7 +652,19 @@ CommandResult ProjectSession::splitClips(
     );
     for (const auto trackIndex : affectedTracks) {
         checkCancellation(cancellation);
-        snapshots.push_back({timelineIndex, trackIndex, timeline.tracks[trackIndex].clips});
+        const auto& track = timeline.tracks[trackIndex];
+        auto& sourceClips = sourceClipsForTrack(
+            source_,
+            rootKind_,
+            timeline.id.value,
+            track.id.value
+        );
+        snapshots.push_back({
+            timelineIndex,
+            trackIndex,
+            track.clips,
+            Value(sourceClips),
+        });
         auto& clips = plannedTimeline.tracks[trackIndex].clips;
         std::vector<Clip> replacement;
         for (const auto& clip : clips) {
@@ -507,6 +677,8 @@ CommandResult ProjectSession::splitClips(
             boundaries.push_back(clip.startFrame);
             boundaries.insert(boundaries.end(), cuts->second.begin(), cuts->second.end());
             boundaries.push_back(checkedEnd(clip));
+            std::vector<Clip> sourcePieces;
+            sourcePieces.reserve(boundaries.size() - 1);
             for (std::size_t pieceIndex = 0; pieceIndex + 1 < boundaries.size(); ++pieceIndex) {
                 Clip piece = clip;
                 piece.startFrame = boundaries[pieceIndex];
@@ -532,10 +704,25 @@ CommandResult ProjectSession::splitClips(
                     }
                 }
                 changedClips.push_back(clipValue(piece, trackIndex));
+                sourcePieces.push_back(piece);
                 replacement.push_back(std::move(piece));
             }
+            sourcePiecesByTrack[trackIndex].emplace(
+                clip.id.value,
+                std::move(sourcePieces)
+            );
         }
         clips = std::move(replacement);
+    }
+    for (const auto trackIndex : affectedTracks) {
+        const auto& track = timeline.tracks[trackIndex];
+        auto& sourceClips = sourceClipsForTrack(
+            plannedSource,
+            rootKind_,
+            timeline.id.value,
+            track.id.value
+        );
+        sourceClips = splitSourceClips(sourceClips, sourcePiecesByTrack.at(trackIndex));
     }
     checkCancellation(cancellation);
 
@@ -543,7 +730,11 @@ CommandResult ProjectSession::splitClips(
     if (revision_ >= maximumRevision) {
         throw CommandError("revisionOverflow", "project revision cannot advance");
     }
+    if (nextStateId_ == (std::numeric_limits<std::uint64_t>::max)()) {
+        throw CommandError("stateIdentityOverflow", "project state identity cannot advance");
+    }
     const auto revisionAfter = revisionBefore + 1;
+    const auto stateAfter = nextStateId_;
     auto plannedGeneratedClipIds = sessionGeneratedClipIds_;
     plannedGeneratedClipIds.insert(createdClipIds.begin(), createdClipIds.end());
     undoJournal_.reserve(undoJournal_.size() + 1);
@@ -551,6 +742,7 @@ CommandResult ProjectSession::splitClips(
         actionId,
         std::move(snapshots),
         std::move(createdClipIds),
+        stateId_,
     };
     auto payload = receiptBase(true, revisionBefore, revisionAfter, actionId);
     payload.emplace("clips", Value(std::move(changedClips)));
@@ -564,13 +756,16 @@ CommandResult ProjectSession::splitClips(
     checkCancellation(cancellation);
 
     static_assert(std::is_nothrow_move_assignable_v<Project>);
+    static_assert(std::is_nothrow_move_assignable_v<Value>);
     static_assert(std::is_nothrow_move_constructible_v<UndoEntry>);
     static_assert(std::is_nothrow_move_constructible_v<CommandResult>);
     static_assert(noexcept(sessionGeneratedClipIds_.swap(plannedGeneratedClipIds)));
     project_ = std::move(planned);
+    source_ = std::move(plannedSource);
     sessionGeneratedClipIds_.swap(plannedGeneratedClipIds);
     revision_ = revisionAfter;
-    dirty_ = true;
+    stateId_ = stateAfter;
+    ++nextStateId_;
     undoJournal_.push_back(std::move(undoEntry));
     return result;
 }
@@ -596,6 +791,23 @@ CommandResult ProjectSession::undo(std::stop_token cancellation) {
     }
     const auto revisionBefore = revision_;
     const auto revisionAfter = revisionBefore + 1;
+    Project planned = project_;
+    Value plannedSource = source_;
+    for (const auto& snapshot : pending.tracks) {
+        const auto& timeline = project_.timelines[snapshot.timelineIndex];
+        const auto& track = timeline.tracks[snapshot.trackIndex];
+        if (snapshot.sourceClips.kind() != Value::Kind::array) {
+            throw CommandError("staleUndo", "undo source snapshot is not a clip array");
+        }
+        planned.timelines[snapshot.timelineIndex].tracks[snapshot.trackIndex].clips =
+            snapshot.clips;
+        sourceClipsForTrack(
+            plannedSource,
+            rootKind_,
+            timeline.id.value,
+            track.id.value
+        ) = snapshot.sourceClips.array();
+    }
     auto plannedGeneratedClipIds = sessionGeneratedClipIds_;
     for (const auto& clipId : pending.createdClipIds) {
         plannedGeneratedClipIds.erase(clipId);
@@ -612,17 +824,43 @@ CommandResult ProjectSession::undo(std::stop_token cancellation) {
     };
     checkCancellation(cancellation);
 
-    auto entry = std::move(undoJournal_.back());
-    undoJournal_.pop_back();
-    static_assert(std::is_nothrow_move_assignable_v<std::vector<Clip>>);
-    for (auto& snapshot : entry.tracks) {
-        project_.timelines[snapshot.timelineIndex].tracks[snapshot.trackIndex].clips =
-            std::move(snapshot.clips);
-    }
+    static_assert(std::is_nothrow_move_assignable_v<Project>);
+    static_assert(std::is_nothrow_move_assignable_v<Value>);
+    project_ = std::move(planned);
+    source_ = std::move(plannedSource);
     sessionGeneratedClipIds_.swap(plannedGeneratedClipIds);
     revision_ = revisionAfter;
-    dirty_ = !undoJournal_.empty();
+    stateId_ = pending.beforeStateId;
+    undoJournal_.pop_back();
     return result;
+}
+
+ProjectSessionSnapshot ProjectSession::snapshot(std::stop_token cancellation) const {
+    std::scoped_lock lock(mutex_);
+    checkCancellation(cancellation);
+    return {
+        ProjectDocument(source_, rootKind_, project_, diagnostics_),
+        revision_,
+        stateId_,
+        persistedStateId_,
+    };
+}
+
+ProjectSaveSnapshot ProjectSession::saveSnapshot(std::stop_token cancellation) const {
+    std::scoped_lock lock(mutex_);
+    checkCancellation(cancellation);
+    return {source_, revision_, stateId_};
+}
+
+void ProjectSession::markPersisted(std::uint64_t stateId) {
+    std::scoped_lock lock(mutex_);
+    if (stateId >= nextStateId_) {
+        throw CommandError(
+            "unknownProjectState",
+            "persisted state identity was not produced by this project session"
+        );
+    }
+    persistedStateId_ = stateId;
 }
 
 std::uint64_t ProjectSession::revision() const {
@@ -630,9 +868,19 @@ std::uint64_t ProjectSession::revision() const {
     return revision_;
 }
 
+std::uint64_t ProjectSession::stateId() const {
+    std::scoped_lock lock(mutex_);
+    return stateId_;
+}
+
+std::uint64_t ProjectSession::persistedStateId() const {
+    std::scoped_lock lock(mutex_);
+    return persistedStateId_;
+}
+
 bool ProjectSession::dirty() const {
     std::scoped_lock lock(mutex_);
-    return dirty_;
+    return stateId_ != persistedStateId_;
 }
 
 }

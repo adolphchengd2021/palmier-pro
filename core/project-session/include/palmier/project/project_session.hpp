@@ -40,6 +40,21 @@ struct CommandResult final {
     std::unique_ptr<palmier::json::Value> payload;
 };
 
+struct ProjectSessionSnapshot final {
+    ProjectDocument document;
+    std::uint64_t revision;
+    std::uint64_t stateId;
+    std::uint64_t persistedStateId;
+
+    bool dirty() const noexcept { return stateId != persistedStateId; }
+};
+
+struct ProjectSaveSnapshot final {
+    palmier::json::Value source;
+    std::uint64_t revision;
+    std::uint64_t stateId;
+};
+
 class CommandError final : public std::runtime_error {
 public:
     CommandError(std::string code, std::string detail);
@@ -64,7 +79,13 @@ public:
     );
     CommandResult undo(std::stop_token cancellation = {});
 
+    ProjectSessionSnapshot snapshot(std::stop_token cancellation = {}) const;
+    ProjectSaveSnapshot saveSnapshot(std::stop_token cancellation = {}) const;
+    void markPersisted(std::uint64_t stateId);
+
     std::uint64_t revision() const;
+    std::uint64_t stateId() const;
+    std::uint64_t persistedStateId() const;
     bool dirty() const;
 
 private:
@@ -72,21 +93,28 @@ private:
         std::size_t timelineIndex;
         std::size_t trackIndex;
         std::vector<Clip> clips;
+        palmier::json::Value sourceClips;
     };
 
     struct UndoEntry final {
         std::string actionId;
         std::vector<TrackSnapshot> tracks;
         std::vector<std::string> createdClipIds;
+        std::uint64_t beforeStateId;
     };
 
+    palmier::json::Value source_;
+    RootKind rootKind_;
     Project project_;
+    std::vector<Diagnostic> diagnostics_;
     IdGenerator idGenerator_;
     std::vector<std::string> unsafeClipIds_;
     std::set<std::string, std::less<>> sessionGeneratedClipIds_;
     std::vector<UndoEntry> undoJournal_;
     std::uint64_t revision_ = 0;
-    bool dirty_ = false;
+    std::uint64_t stateId_ = 0;
+    std::uint64_t persistedStateId_ = 0;
+    std::uint64_t nextStateId_ = 1;
     mutable std::mutex mutex_;
 };
 
