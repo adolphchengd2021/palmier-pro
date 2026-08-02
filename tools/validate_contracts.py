@@ -4372,6 +4372,7 @@ def windows_h264_project_export_contract() -> None:
         "SetFileInformationByHandle(",
         "FileRenameInfo",
         "destinationDirectory.get()",
+        "sizeof(FILE_RENAME_INFO) + nameBytes",
         "FileDispositionInfo",
         "staging.lockForVerification()",
         "staging.cleanup()",

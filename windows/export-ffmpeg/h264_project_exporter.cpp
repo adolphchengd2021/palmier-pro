@@ -399,16 +399,23 @@ public:
             );
         }
         const auto destinationName = destination.filename().native();
-        const std::size_t nameBytes = destinationName.size() * sizeof(wchar_t);
-        const std::size_t infoSize = offsetof(FILE_RENAME_INFO, FileName) + nameBytes;
-        if (nameBytes > (std::numeric_limits<DWORD>::max)()
-            || infoSize > (std::numeric_limits<DWORD>::max)()) {
+        constexpr auto maximumInfoBytes = (std::numeric_limits<DWORD>::max)();
+        if (destinationName.size() > maximumInfoBytes / sizeof(wchar_t)) {
             fail(
                 H264ExportFailureCode::installFailed,
                 "installDestination",
                 "destination path exceeds the rename contract"
             );
         }
+        const std::size_t nameBytes = destinationName.size() * sizeof(wchar_t);
+        if (nameBytes > maximumInfoBytes - sizeof(FILE_RENAME_INFO)) {
+            fail(
+                H264ExportFailureCode::installFailed,
+                "installDestination",
+                "destination path exceeds the rename contract"
+            );
+        }
+        const std::size_t infoSize = sizeof(FILE_RENAME_INFO) + nameBytes;
         std::vector<std::byte> storage(infoSize);
         auto* rename = reinterpret_cast<FILE_RENAME_INFO*>(storage.data());
         rename->ReplaceIfExists = static_cast<BOOLEAN>(replaceExisting);
