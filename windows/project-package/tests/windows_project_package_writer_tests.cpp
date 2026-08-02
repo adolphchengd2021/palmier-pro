@@ -27,6 +27,7 @@
 namespace {
 
 using palmier::json::Value;
+using palmier::project::CommandError;
 using palmier::project::ProjectPackageWriteError;
 using palmier::project::ProjectPackageWriteWarning;
 using palmier::project::ProjectRuntime;
@@ -351,8 +352,12 @@ void editSaveRestartPreservesCanariesAndState(const std::filesystem::path& root)
     }
     require(foundFirst && foundSecond, "restart changed split IDs or frame timing");
     require(!reopened.snapshot(12).session->dirty(), "reopened project must start persisted");
-    const auto undo = reopened.undo(12);
-    require(!undo.command.changed, "undo journal must not cross a restart boundary");
+    try {
+        static_cast<void>(reopened.undo(12));
+        throw std::runtime_error("restart unexpectedly retained an undo action");
+    } catch (const CommandError& error) {
+        require(error.code == "nothingToUndo", "restart returned the wrong undo boundary");
+    }
 }
 
 void savingAnOlderSnapshotLeavesNewerRuntimeDirty() {
