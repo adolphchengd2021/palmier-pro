@@ -3965,6 +3965,12 @@ def windows_qt_read_only_shell_contract() -> None:
     presets = load_json("CMakePresets.json")
     app_cmake = read_text("windows/app/CMakeLists.txt")
     coordinator = read_text("windows/app/src/project_load_coordinator.cpp")
+    persistence_header = read_text(
+        "windows/app/include/palmier/windows/project_persistence_controller.hpp"
+    )
+    persistence_source = read_text(
+        "windows/app/src/project_persistence_controller.cpp"
+    )
     runtime_mailbox = read_text("windows/app/src/project_runtime_mailbox.cpp")
     runtime_bridge = read_text("windows/app/src/project_runtime_projection_bridge.cpp")
     projection = read_text("windows/app/src/project_projection_loader.cpp")
@@ -4008,6 +4014,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "qt_add_executable(palmier_qt_shell",
         "qt_add_qml_module(palmier_qt_shell",
         "include/palmier/windows/project_load_coordinator.hpp",
+        "include/palmier/windows/project_persistence_controller.hpp",
         "include/palmier/windows/project_runtime_mailbox.hpp",
         "include/palmier/windows/project_runtime_projection_bridge.hpp",
         "include/palmier/windows/read_only_timeline_model.hpp",
@@ -4044,6 +4051,11 @@ def windows_qt_read_only_shell_contract() -> None:
         "cancellationAfterRuntimeInstallCannotRollbackCommit",
         "persistencePublicationRetagsInFlightProjection",
         "supersededInstalledProjectWaitsForLatestLoadOutcome",
+        "persistenceSaveRunsOffGuiAndShutdownWaits",
+        "persistenceFailurePreservesDirtyState",
+        "persistenceCommittedWarningRemainsObservable",
+        "persistenceWorkerRetainsRuntimeAfterControllerTeardown",
+        "dirtyRuntimeRefusesProjectReplacement",
     ]:
         if token not in app_cmake:
             raise ContractError(f"Qt shell CMake missing token {token!r}")
@@ -4063,6 +4075,27 @@ def windows_qt_read_only_shell_contract() -> None:
     ]:
         if token not in coordinator:
             raise ContractError(f"Qt load coordinator missing token {token!r}")
+    for token in [
+        "Q_PROPERTY(bool dirty READ dirty NOTIFY dirtyChanged)",
+        "Q_PROPERTY(bool saving READ saving NOTIFY savingChanged)",
+        "Q_PROPERTY(QString warningCode READ warningCode NOTIFY warningCodeChanged)",
+        "Q_INVOKABLE void save()",
+        "requestShutdown(bool discardUnsavedChanges = false)",
+    ]:
+        if token not in persistence_header:
+            raise ContractError(f"Qt persistence API missing token {token!r}")
+    for token in [
+        "setMaxThreadCount(1)",
+        "QtConcurrent::run(projectSavePool()",
+        "writer(*runtime, path, generation, cancellation)",
+        "refreshFromMailbox()",
+        "if (shutdownRequested_) emit shutdownReady()",
+        "if (dirty_ && !discardUnsavedChanges)",
+        "saveCommittedRuntimeNotAcknowledged",
+        "saveCommittedNewerChangesRemain",
+    ]:
+        if token not in persistence_source:
+            raise ContractError(f"Qt persistence invariant missing token {token!r}")
     for token in [
         "sequence_.fetch_add(1",
         "after / 2",
@@ -4118,6 +4151,9 @@ def windows_qt_read_only_shell_contract() -> None:
         "requestShutdown()",
         "WindowContainer",
         "previewCoordinator.window",
+        "persistenceCoordinator.save()",
+        "MessageDialog.Save | MessageDialog.Discard | MessageDialog.Cancel",
+        "persistenceShutdownReady",
         "clip: true",
     ]:
         if token not in qml:
@@ -4163,6 +4199,11 @@ def windows_qt_read_only_shell_contract() -> None:
         "cancellationAfterRuntimeInstallCannotRollbackCommit",
         "persistencePublicationRetagsInFlightProjection",
         "supersededInstalledProjectWaitsForLatestLoadOutcome",
+        "persistenceSaveRunsOffGuiAndShutdownWaits",
+        "persistenceFailurePreservesDirtyState",
+        "persistenceCommittedWarningRemainsObservable",
+        "persistenceWorkerRetainsRuntimeAfterControllerTeardown",
+        "dirtyRuntimeRefusesProjectReplacement",
     ]:
         if token not in qt_tests:
             raise ContractError(f"Qt shell test missing token {token!r}")
@@ -4216,6 +4257,17 @@ def windows_qt_read_only_shell_contract() -> None:
     ]:
         if token not in runtime_adr:
             raise ContractError(f"Qt shared runtime ADR missing token {token!r}")
+    persistence_adr = read_text("docs/windows/adr/0031-qt-save-and-dirty-close.md")
+    for token in [
+        "ProjectPersistenceController",
+        "process-lifetime serial background pool",
+        "Save, Discard, or Cancel",
+        "concurrent newer edit keeps the window open",
+        "manual Windows UI verification",
+        "shared ownership of the",
+    ]:
+        if token not in persistence_adr:
+            raise ContractError(f"Qt persistence ADR missing token {token!r}")
 
 
 def windows_qt_preview_host_contract() -> None:
@@ -4380,7 +4432,7 @@ def windows_qt_preview_host_contract() -> None:
         "previewCoordinator.window",
         "previewCoordinator.requestShutdown()",
         "previewCoordinator.errorCode",
-        "projectShutdownReady && previewShutdownReady",
+        "persistenceShutdownReady",
     ]:
         if token not in qml:
             raise ContractError(f"Qt preview host QML missing token {token!r}")
@@ -4399,6 +4451,15 @@ def windows_qt_preview_host_contract() -> None:
     ]:
         if token not in main_source:
             raise ContractError(f"Qt preview host executable missing token {token!r}")
+    for token in [
+        "class QuitGuard final",
+        "event->type() == QEvent::Quit",
+        "!persistence_->shutdownAdmitted()",
+        "application.installEventFilter(&quitGuard)",
+        "persistence.requestShutdown(false)",
+    ]:
+        if token not in main_source:
+            raise ContractError(f"Qt quit protection missing token {token!r}")
     for token in [
         "Restore vcpkg caches",
         "VCPKG_BINARY_SOURCES=clear;files,$binaryCache,readwrite",

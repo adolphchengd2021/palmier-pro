@@ -3,6 +3,7 @@
 #include "palmier/audio/wasapi_environment_probe.hpp"
 #include "palmier/windows/preview_presentation_controller.hpp"
 #include "palmier/windows/project_load_coordinator.hpp"
+#include "palmier/windows/project_persistence_controller.hpp"
 
 #include <QDebug>
 #include <QElapsedTimer>
@@ -960,10 +961,23 @@ private slots:
             nullptr
         );
         palmier::windows::ProjectLoadCoordinator project;
+        auto persistenceMailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
+        auto persistenceRuntime = std::make_shared<palmier::project::ProjectRuntime>(
+            persistenceMailbox
+        );
+        palmier::windows::ProjectPersistenceController persistence(
+            persistenceRuntime,
+            persistenceMailbox,
+            nullptr
+        );
         QQmlApplicationEngine engine;
         engine.rootContext()->setContextProperty(
             QStringLiteral("projectCoordinator"),
             &project
+        );
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("persistenceCoordinator"),
+            &persistence
         );
         engine.rootContext()->setContextProperty(
             QStringLiteral("previewCoordinator"),

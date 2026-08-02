@@ -9,12 +9,14 @@ set(app_include_dir "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 add_library(palmier_qt_shell_core STATIC
     include/palmier/windows/project_load_coordinator.hpp
+    include/palmier/windows/project_persistence_controller.hpp
     include/palmier/windows/project_projection_loader.hpp
     include/palmier/windows/project_runtime_mailbox.hpp
     include/palmier/windows/project_runtime_projection_bridge.hpp
     include/palmier/windows/preview_source.hpp
     include/palmier/windows/read_only_timeline_model.hpp
     src/project_load_coordinator.cpp
+    src/project_persistence_controller.cpp
     src/project_projection_loader.cpp
     src/project_runtime_mailbox.cpp
     src/project_runtime_projection_bridge.cpp
@@ -29,6 +31,7 @@ target_link_libraries(
         palmier_project_reader
         palmier_project_render
         palmier_project_runtime
+        palmier_windows_project_package
 )
 target_compile_features(palmier_qt_shell_core PUBLIC cxx_std_20)
 
@@ -111,6 +114,26 @@ if(BUILD_TESTING)
         )
     endfunction()
     add_palmier_qt_shell_test(reader_maps_current_project readerMapsCurrentProject)
+    add_palmier_qt_shell_test(
+        persistence_save_waits_for_shutdown
+        persistenceSaveRunsOffGuiAndShutdownWaits
+    )
+    add_palmier_qt_shell_test(
+        persistence_failure_preserves_dirty
+        persistenceFailurePreservesDirtyState
+    )
+    add_palmier_qt_shell_test(
+        persistence_committed_warning
+        persistenceCommittedWarningRemainsObservable
+    )
+    add_palmier_qt_shell_test(
+        persistence_teardown_retains_runtime
+        persistenceWorkerRetainsRuntimeAfterControllerTeardown
+    )
+    add_palmier_qt_shell_test(
+        dirty_runtime_refuses_replacement
+        dirtyRuntimeRefusesProjectReplacement
+    )
     add_palmier_qt_shell_test(
         runtime_mailbox_identity
         runtimeMailboxPublishesUndoAndPersistenceIdentity

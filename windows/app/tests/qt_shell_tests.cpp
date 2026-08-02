@@ -1,4 +1,5 @@
 #include "palmier/windows/project_load_coordinator.hpp"
+#include "palmier/windows/project_persistence_controller.hpp"
 #include "palmier/windows/project_projection_loader.hpp"
 #include "palmier/windows/preview_presentation_controller.hpp"
 #include "palmier/project/project_reader.hpp"
@@ -11,6 +12,7 @@
 #include <QSemaphoreReleaser>
 #include <QSignalSpy>
 #include <QTest>
+#include <QThread>
 #include <QVariantMap>
 #include <QWindow>
 
@@ -138,6 +140,296 @@ class QtShellTests final : public QObject {
     Q_OBJECT
 
 private slots:
+    void persistenceSaveRunsOffGuiAndShutdownWaits() {
+        auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
+        auto runtime = std::make_shared<palmier::project::ProjectRuntime>(mailbox);
+        auto document = palmier::project::readProject(
+            splittableProjectJson,
+            [] { return std::string("generated"); }
+        );
+        static_cast<void>(runtime->install(
+            std::move(document),
+            7,
+            [nextId = 0]() mutable {
+                return "save-generated-" + std::to_string(++nextId);
+            }
+        ));
+        const auto split = runtime->splitClips({
+            std::vector<palmier::project::SplitPoint>{{"clip", 10}},
+            std::nullopt,
+            std::nullopt,
+        });
+        QSemaphore writerEntered;
+        QSemaphore writerGate;
+        QSemaphoreReleaser releaseWriterOnExit(writerGate);
+        QThread* writerThread{};
+        palmier::windows::ProjectPersistenceController persistence(
+            runtime,
+            mailbox,
+            [&](
+                palmier::project::ProjectRuntime& targetRuntime,
+                const std::filesystem::path&,
+                std::optional<std::uint64_t> generation,
+                std::stop_token
+            ) {
+                writerThread = QThread::currentThread();
+                writerEntered.release();
+                writerGate.acquire();
+                const auto acknowledged = targetRuntime.markPersisted(split.session->stateId);
+                return palmier::project::ProjectPackageWriteReceipt{
+                    generation.value_or(0),
+                    acknowledged.session->revision,
+                    acknowledged.session->stateId,
+                    1,
+                    true,
+                    acknowledged.session->dirty(),
+                    palmier::project::ProjectPackageWriteWarning::none,
+                };
+            },
+            nullptr
+        );
+        persistence.activateProject(L"C:/save-test.palmier", 7);
+        persistence.observeRuntimePublication(*mailbox->latest());
+        QVERIFY(persistence.dirty());
+        QSignalSpy saveFinished(
+            &persistence,
+            &palmier::windows::ProjectPersistenceController::saveFinished
+        );
+        QSignalSpy shutdownReady(
+            &persistence,
+            &palmier::windows::ProjectPersistenceController::shutdownReady
+        );
+
+        persistence.save();
+        QTRY_COMPARE_WITH_TIMEOUT(writerEntered.available(), 1, 5000);
+        QVERIFY(persistence.saving());
+        QVERIFY(writerThread != QThread::currentThread());
+        QVERIFY(!persistence.requestShutdown(true));
+        QCOMPARE(shutdownReady.count(), 0);
+
+        writerGate.release();
+        static_cast<void>(releaseWriterOnExit.cancel());
+        QTRY_COMPARE_WITH_TIMEOUT(saveFinished.count(), 1, 5000);
+        QCOMPARE(saveFinished.at(0).at(0).toBool(), true);
+        QVERIFY(!persistence.saving());
+        QVERIFY(!persistence.dirty());
+        QCOMPARE(shutdownReady.count(), 1);
+    }
+
+    void persistenceFailurePreservesDirtyState() {
+        auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
+        auto runtime = std::make_shared<palmier::project::ProjectRuntime>(mailbox);
+        auto document = palmier::project::readProject(
+            splittableProjectJson,
+            [] { return std::string("generated"); }
+        );
+        static_cast<void>(runtime->install(
+            std::move(document),
+            3,
+            [nextId = 0]() mutable {
+                return "failure-generated-" + std::to_string(++nextId);
+            }
+        ));
+        static_cast<void>(runtime->splitClips({
+            std::vector<palmier::project::SplitPoint>{{"clip", 10}},
+            std::nullopt,
+            std::nullopt,
+        }));
+        palmier::windows::ProjectPersistenceController persistence(
+            runtime,
+            mailbox,
+            [](
+                palmier::project::ProjectRuntime&,
+                const std::filesystem::path&,
+                std::optional<std::uint64_t>,
+                std::stop_token
+            ) -> palmier::project::ProjectPackageWriteReceipt {
+                throw palmier::project::ProjectPackageWriteError(
+                    "writeFailed",
+                    "write",
+                    "injected save failure"
+                );
+            },
+            nullptr
+        );
+        persistence.activateProject(L"C:/failure-test.palmier", 3);
+        QSignalSpy saveFinished(
+            &persistence,
+            &palmier::windows::ProjectPersistenceController::saveFinished
+        );
+
+        persistence.save();
+        QTRY_COMPARE_WITH_TIMEOUT(saveFinished.count(), 1, 5000);
+        QCOMPARE(saveFinished.at(0).at(0).toBool(), false);
+        QVERIFY(persistence.dirty());
+        QCOMPARE(persistence.errorCode(), QStringLiteral("writeFailed"));
+        QVERIFY(!persistence.requestShutdown());
+        QCOMPARE(persistence.errorCode(), QStringLiteral("unsavedChanges"));
+    }
+
+    void persistenceCommittedWarningRemainsObservable_data() {
+        QTest::addColumn<bool>("runtimeAcknowledged");
+        QTest::addColumn<QString>("expectedWarning");
+        QTest::newRow("newer edits remain")
+            << true << QStringLiteral("saveCommittedNewerChangesRemain");
+        QTest::newRow("runtime acknowledgement failed")
+            << false << QStringLiteral("saveCommittedRuntimeNotAcknowledged");
+    }
+
+    void persistenceCommittedWarningRemainsObservable() {
+        QFETCH(bool, runtimeAcknowledged);
+        QFETCH(QString, expectedWarning);
+        auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
+        auto runtime = std::make_shared<palmier::project::ProjectRuntime>(mailbox);
+        auto document = palmier::project::readProject(
+            splittableProjectJson,
+            [] { return std::string("generated"); }
+        );
+        static_cast<void>(runtime->install(
+            std::move(document),
+            5,
+            [nextId = 0]() mutable {
+                return "warning-generated-" + std::to_string(++nextId);
+            }
+        ));
+        const auto split = runtime->splitClips({
+            std::vector<palmier::project::SplitPoint>{{"clip", 10}},
+            std::nullopt,
+            std::nullopt,
+        });
+        palmier::windows::ProjectPersistenceController persistence(
+            runtime,
+            mailbox,
+            [runtimeAcknowledged, split](
+                palmier::project::ProjectRuntime&,
+                const std::filesystem::path&,
+                std::optional<std::uint64_t> generation,
+                std::stop_token
+            ) {
+                return palmier::project::ProjectPackageWriteReceipt{
+                    generation.value_or(0),
+                    split.session->revision,
+                    split.session->stateId,
+                    1,
+                    runtimeAcknowledged,
+                    true,
+                    runtimeAcknowledged
+                        ? palmier::project::ProjectPackageWriteWarning::none
+                        : palmier::project::ProjectPackageWriteWarning::runtimeClosedAfterSave,
+                };
+            },
+            nullptr
+        );
+        persistence.activateProject(L"C:/warning-test.palmier", 5);
+        QSignalSpy saveFinished(
+            &persistence,
+            &palmier::windows::ProjectPersistenceController::saveFinished
+        );
+
+        persistence.save();
+        QTRY_COMPARE_WITH_TIMEOUT(saveFinished.count(), 1, 5000);
+        QCOMPARE(saveFinished.at(0).at(0).toBool(), true);
+        QVERIFY(persistence.dirty());
+        QCOMPARE(persistence.warningCode(), expectedWarning);
+        QVERIFY(!persistence.warningMessage().isEmpty());
+    }
+
+    void persistenceWorkerRetainsRuntimeAfterControllerTeardown() {
+        auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
+        auto runtime = std::make_shared<palmier::project::ProjectRuntime>(mailbox);
+        auto document = palmier::project::readProject(
+            splittableProjectJson,
+            [] { return std::string("generated"); }
+        );
+        static_cast<void>(runtime->install(
+            std::move(document),
+            9,
+            [nextId = 0]() mutable {
+                return "teardown-generated-" + std::to_string(++nextId);
+            }
+        ));
+        static_cast<void>(runtime->splitClips({
+            std::vector<palmier::project::SplitPoint>{{"clip", 10}},
+            std::nullopt,
+            std::nullopt,
+        }));
+        QSemaphore writerEntered;
+        QSemaphore writerGate;
+        QSemaphoreReleaser releaseWriterOnExit(writerGate);
+        auto persistence = std::make_unique<
+            palmier::windows::ProjectPersistenceController
+        >(
+            runtime,
+            mailbox,
+            [&](
+                palmier::project::ProjectRuntime& targetRuntime,
+                const std::filesystem::path&,
+                std::optional<std::uint64_t> generation,
+                std::stop_token
+            ) {
+                writerEntered.release();
+                writerGate.acquire();
+                const auto snapshot = targetRuntime.snapshot(generation);
+                return palmier::project::ProjectPackageWriteReceipt{
+                    snapshot.projectGeneration,
+                    snapshot.session->revision,
+                    snapshot.session->stateId,
+                    1,
+                    false,
+                    true,
+                    palmier::project::ProjectPackageWriteWarning::runtimeAcknowledgementFailed,
+                };
+            },
+            nullptr
+        );
+        persistence->activateProject(L"C:/teardown-test.palmier", 9);
+        persistence->save();
+        QTRY_COMPARE_WITH_TIMEOUT(writerEntered.available(), 1, 5000);
+        std::weak_ptr<palmier::project::ProjectRuntime> runtimeLifetime = runtime;
+
+        persistence.reset();
+        runtime.reset();
+        QVERIFY(!runtimeLifetime.expired());
+        writerGate.release();
+        static_cast<void>(releaseWriterOnExit.cancel());
+        QTRY_VERIFY_WITH_TIMEOUT(runtimeLifetime.expired(), 5000);
+    }
+
+    void dirtyRuntimeRefusesProjectReplacement() {
+        auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
+        palmier::project::ProjectRuntime runtime(mailbox);
+        palmier::windows::ProjectLoadCoordinator coordinator(
+            runtime,
+            mailbox,
+            [nextId = 0]() mutable {
+                return "replace-generated-" + std::to_string(++nextId);
+            },
+            nullptr
+        );
+        coordinator.openFolder(QUrl::fromLocalFile(QString::fromStdWString(
+            fixture("current-multitimeline.palmier").wstring()
+        )));
+        QTRY_COMPARE_WITH_TIMEOUT(coordinator.state(), QStringLiteral("loaded"), 5000);
+        static_cast<void>(runtime.splitClips({
+            std::vector<palmier::project::SplitPoint>{{"clip-main-1", 75}},
+            std::nullopt,
+            std::nullopt,
+        }));
+
+        coordinator.openFolder(QUrl::fromLocalFile(QStringLiteral("C:/replacement.palmier")));
+        QCOMPARE(coordinator.errorCode(), QStringLiteral("unsavedChanges"));
+        QCOMPARE(coordinator.committedGeneration(), std::uint64_t{1});
+        const auto publication = mailbox->latest();
+        QVERIFY(publication.has_value());
+        QCOMPARE(publication->projectGeneration, std::uint64_t{1});
+        QVERIFY(publication->session->dirty());
+        static_cast<void>(runtime.markPersisted(publication->session->stateId));
+        coordinator.observeRuntimePublication(*mailbox->latest());
+        QCOMPARE(coordinator.state(), QStringLiteral("loaded"));
+        QVERIFY(coordinator.errorCode().isEmpty());
+        QVERIFY(coordinator.requestShutdown());
+    }
+
     void runtimeMailboxPublishesUndoAndPersistenceIdentity() {
         auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
         palmier::project::ProjectRuntime runtime(mailbox);
@@ -1104,8 +1396,21 @@ private slots:
             nullptr
         );
         palmier::windows::PreviewPresentationController previewController;
+        auto persistenceMailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
+        auto persistenceRuntime = std::make_shared<palmier::project::ProjectRuntime>(
+            persistenceMailbox
+        );
+        palmier::windows::ProjectPersistenceController persistenceController(
+            persistenceRuntime,
+            persistenceMailbox,
+            nullptr
+        );
         QQmlApplicationEngine engine;
         engine.rootContext()->setContextProperty(QStringLiteral("projectCoordinator"), &coordinator);
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("persistenceCoordinator"),
+            &persistenceController
+        );
         engine.rootContext()->setContextProperty(
             QStringLiteral("previewCoordinator"),
             &previewController
@@ -1156,8 +1461,21 @@ private slots:
             nullptr
         );
         FakePreviewShutdownCoordinator previewController;
+        auto persistenceMailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
+        auto persistenceRuntime = std::make_shared<palmier::project::ProjectRuntime>(
+            persistenceMailbox
+        );
+        palmier::windows::ProjectPersistenceController persistenceController(
+            persistenceRuntime,
+            persistenceMailbox,
+            nullptr
+        );
         QQmlApplicationEngine engine;
         engine.rootContext()->setContextProperty(QStringLiteral("projectCoordinator"), &coordinator);
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("persistenceCoordinator"),
+            &persistenceController
+        );
         engine.rootContext()->setContextProperty(
             QStringLiteral("previewCoordinator"),
             &previewController

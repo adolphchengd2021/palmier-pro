@@ -7,11 +7,11 @@ current macOS product. It is not a conditional Swift build.
 
 M0 establishes product decisions, compatibility contracts, fixtures, drift
 checks, the compiled MSVC contract probe, and a safe-edit C++ project document.
-It now includes an optional read-only Qt shell, isolated media/audio prototypes,
+It now includes an optional Qt project shell, isolated media/audio prototypes,
 one bounded project-driven H.264 export slice, a three-tool loopback MCP editing
-slice, and an atomic `project.json` edit-save-restart slice. It does not yet
-provide a persistent editor UI, autosave, Save As, audio export, integrated
-export UI, or installer.
+slice, and an atomic `project.json` edit-save-restart slice with explicit Save
+and dirty-close protection. It does not yet provide direct timeline editing UI,
+autosave, Save As, audio export, integrated export UI, or installer.
 
 - Requirements: `docs/WINDOWS_10_PORT_REQUIREMENTS.zh-CN.md`
 - Decisions: `docs/windows/adr/`
@@ -89,8 +89,10 @@ playback on edits, and rejects a result unless its token is still current.
 Shutdown drains MCP, project loading, projection, preview, and the runtime
 without joining their workers on the GUI thread. A background writer now saves
 an exact runtime snapshot and acknowledges only that state after the atomic disk
-commit. Autosave, Save As, close protection, and Qt save controls remain open;
-see ADR 0028, ADR 0029, and ADR 0030.
+commit. A dedicated Qt persistence controller runs Save on a bounded background
+pool, blocks dirty project replacement, waits for an admitted save during close,
+and presents Save, Discard, and Cancel for dirty windows. Autosave, Save As, and
+package-wide transactions remain open; see ADR 0028 through ADR 0031.
 
 The render boundary is also compiled in Windows CI.
 `core/render` defines the immutable v1 RenderPlan and CPU oracle;

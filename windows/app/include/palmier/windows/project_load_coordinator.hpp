@@ -8,6 +8,7 @@
 #include <QUrl>
 
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <optional>
 #include <memory>
@@ -63,6 +64,7 @@ public:
     QString errorMessage() const;
     std::uint64_t committedGeneration() const noexcept;
     std::uint64_t committedRevision() const noexcept;
+    std::filesystem::path committedPackagePath() const;
     ProjectPreviewProjection committedPreview() const;
     void observeRuntimePublication(const ProjectRuntimePublication& publication);
     void applyRuntimeProjection(RuntimeProjectionUpdate update);
@@ -94,6 +96,7 @@ private:
         std::uint64_t generation,
         std::uint64_t revision,
         std::uint64_t publicationToken,
+        std::optional<std::filesystem::path> packagePath = {},
         bool preservePresentedFailure = false
     );
     void setLoading(bool value);
@@ -114,6 +117,7 @@ private:
     std::uint64_t committedGeneration_{};
     std::uint64_t committedRevision_{};
     std::uint64_t committedPublicationToken_{};
+    std::filesystem::path committedPackagePath_;
     ProjectPreviewProjection committedPreview_;
     std::stop_source stopSource_;
     std::optional<PendingLoad> pendingLoad_;

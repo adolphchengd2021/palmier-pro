@@ -15,6 +15,7 @@ namespace {
 
 struct LoadResult final {
     std::optional<ProjectProjection> project;
+    std::filesystem::path packagePath;
     std::uint64_t revision{};
     std::uint64_t publicationToken{};
     QString errorCode;
@@ -94,12 +95,31 @@ std::uint64_t ProjectLoadCoordinator::committedGeneration() const noexcept {
 std::uint64_t ProjectLoadCoordinator::committedRevision() const noexcept {
     return committedRevision_;
 }
+std::filesystem::path ProjectLoadCoordinator::committedPackagePath() const {
+    return committedPackagePath_;
+}
 ProjectPreviewProjection ProjectLoadCoordinator::committedPreview() const {
     return committedPreview_;
 }
 
 void ProjectLoadCoordinator::openFolder(const QUrl& folder) {
     if (shutdownRequested_) return;
+    if (runtimeMailbox_) {
+        const auto publication = runtimeMailbox_->latest();
+        if (
+            publication
+            && publication->session
+            && publication->projectGeneration == committedGeneration_
+            && publication->session->dirty()
+        ) {
+            setLoading(false);
+            setErrorCode(QStringLiteral("unsavedChanges"));
+            setErrorJsonPointer({});
+            setErrorMessage(QStringLiteral("Save or discard changes before opening another project."));
+            setState(QStringLiteral("failed"));
+            return;
+        }
+    }
     preserveLoadFailureOnRuntimeRefresh_ = false;
     stopSource_.request_stop();
     const auto requestGeneration = ++generation_;
@@ -178,7 +198,8 @@ void ProjectLoadCoordinator::startLoad(PendingLoad request) {
                         std::move(*result.project),
                         requestGeneration,
                         result.revision,
-                        result.publicationToken
+                        result.publicationToken,
+                        std::move(result.packagePath)
                     );
                 }
             } else {
@@ -213,6 +234,7 @@ void ProjectLoadCoordinator::startLoad(PendingLoad request) {
             if (cancellation.stop_requested()) {
                 return LoadResult{
                     std::nullopt,
+                    {},
                     0,
                     0,
                     QStringLiteral("cancelled"),
@@ -225,6 +247,7 @@ void ProjectLoadCoordinator::startLoad(PendingLoad request) {
             if (cancellation.stop_requested()) {
                 return LoadResult{
                     std::nullopt,
+                    {},
                     0,
                     0,
                     QStringLiteral("cancelled"),
@@ -261,6 +284,7 @@ void ProjectLoadCoordinator::startLoad(PendingLoad request) {
             }
             return LoadResult{
                 std::move(candidate.projection),
+                path,
                 revision,
                 publicationToken,
                 {},
@@ -271,6 +295,7 @@ void ProjectLoadCoordinator::startLoad(PendingLoad request) {
         } catch (const ProjectProjectionError& error) {
             return LoadResult{
                 std::nullopt,
+                {},
                 0,
                 0,
                 QString::fromStdString(error.code),
@@ -281,6 +306,7 @@ void ProjectLoadCoordinator::startLoad(PendingLoad request) {
         } catch (const palmier::project::ProjectPackageReadError& error) {
             return LoadResult{
                 std::nullopt,
+                {},
                 0,
                 0,
                 QString::fromStdString(error.code),
@@ -291,6 +317,7 @@ void ProjectLoadCoordinator::startLoad(PendingLoad request) {
         } catch (const palmier::project::ReadError& error) {
             return LoadResult{
                 std::nullopt,
+                {},
                 0,
                 0,
                 QString::fromStdString(error.code),
@@ -301,6 +328,7 @@ void ProjectLoadCoordinator::startLoad(PendingLoad request) {
         } catch (const palmier::json::Error& error) {
             return LoadResult{
                 std::nullopt,
+                {},
                 0,
                 0,
                 QStringLiteral("invalidProjectJson"),
@@ -311,6 +339,7 @@ void ProjectLoadCoordinator::startLoad(PendingLoad request) {
         } catch (const palmier::project::ProjectRuntimeError& error) {
             return LoadResult{
                 std::nullopt,
+                {},
                 0,
                 0,
                 QString::fromStdString(error.code),
@@ -321,6 +350,7 @@ void ProjectLoadCoordinator::startLoad(PendingLoad request) {
         } catch (const std::exception& error) {
             return LoadResult{
                 std::nullopt,
+                {},
                 0,
                 0,
                 QStringLiteral("projectLoadFailed"),
@@ -331,6 +361,7 @@ void ProjectLoadCoordinator::startLoad(PendingLoad request) {
         } catch (...) {
             return LoadResult{
                 std::nullopt,
+                {},
                 0,
                 0,
                 QStringLiteral("projectLoadFailed"),
@@ -347,6 +378,7 @@ void ProjectLoadCoordinator::commitProjection(
     std::uint64_t generation,
     std::uint64_t revision,
     std::uint64_t publicationToken,
+    std::optional<std::filesystem::path> packagePath,
     bool preservePresentedFailure
 ) {
     const auto diagnosticCount = project.diagnosticCount;
@@ -381,6 +413,7 @@ void ProjectLoadCoordinator::commitProjection(
     committedGeneration_ = generation;
     committedRevision_ = revision;
     committedPublicationToken_ = publicationToken;
+    if (packagePath) committedPackagePath_ = std::move(*packagePath);
     if (
         deferredRuntimeUpdate_
         && deferredRuntimeUpdate_->publication.token <= publicationToken
@@ -405,6 +438,12 @@ void ProjectLoadCoordinator::observeRuntimePublication(
     if (runtimeMailbox_) {
         const auto latest = runtimeMailbox_->latest();
         if (!latest || latest->token != publication.token) return;
+    }
+    if (
+        errorCode_ == QStringLiteral("unsavedChanges")
+        && !publication.session->dirty()
+    ) {
+        restoreCommittedPresentation();
     }
     const bool acceptedGeneration = publication.projectGeneration == committedGeneration_
         || publication.projectGeneration == generation_
@@ -482,6 +521,7 @@ void ProjectLoadCoordinator::applyRuntimeProjection(RuntimeProjectionUpdate upda
         update.publication.projectGeneration,
         revision,
         update.publication.token,
+        std::nullopt,
         preserveLoadFailureOnRuntimeRefresh_
     );
 }

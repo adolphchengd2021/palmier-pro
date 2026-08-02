@@ -6,27 +6,65 @@ import "."
 ApplicationWindow {
     id: window
     property bool shutdownApproved: false
+    property bool discardUnsavedChanges: false
+    property bool closeAfterSave: false
     property bool projectShutdownReady: false
+    property bool persistenceShutdownReady: false
     property bool previewShutdownReady: false
     width: AppTheme.windowWidth
     height: AppTheme.windowHeight
     visible: true
-    title: qsTr("Palmier Pro — Read-only project shell")
+    title: qsTr("Palmier Pro — Windows MVP")
     color: AppTheme.windowBackground
 
     onClosing: function(closeEvent) {
         if (!shutdownApproved) {
+            closeEvent.accepted = false
+            if (persistenceCoordinator.saving) {
+                closeAfterSave = true
+                return
+            }
+            if (persistenceCoordinator.dirty && !discardUnsavedChanges) {
+                unsavedChangesDialog.open()
+                return
+            }
             projectShutdownReady = projectCoordinator.requestShutdown()
+            persistenceShutdownReady = persistenceCoordinator.requestShutdown(
+                discardUnsavedChanges
+            )
             previewShutdownReady = previewCoordinator.requestShutdown()
-            shutdownApproved = projectShutdownReady && previewShutdownReady
+            shutdownApproved = projectShutdownReady
+                && persistenceShutdownReady
+                && previewShutdownReady
             closeEvent.accepted = shutdownApproved
         }
     }
 
     function finishShutdownIfReady() {
-        if (projectShutdownReady && previewShutdownReady && !shutdownApproved) {
+        if (projectShutdownReady
+                && persistenceShutdownReady
+                && previewShutdownReady
+                && !shutdownApproved) {
             shutdownApproved = true
             window.close()
+        }
+    }
+
+    Connections {
+        target: persistenceCoordinator
+        function onShutdownReady() {
+            window.persistenceShutdownReady = true
+            window.finishShutdownIfReady()
+        }
+        function onSaveFinished(succeeded) {
+            if (!window.closeAfterSave) return
+            if (succeeded
+                    && !persistenceCoordinator.dirty
+                    && persistenceCoordinator.warningCode.length === 0) {
+                window.close()
+            } else {
+                window.closeAfterSave = false
+            }
         }
     }
 
@@ -52,17 +90,51 @@ ApplicationWindow {
         onAccepted: projectCoordinator.openFolder(selectedFolder)
     }
 
+    MessageDialog {
+        id: unsavedChangesDialog
+        title: qsTr("Unsaved Changes")
+        text: qsTr("Save changes before closing?")
+        informativeText: qsTr("Unsaved timeline edits will be lost.")
+        buttons: MessageDialog.Save | MessageDialog.Discard | MessageDialog.Cancel
+        onButtonClicked: function(button, role) {
+            if (button === MessageDialog.Save) {
+                window.closeAfterSave = true
+                persistenceCoordinator.save()
+            } else if (button === MessageDialog.Discard) {
+                window.discardUnsavedChanges = true
+                window.close()
+            }
+        }
+    }
+
     header: ToolBar {
         Row {
             spacing: AppTheme.itemSpacing
             anchors.verticalCenter: parent.verticalCenter
-            Button { text: qsTr("Open Project…"); onClicked: projectDialog.open() }
+            Button {
+                text: qsTr("Open Project…")
+                enabled: !persistenceCoordinator.dirty && !persistenceCoordinator.saving
+                onClicked: projectDialog.open()
+            }
+            Button {
+                text: qsTr("Save")
+                enabled: persistenceCoordinator.dirty && !persistenceCoordinator.saving
+                onClicked: persistenceCoordinator.save()
+            }
             Button {
                 text: qsTr("Cancel")
                 visible: projectCoordinator.loading
                 onClicked: projectCoordinator.cancelLoading()
             }
-            Label { text: projectCoordinator.loading ? qsTr("Opening…") : qsTr("Read only") }
+            Label {
+                text: projectCoordinator.loading
+                    ? qsTr("Opening…")
+                    : persistenceCoordinator.saving
+                        ? qsTr("Saving…")
+                        : persistenceCoordinator.dirty
+                            ? qsTr("Edited")
+                            : qsTr("Saved")
+            }
         }
     }
 
@@ -82,7 +154,7 @@ ApplicationWindow {
             visible: projectCoordinator.state === "loaded" || projectCoordinator.state === "loadedWithWarnings"
             text: projectCoordinator.model.timelineName + " — "
                 + projectCoordinator.model.frameRateText + qsTr(" fps — ")
-                + projectCoordinator.model.durationFramesText + qsTr(" frames — read only")
+                + projectCoordinator.model.durationFramesText + qsTr(" frames")
             color: AppTheme.primaryText
         }
 
@@ -90,6 +162,22 @@ ApplicationWindow {
             objectName: "warningState"
             visible: projectCoordinator.state === "loadedWithWarnings"
             text: projectCoordinator.warningSummary
+            color: AppTheme.warningText
+            wrapMode: Text.Wrap
+        }
+
+        Label {
+            objectName: "saveErrorState"
+            visible: persistenceCoordinator.errorMessage.length > 0
+            text: persistenceCoordinator.errorMessage
+            color: AppTheme.errorText
+            wrapMode: Text.Wrap
+        }
+
+        Label {
+            objectName: "saveWarningState"
+            visible: persistenceCoordinator.warningMessage.length > 0
+            text: persistenceCoordinator.warningMessage
             color: AppTheme.warningText
             wrapMode: Text.Wrap
         }

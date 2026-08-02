@@ -1,6 +1,7 @@
 #include "palmier/mcp/mcp_http_server.hpp"
 #include "palmier/project/project_runtime.hpp"
 #include "palmier/windows/project_load_coordinator.hpp"
+#include "palmier/windows/project_persistence_controller.hpp"
 #include "palmier/windows/preview_presentation_controller.hpp"
 #include "palmier/windows/project_runtime_mailbox.hpp"
 #include "palmier/windows/project_runtime_projection_bridge.hpp"
@@ -9,6 +10,7 @@
 #include <QFutureWatcher>
 #include <QGuiApplication>
 #include <QEventLoop>
+#include <QEvent>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QTimer>
@@ -21,8 +23,36 @@
 
 namespace {
 
+class QuitGuard final : public QObject {
+public:
+    explicit QuitGuard(
+        palmier::windows::ProjectPersistenceController& persistence,
+        QObject* parent
+    ) : QObject(parent), persistence_(&persistence) {}
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (
+            event->type() == QEvent::Quit
+            && !persistence_->shutdownAdmitted()
+            && (persistence_->dirty() || persistence_->saving())
+        ) {
+            event->ignore();
+            QTimer::singleShot(0, this, [] {
+                for (auto* window : QGuiApplication::topLevelWindows()) window->close();
+            });
+            return true;
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    palmier::windows::ProjectPersistenceController* persistence_{};
+};
+
 bool drainShutdown(
     palmier::windows::ProjectLoadCoordinator& project,
+    palmier::windows::ProjectPersistenceController& persistence,
     palmier::windows::PreviewPresentationController& preview,
     palmier::windows::ProjectRuntimeProjectionBridge& projectionBridge,
     palmier::mcp::HttpServerService& mcpService,
@@ -30,12 +60,28 @@ bool drainShutdown(
 ) {
     QEventLoop loop;
     bool projectReady{};
+    bool persistenceReady{};
     bool previewReady{};
     bool projectionReady{};
     bool mcpReady{};
     const auto finishIfReady = [&] {
-        if (projectReady && previewReady && projectionReady && mcpReady) loop.quit();
+        if (
+            projectReady && persistenceReady && previewReady && projectionReady && mcpReady
+        ) {
+            loop.quit();
+        }
     };
+    persistenceReady = persistence.requestShutdown(false);
+    if (!persistenceReady && !persistence.shutdownAdmitted()) return false;
+    QObject::connect(
+        &persistence,
+        &palmier::windows::ProjectPersistenceController::shutdownReady,
+        &loop,
+        [&] {
+            persistenceReady = true;
+            finishIfReady();
+        }
+    );
     QObject::connect(
         &project,
         &palmier::windows::ProjectLoadCoordinator::shutdownReady,
@@ -73,7 +119,10 @@ bool drainShutdown(
     projectReady = project.requestShutdown();
     previewReady = preview.requestShutdown();
     projectionReady = projectionBridge.requestShutdown();
-    if (!projectReady || !previewReady || !projectionReady || !mcpReady) {
+    if (
+        !projectReady || !persistenceReady || !previewReady || !projectionReady
+        || !mcpReady
+    ) {
         loop.exec(QEventLoop::ExcludeUserInputEvents);
     }
     QFutureWatcher<void> runtimeWatcher;
@@ -86,7 +135,7 @@ bool drainShutdown(
     runtimeWatcher.setFuture(QtConcurrent::run([&runtime] { runtime.close(); }));
     if (!runtimeWatcher.isFinished()) loop.exec(QEventLoop::ExcludeUserInputEvents);
     const auto mcpStatus = mcpService.status();
-    return projectReady && previewReady && projectionReady && mcpReady
+    return projectReady && persistenceReady && previewReady && projectionReady && mcpReady
         && runtimeWatcher.isFinished() && preview.shutdownComplete()
         && preview.errorCode().isEmpty()
         && mcpStatus.state != palmier::mcp::HttpServerState::failed;
@@ -106,20 +155,27 @@ int main(int argc, char* argv[]) {
     const auto anySmoke = quitSmoke
         || application.arguments().contains(QStringLiteral("--smoke-test"));
     auto runtimeMailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
-    palmier::project::ProjectRuntime runtime(runtimeMailbox);
+    auto runtime = std::make_shared<palmier::project::ProjectRuntime>(runtimeMailbox);
     palmier::windows::ProjectRuntimeProjectionBridge projectionBridge(runtimeMailbox);
     palmier::windows::ProjectLoadCoordinator coordinator(
-        runtime,
+        *runtime,
         runtimeMailbox,
         newUuid,
         nullptr
     );
-    palmier::mcp::HttpServerService mcpService(
+    palmier::windows::ProjectPersistenceController persistenceController(
         runtime,
+        runtimeMailbox,
+        nullptr
+    );
+    palmier::mcp::HttpServerService mcpService(
+        *runtime,
         {.port = anySmoke ? std::uint16_t{0} : std::uint16_t{19789}},
         newUuid
     );
     mcpService.start();
+    QuitGuard quitGuard(persistenceController, &application);
+    application.installEventFilter(&quitGuard);
     palmier::windows::PreviewPresentationController previewController(
         quitSmoke
             ? palmier::render::D3d11PreviewDriver::warp
@@ -132,7 +188,10 @@ int main(int argc, char* argv[]) {
         &coordinator,
         [&] {
             const auto publication = projectionBridge.takeObservedPublication();
-            if (publication) coordinator.observeRuntimePublication(*publication);
+            if (publication) {
+                persistenceController.observeRuntimePublication(*publication);
+                coordinator.observeRuntimePublication(*publication);
+            }
         }
     );
     QObject::connect(
@@ -148,7 +207,11 @@ int main(int argc, char* argv[]) {
         &coordinator,
         &palmier::windows::ProjectLoadCoordinator::projectCommitted,
         &previewController,
-        [&coordinator, &previewController] {
+        [&coordinator, &previewController, &persistenceController] {
+            persistenceController.activateProject(
+                coordinator.committedPackagePath(),
+                coordinator.committedGeneration()
+            );
             previewController.replaceProjectPreview(
                 coordinator.committedGeneration(),
                 coordinator.committedRevision(),
@@ -164,10 +227,11 @@ int main(int argc, char* argv[]) {
         shutdownDraining = true;
         shutdownSucceeded = drainShutdown(
             coordinator,
+            persistenceController,
             previewController,
             projectionBridge,
             mcpService,
-            runtime
+            *runtime
         );
         shutdownDrained = true;
         shutdownDraining = false;
@@ -213,6 +277,10 @@ int main(int argc, char* argv[]) {
     }
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("projectCoordinator"), &coordinator);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("persistenceCoordinator"),
+        &persistenceController
+    );
     engine.rootContext()->setContextProperty(
         QStringLiteral("previewCoordinator"),
         &previewController
