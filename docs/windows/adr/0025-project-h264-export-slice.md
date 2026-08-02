@@ -30,6 +30,13 @@ dimensions, frame rate, timestamp sequence, and frame count. Only that verified
 file object is installed with one handle-based Windows rename. Failure or
 cancellation preserves an existing destination and removes the exact staging
 identity through the retained object handle.
+
+The FFmpeg reader accepts this output only as explicit BT.709 limited-range YUV
+and configures the YUV-to-RGBA matrix once per decoded format. It preserves the
+BT.709 source metadata on decoded frames, so the current sRGB-only render-source
+adapter still refuses those frames; this slice does not claim preview color
+parity or add an implicit transfer-function conversion.
+
 If that identity cannot be removed, cleanup becomes the reported terminal
 failure; the exporter never deletes a different file found at the staging path.
 

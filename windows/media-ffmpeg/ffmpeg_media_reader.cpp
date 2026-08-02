@@ -114,8 +114,43 @@ public:
     SwsContext* get() const { return value_; }
     void replaceCached(SwsContext* value) noexcept { value_ = value; }
 
+    bool configurationMatches(
+        std::int32_t width,
+        std::int32_t height,
+        AVPixelFormat format,
+        const ColorMetadata& color
+    ) const noexcept {
+        return configured_
+            && width_ == width
+            && height_ == height
+            && format_ == format
+            && color_.primaries == color.primaries
+            && color_.transfer == color.transfer
+            && color_.matrix == color.matrix
+            && color_.range == color.range
+            && color_.chromaLocation == color.chromaLocation;
+    }
+
+    void recordConfiguration(
+        std::int32_t width,
+        std::int32_t height,
+        AVPixelFormat format,
+        const ColorMetadata& color
+    ) noexcept {
+        configured_ = true;
+        width_ = width;
+        height_ = height;
+        format_ = format;
+        color_ = color;
+    }
+
 private:
     SwsContext* value_{};
+    bool configured_{};
+    std::int32_t width_{};
+    std::int32_t height_{};
+    AVPixelFormat format_{AV_PIX_FMT_NONE};
+    ColorMetadata color_{};
 };
 
 using ResampleOwner = FfmpegOwner<SwrContext, swr_free>;
@@ -426,13 +461,29 @@ StreamProbe probeStream(const AVStream& stream, std::int32_t index) {
     return result;
 }
 
-bool supportedPrototypeColor(const AVFrame& frame, const ColorMetadata& color) {
+enum class DecodeColorMode {
+    srgbRgb,
+    bt709Video,
+};
+
+std::optional<DecodeColorMode> decodeColorMode(
+    const AVFrame& frame,
+    const ColorMetadata& color
+) {
     const auto* descriptor = av_pix_fmt_desc_get(
         static_cast<AVPixelFormat>(frame.format)
     );
-    return isPrototypeSrgbColor(color)
-        && descriptor != nullptr
-        && (descriptor->flags & AV_PIX_FMT_FLAG_RGB) != 0;
+    if (descriptor == nullptr) {
+        return std::nullopt;
+    }
+    if ((descriptor->flags & AV_PIX_FMT_FLAG_RGB) != 0) {
+        return isPrototypeSrgbColor(color)
+            ? std::optional{DecodeColorMode::srgbRgb}
+            : std::nullopt;
+    }
+    return isPrototypeBt709VideoColor(color)
+        ? std::optional{DecodeColorMode::bt709Video}
+        : std::nullopt;
 }
 
 std::size_t checkedFrameBytes(
@@ -462,7 +513,8 @@ DecodedVideoFrame convertFrame(
 ) {
     requireNotCancelled(cancellation, "before-convert");
     const ColorMetadata color = colorMetadata(frame);
-    if (!supportedPrototypeColor(frame, color)) {
+    const auto colorMode = decodeColorMode(frame, color);
+    if (!colorMode.has_value()) {
         fail(MediaFailureCode::unsupportedColorMetadata, "frame-color");
     }
 
@@ -474,11 +526,18 @@ DecodedVideoFrame convertFrame(
     const auto rowBytes = static_cast<std::size_t>(frame.width) * 4;
     std::vector<std::uint8_t> pixels(byteCount);
 
+    const auto sourceFormat = static_cast<AVPixelFormat>(frame.format);
+    const bool configureScale = !scale.configurationMatches(
+        frame.width,
+        frame.height,
+        sourceFormat,
+        color
+    );
     auto* cachedScale = sws_getCachedContext(
         scale.get(),
         frame.width,
         frame.height,
-        static_cast<AVPixelFormat>(frame.format),
+        sourceFormat,
         frame.width,
         frame.height,
         AV_PIX_FMT_RGBA,
@@ -490,6 +549,29 @@ DecodedVideoFrame convertFrame(
     scale.replaceCached(cachedScale);
     if (scale.get() == nullptr) {
         fail(MediaFailureCode::conversionFailed, "create-converter");
+    }
+    if (configureScale && *colorMode == DecodeColorMode::bt709Video) {
+        const int* coefficients = sws_getCoefficients(SWS_CS_ITU709);
+        const int colorResult = sws_setColorspaceDetails(
+            scale.get(),
+            coefficients,
+            0,
+            coefficients,
+            1,
+            0,
+            1 << 16,
+            1 << 16
+        );
+        if (colorResult < 0) {
+            fail(
+                MediaFailureCode::conversionFailed,
+                "configure-converter",
+                colorResult
+            );
+        }
+    }
+    if (configureScale) {
+        scale.recordConfiguration(frame.width, frame.height, sourceFormat, color);
     }
 
     std::array<std::uint8_t*, 4> destination{pixels.data(), nullptr, nullptr, nullptr};
@@ -1125,6 +1207,13 @@ bool isPrototypeSrgbColor(const ColorMetadata& color) noexcept {
         && color.matrix == AVCOL_SPC_RGB
         && (color.range == AVCOL_RANGE_JPEG
             || color.range == AVCOL_RANGE_UNSPECIFIED);
+}
+
+bool isPrototypeBt709VideoColor(const ColorMetadata& color) noexcept {
+    return color.primaries == AVCOL_PRI_BT709
+        && color.transfer == AVCOL_TRC_BT709
+        && color.matrix == AVCOL_SPC_BT709
+        && color.range == AVCOL_RANGE_MPEG;
 }
 
 MediaError::MediaError(

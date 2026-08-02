@@ -4333,6 +4333,10 @@ def windows_h264_project_export_contract() -> None:
         "h264_project_exporter.hpp"
     )
     source = read_text("windows/export-ffmpeg/h264_project_exporter.cpp")
+    media_header = read_text(
+        "windows/media-ffmpeg/include/palmier/media/ffmpeg_media_reader.hpp"
+    )
+    media_source = read_text("windows/media-ffmpeg/ffmpeg_media_reader.cpp")
     tests = read_text(
         "windows/export-ffmpeg/tests/h264_project_exporter_tests.cpp"
     )
@@ -4371,6 +4375,16 @@ def windows_h264_project_export_contract() -> None:
     ]:
         if token not in source:
             raise ContractError(f"H.264 export invariant missing token {token!r}")
+    for token in [
+        "isPrototypeBt709VideoColor",
+        "DecodeColorMode::bt709Video",
+        "sws_setColorspaceDetails(",
+        "scale.recordConfiguration(",
+    ]:
+        if token not in media_header and token not in media_source:
+            raise ContractError(
+                f"H.264 export BT.709 decode invariant missing token {token!r}"
+            )
     for token in [
         "exportsAndIndependentlyDecodesEveryFrame",
         "refusesExistingDestinationWithoutMutation",

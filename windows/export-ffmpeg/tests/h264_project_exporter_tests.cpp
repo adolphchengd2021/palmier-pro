@@ -181,6 +181,10 @@ void exportsAndIndependentlyDecodesEveryFrame(
     std::uint8_t maximumRed = 0;
     while (const auto frame = reader.nextFrame()) {
         ++frames;
+        require(
+            palmier::media::isPrototypeBt709VideoColor(frame->color),
+            "exported BT.709 metadata changed"
+        );
         for (std::size_t index = 0; index < frame->rgba8.size(); index += 4) {
             minimumRed = (std::min)(minimumRed, frame->rgba8[index]);
             maximumRed = (std::max)(maximumRed, frame->rgba8[index]);
