@@ -5063,6 +5063,7 @@ def windows_prototype_packaging_contract() -> None:
         "ExtractTemporaryFile('vc_redist.x64.exe')",
         "ResultCode = 3010",
         "ResultCode <> 0",
+        "IntToStr(ResultCode)",
     ]:
         if token not in installer:
             raise ContractError(f"Prototype installer missing token {token!r}")

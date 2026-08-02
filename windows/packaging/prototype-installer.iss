@@ -73,9 +73,7 @@ begin
   end
   else if ResultCode <> 0 then
   begin
-    Result := Format(
-      'The Microsoft Visual C++ Runtime installer failed with exit code %d.',
-      [ResultCode]
-    );
+    Result := 'The Microsoft Visual C++ Runtime installer failed with exit code '
+      + IntToStr(ResultCode) + '.';
   end;
 end;
