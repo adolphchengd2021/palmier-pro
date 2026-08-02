@@ -1670,6 +1670,7 @@ def windows_project_reader_contract() -> None:
             raise ContractError(f"project writer source missing token {token!r}")
     for token in [
         "editSaveRestartPreservesCanariesAndState",
+        "move did not update runtime",
         "savingAnOlderSnapshotLeavesNewerRuntimeDirty",
         "committedSaveReportsClosedRuntimeAsWarning",
         "committedSaveConvertsUnexpectedAcknowledgementFailureToWarning",
@@ -4254,6 +4255,7 @@ def windows_qt_read_only_shell_contract() -> None:
     for token in [
         "Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)",
         "Q_PROPERTY(bool canUndo READ canUndo NOTIFY canUndoChanged)",
+        "moveClip(",
         "splitClip(const QString& clipId, const QString& frameText)",
         "Q_INVOKABLE void undo()",
     ]:
@@ -4263,6 +4265,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "setMaxThreadCount(1)",
         "frameText.toLongLong(&frameIsValid, 10)",
         "^[0-9]+$",
+        "runtime->moveClips(",
         "runtime->splitClips(",
         "runtime->undo(generation, cancellation)",
         "publication.session->undoDepth > 0",
@@ -4358,7 +4361,11 @@ def windows_qt_read_only_shell_contract() -> None:
         "persistenceCoordinator.save()",
         "MessageDialog.Save | MessageDialog.Discard | MessageDialog.Cancel",
         "persistenceShutdownReady",
+        "editingCoordinator.moveClip(",
         "editingCoordinator.splitClip(",
+        'objectName: "moveTrackField"',
+        'objectName: "moveFrameField"',
+        'objectName: "moveClipButton"',
         "editingCoordinator.undo()",
         "modelData.stableId",
         "clip: true",
@@ -4412,6 +4419,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "persistenceWorkerRetainsRuntimeAfterControllerTeardown",
         "dirtyRuntimeRefusesProjectReplacement",
         "editingControllerSplitsAndUndoesByStableId",
+        "editingControllerMovesByStableIdAndPreservesNoOpHistory",
         "persistenceShutdownRefreshesAuthoritativeDirtyState",
     ]:
         if token not in qt_tests:
@@ -4880,7 +4888,7 @@ def windows_mcp_project_session_contract() -> None:
         contract["endpoint"],
         "http://127.0.0.1:19789/mcp",
     )
-    expected_tools = ["get_timeline", "split_clips", "undo"]
+    expected_tools = ["get_timeline", "move_clips", "split_clips", "undo"]
     require_equal("Windows MCP tool subset", contract["toolNames"], expected_tools)
     require_equal(
         "Windows MCP discovery names",
@@ -4914,6 +4922,13 @@ def windows_mcp_project_session_contract() -> None:
             '"startFrame": ["type": "integer"',
             '"endFrame": ["type": "integer"',
             '"captionDetail": ["type": "boolean"',
+        ],
+        "moveClips": [
+            '"moves": [',
+            '"clipId": ["type": "string"',
+            '"toTrack": ["type": "integer"',
+            '"toFrame": ["type": "integer"',
+            '"required": ["clipId"]',
         ],
         "splitClips": [
             '"splits": [',
@@ -4992,6 +5007,7 @@ def windows_mcp_project_session_contract() -> None:
     adr = read_text("docs/windows/adr/0026-loopback-mcp-project-session.md")
     runtime_adr = read_text("docs/windows/adr/0027-serial-project-runtime.md")
     service_adr = read_text("docs/windows/adr/0028-stoppable-embedded-mcp-service.md")
+    move_adr = read_text("docs/windows/adr/0036-atomic-move-clips.md")
     readme = read_text("docs/windows/README.md")
     for token in [
         "class ProjectSession final",
@@ -4999,6 +5015,7 @@ def windows_mcp_project_session_contract() -> None:
         "std::size_t undoDepth",
         "ProjectSaveSnapshot",
         "TimelineQuery",
+        "MoveClipsCommand",
         "SplitClipsCommand",
         "CommandResult",
         "ProjectSessionPublicationFactory",
@@ -5012,6 +5029,11 @@ def windows_mcp_project_session_contract() -> None:
             raise ContractError(f"ProjectSession API missing token {token!r}")
     for token in [
         "unsafeClipIds(document)",
+        "CommandResult ProjectSession::moveClips(",
+        "linked clips must preserve their frame offsets",
+        "moved clips overlap on a destination track",
+        "destination overlap would change a linked clip",
+        "TimelineSnapshot{timelineIndex, timeline, sourceTimelineSnapshot}",
         "pass exactly one of splits or trackIndex with frames",
         "linkedSplitMismatch",
         "unsupportedClipSemantics",
@@ -5032,6 +5054,13 @@ def windows_mcp_project_session_contract() -> None:
             raise ContractError(f"ProjectSession invariant missing token {token!r}")
     for token in [
         "explicitSplitAndUndo",
+        "moveAcrossTrackPrunesAndUndoesExactly",
+        "linkedMoveAndNoOpShareOneHistory",
+        "overlappingMovesDoNotConsumeGeneratedIds",
+        "linkedOverwriteIsRefusedWithoutMutation",
+        "moveOverwriteSplitsBlockerAtomically",
+        "moveCancellationDuringPlanningDoesNotCommit",
+        "invalidMovesDoNotMutate",
         "sourceCanariesAndPersistedIdentity",
         "unstableWriteParentsAreRefused",
         "invalidBatchDoesNotMutate",
@@ -5047,6 +5076,7 @@ def windows_mcp_project_session_contract() -> None:
         "cancelledUndoPreservesHistory",
         "publicationPreparationFailureDoesNotCommit",
         "split publication failure must preserve the exact session",
+        "move publication failure must preserve the exact session",
         "undo publication failure must retain the committed split and undo entry",
         "persistence publication failure must not acknowledge the state",
     ]:
@@ -5057,6 +5087,7 @@ def windows_mcp_project_session_contract() -> None:
         "ProjectRuntimeState",
         "ProjectRuntimeTimelineResult",
         "ProjectRuntimeCommandResult",
+        "moveClips(",
         "projectGeneration(",
         "ProjectRuntimeObserver",
         "operationCommitted() noexcept",
@@ -5083,6 +5114,7 @@ def windows_mcp_project_session_contract() -> None:
             raise ContractError(f"ProjectRuntime invariant missing token {token!r}")
     for token in [
         "mutationPublishesOneSessionState",
+        "moveNoOpDoesNotPublishOrAdvanceHistory",
         "dirtyAndGenerationGatesProtectReplacement",
         "operationsAreSerializedAndQueuedCancellationDoesNotCommit",
         "cancellationAfterCommitStillPublishesSuccess",
@@ -5128,6 +5160,7 @@ def windows_mcp_project_session_contract() -> None:
         "sessionState->second.projectGeneration != projectRuntime.projectGeneration()",
         "MCP session belongs to a replaced project",
         "runtime.getTimeline(query, expectedProjectGeneration)",
+        "runtime.moveClips(",
         "runtime.undo(expectedProjectGeneration)",
         "SO_RCVTIMEO",
         "mediaType(",
@@ -5184,6 +5217,8 @@ def windows_mcp_project_session_contract() -> None:
         "hostile Origin must be rejected",
         "technical MVP discovery schema drift",
         "cross-session split readback",
+        "move no-op changed timeline",
+        "move undo exact restore",
         "rejected requests must not mutate",
         "cross-session undo exact restore",
         "require_port_released",
@@ -5208,9 +5243,19 @@ def windows_mcp_project_session_contract() -> None:
     ]:
         if token not in adr:
             raise ContractError(f"Windows MCP ADR missing token {token!r}")
-    for token in ["three-tool loopback MCP", "ADR 0026"]:
+    for token in ["four-tool loopback MCP", "ADR 0026", "ADR 0036"]:
         if token not in readme:
             raise ContractError(f"Windows README missing token {token!r}")
+    for token in [
+        "one atomic `ProjectSession` operation",
+        "stable clip IDs",
+        "linked partners",
+        "exact no-op",
+        "unsupportedLinkedOverwrite",
+        "MCP readback and shared undo",
+    ]:
+        if token not in move_adr:
+            raise ContractError(f"Windows move_clips ADR missing token {token!r}")
     for token in [
         "only thread that closes the listener",
         "already accepted before cancellation",

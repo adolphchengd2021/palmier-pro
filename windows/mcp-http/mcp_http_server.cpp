@@ -445,6 +445,28 @@ Value toolsList() {
                 }
             },
             {
+                "name": "move_clips",
+                "description": "Moves clips atomically by stable ID to a compatible track and/or non-negative project frame, propagating frame deltas to linked partners.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "moves": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "clipId": {"type": "string"},
+                                    "toTrack": {"type": "integer"},
+                                    "toFrame": {"type": "integer"}
+                                },
+                                "required": ["clipId"]
+                            }
+                        }
+                    },
+                    "required": ["moves"]
+                }
+            },
+            {
                 "name": "split_clips",
                 "description": "Splits clips atomically by stable ID or track frame in one shared undo action.",
                 "inputSchema": {
@@ -550,6 +572,43 @@ Value invokeTool(
                 query.captionDetail = field->second.boolean();
             }
             return toolSuccess(runtime.getTimeline(query, expectedProjectGeneration).timeline);
+        }
+        if (name == "move_clips") {
+            rejectUnknownKeys(object, {"moves"}, name);
+            const auto& movesValue = requiredField(object, "moves");
+            if (movesValue.kind() != Value::Kind::array) {
+                throw palmier::project::CommandError("invalidArguments", "moves must be an array");
+            }
+            palmier::project::MoveClipsCommand command;
+            command.moves.reserve(movesValue.array().size());
+            for (const auto& item : movesValue.array()) {
+                const auto& move = requireObject(item, "move item");
+                rejectUnknownKeys(move, {"clipId", "toTrack", "toFrame"}, "move item");
+                palmier::project::ClipMove parsed{
+                    requireString(requiredField(move, "clipId"), "clipId"),
+                    std::nullopt,
+                    std::nullopt,
+                };
+                if (const auto field = move.find("toTrack"); field != move.end()) {
+                    const auto trackIndex = requireInteger(field->second, "toTrack");
+                    if (trackIndex < 0) {
+                        throw palmier::project::CommandError(
+                            "invalidArguments",
+                            "toTrack must not be negative"
+                        );
+                    }
+                    parsed.toTrack = static_cast<std::size_t>(trackIndex);
+                }
+                if (const auto field = move.find("toFrame"); field != move.end()) {
+                    parsed.toFrame = requireInteger(field->second, "toFrame");
+                }
+                command.moves.push_back(std::move(parsed));
+            }
+            auto result = runtime.moveClips(
+                std::move(command),
+                expectedProjectGeneration
+            );
+            return toolSuccess(std::move(*result.command.payload));
         }
         if (name == "split_clips") {
             rejectUnknownKeys(object, {"splits", "trackIndex", "frames"}, name);

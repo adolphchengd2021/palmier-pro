@@ -180,6 +180,19 @@ def require_receipt(
     return action_id
 
 
+def require_noop_receipt(
+    receipt: dict[str, Any],
+    contract: dict[str, Any],
+    revision: int,
+) -> None:
+    expected_fields = set(contract["toolResult"]["mutationReceiptFields"])
+    require(set(receipt) == expected_fields, f"no-op receipt fields: {sorted(receipt)}")
+    require(receipt.get("changed") is False, "no-op receipt changed")
+    require(receipt.get("revisionBefore") == revision, "no-op revisionBefore")
+    require(receipt.get("revisionAfter") == revision, "no-op revisionAfter")
+    require(receipt.get("actionId") == "", "no-op actionId")
+
+
 def timeline_clip(timeline: dict[str, Any], clip_id: str) -> dict[str, Any] | None:
     for track in timeline.get("tracks", []):
         for clip in track.get("clips", []):
@@ -414,6 +427,39 @@ def main() -> int:
             require(require_receipt(second_undo, contract, 3, 4) == first_action_id, "shared undo identity")
             restored = tool_payload(second.tool("get_timeline", {}))
             require(normalized(restored) == normalized(baseline), "cross-session undo exact restore")
+
+            tool_error(first.tool("move_clips", {"moves": []}), "invalidMoves")
+            tool_error(first.tool(
+                "move_clips",
+                {"moves": [{"clipId": "clip-main-1"}]},
+            ), "invalidMoveDestination")
+            tool_error(first.tool(
+                "move_clips",
+                {"moves": [{"clipId": "clip-main-1", "toFrame": -1}]},
+            ), "invalidMoveFrame")
+            no_op = tool_payload(first.tool(
+                "move_clips",
+                {"moves": [{"clipId": "clip-main-1", "toFrame": 0}]},
+            ))
+            require_noop_receipt(no_op, contract, 4)
+            require(
+                normalized(tool_payload(second.tool("get_timeline", {}))) == normalized(baseline),
+                "move no-op changed timeline",
+            )
+            move_receipt = tool_payload(first.tool(
+                "move_clips",
+                {"moves": [{"clipId": "clip-main-1", "toFrame": 200}]},
+            ))
+            move_action_id = require_receipt(move_receipt, contract, 4, 5)
+            moved = tool_payload(second.tool("get_timeline", {}))
+            moved_clip = timeline_clip(moved, "clip-main-1")
+            require(moved_clip is not None and moved_clip["frames"] == [200, 350], "move readback")
+            move_undo = tool_payload(second.tool("undo", {}))
+            require(require_receipt(move_undo, contract, 5, 6) == move_action_id, "move undo identity")
+            require(
+                normalized(tool_payload(first.tool("get_timeline", {}))) == normalized(baseline),
+                "move undo exact restore",
+            )
             tool_error(first.tool("undo", {}), "nothingToUndo")
 
             unknown = first.tool("set_clip_properties", {"clipIds": ["clip-main-1"]})

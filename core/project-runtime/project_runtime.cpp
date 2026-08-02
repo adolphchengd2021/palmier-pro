@@ -296,6 +296,33 @@ ProjectRuntimeCommandResult ProjectRuntime::splitClips(
     });
 }
 
+ProjectRuntimeCommandResult ProjectRuntime::moveClips(
+    MoveClipsCommand command,
+    std::optional<std::uint64_t> expectedProjectGeneration,
+    std::stop_token cancellation
+) {
+    return implementation_->invoke<ProjectRuntimeCommandResult>([
+        command = std::move(command),
+        expectedProjectGeneration,
+        cancellation
+    ](Implementation& runtime) mutable {
+        checkCancellation(cancellation);
+        runtime.requireProjectGeneration(expectedProjectGeneration);
+        auto result = runtime.requireSession().moveClips(command, cancellation);
+        if (result.changed && runtime.observer) runtime.observer->operationCommitted();
+        auto state = result.publication;
+        ProjectRuntimeCommandResult published{
+            runtime.projectGeneration,
+            std::move(result),
+            std::move(state),
+        };
+        if (published.command.changed) {
+            runtime.publishState({published.projectGeneration, published.session});
+        }
+        return published;
+    });
+}
+
 ProjectRuntimeCommandResult ProjectRuntime::undo(
     std::optional<std::uint64_t> expectedProjectGeneration,
     std::stop_token cancellation

@@ -15,6 +15,8 @@ namespace {
 
 using palmier::json::Value;
 using palmier::project::CommandError;
+using palmier::project::ClipMove;
+using palmier::project::MoveClipsCommand;
 using palmier::project::ProjectSession;
 using palmier::project::SplitClipsCommand;
 using palmier::project::SplitPoint;
@@ -146,6 +148,327 @@ void explicitSplitAndUndo(const std::filesystem::path& root) {
     requireCommandError([&] { static_cast<void>(session.undo()); }, "nothingToUndo");
 }
 
+void moveAcrossTrackPrunesAndUndoesExactly() {
+    const std::string source = R"({
+        "timelines":[{
+            "id":"timeline","name":"Project","fps":30,"width":1920,"height":1080,
+            "tracks":[
+                {"id":"source","type":"video","clips":[{
+                    "id":"target","mediaRef":"media","mediaType":"video",
+                    "sourceClipType":"video","startFrame":0,"durationFrames":20
+                }]},
+                {"id":"destination","type":"image","x-track":{"keep":true},"clips":[{
+                    "id":"keeper","mediaRef":"still","mediaType":"image",
+                    "sourceClipType":"image","startFrame":200,"durationFrames":20
+                }]}
+            ]
+        }],
+        "activeTimelineId":"timeline","openTimelineIds":["timeline"],
+        "x-root":{"keep":"root"}
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    int nextId{};
+    ProjectSession session(document, [&] {
+        return "move-track-id-" + std::to_string(++nextId);
+    });
+    const auto baseline = palmier::json::canonical(session.snapshot().document.source());
+    const auto result = session.moveClips(MoveClipsCommand{{
+        ClipMove{"target", std::size_t{1}, std::int64_t{100}},
+    }});
+    require(result.changed && result.revisionAfter == 1, "cross-track move revision");
+    require(result.publication->undoDepth == 1, "cross-track move undo depth");
+    const auto timeline = session.getTimeline();
+    const auto& tracks = at(timeline, "tracks").array();
+    require(tracks.size() == 1, "empty source track was not pruned");
+    require(at(tracks.front(), "trackId").string() == "destination", "destination track identity");
+    const auto& clips = at(tracks.front(), "clips").array();
+    require(clips.size() == 2, "cross-track move clip count");
+    require(at(clips.front(), "id").string() == "target", "moved clip order");
+    require(integer(at(clips.front(), "startFrame")) == 100, "moved clip frame");
+    const auto movedSource = session.snapshot();
+    const auto& sourceTracks = at(
+        at(movedSource.document.source(), "timelines").array().front(),
+        "tracks"
+    ).array();
+    require(sourceTracks.size() == 1, "source track pruning was not persisted");
+    require(
+        palmier::json::canonical(at(sourceTracks.front(), "x-track")) == R"({"keep":true})",
+        "destination track canary changed"
+    );
+    require(
+        palmier::json::canonical(at(movedSource.document.source(), "x-root"))
+            == R"({"keep":"root"})",
+        "move changed root canary"
+    );
+    static_cast<void>(session.undo());
+    require(
+        palmier::json::canonical(session.snapshot().document.source()) == baseline,
+        "move undo did not restore exact project source"
+    );
+}
+
+void linkedMoveAndNoOpShareOneHistory() {
+    const std::string source = R"({
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[
+            {"id":"video-track","type":"video","clips":[{
+                "id":"video","mediaRef":"media","mediaType":"video","sourceClipType":"video",
+                "startFrame":10,"durationFrames":30,"linkGroupId":"link"
+            }]},
+            {"id":"audio-track","type":"audio","clips":[{
+                "id":"audio","mediaRef":"media","mediaType":"audio","sourceClipType":"audio",
+                "startFrame":5,"durationFrames":40,"linkGroupId":"link"
+            }]}
+        ]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    int nextId{};
+    ProjectSession session(document, [&] {
+        return "linked-move-id-" + std::to_string(++nextId);
+    });
+    const auto baseline = palmier::json::canonical(session.snapshot().document.source());
+    requireCommandError(
+        [&] {
+            static_cast<void>(session.moveClips(MoveClipsCommand{{
+                ClipMove{"video", std::nullopt, std::int64_t{0}},
+            }}));
+        },
+        "invalidMoveFrame"
+    );
+    require(
+        session.revision() == 0
+        && palmier::json::canonical(session.snapshot().document.source()) == baseline,
+        "negative linked move changed the project"
+    );
+    const auto moved = session.moveClips(MoveClipsCommand{{
+        ClipMove{"video", std::nullopt, std::int64_t{50}},
+    }});
+    require(moved.changed && moved.publication->undoDepth == 1, "linked move history");
+    const auto timeline = session.getTimeline();
+    const auto& tracks = at(timeline, "tracks").array();
+    require(integer(at(at(tracks[0], "clips").array().front(), "startFrame")) == 50, "video move");
+    require(integer(at(at(tracks[1], "clips").array().front(), "startFrame")) == 45, "audio delta");
+    const auto noOp = session.moveClips(MoveClipsCommand{{
+        ClipMove{"video", std::nullopt, std::int64_t{50}},
+    }});
+    require(!noOp.changed, "exact move should be a no-op");
+    require(noOp.revisionBefore == 1 && noOp.revisionAfter == 1, "no-op revision changed");
+    require(noOp.publication->undoDepth == 1, "no-op added undo history");
+    static_cast<void>(session.undo());
+    require(session.revision() == 2 && !session.dirty(), "linked move undo identity");
+}
+
+void overlappingMovesDoNotConsumeGeneratedIds() {
+    const std::string source = R"({
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{
+            "id":"track","type":"video","clips":[
+                {"id":"one","mediaRef":"one","mediaType":"video","sourceClipType":"video",
+                 "startFrame":0,"durationFrames":20},
+                {"id":"two","mediaRef":"two","mediaType":"video","sourceClipType":"video",
+                 "startFrame":40,"durationFrames":20}
+            ]
+        }]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    int nextId{};
+    ProjectSession session(document, [&] {
+        return "overlap-id-" + std::to_string(++nextId);
+    });
+    const auto baseline = palmier::json::canonical(session.snapshot().document.source());
+    requireCommandError(
+        [&] {
+            static_cast<void>(session.moveClips(MoveClipsCommand{{
+                ClipMove{"one", std::nullopt, std::int64_t{100}},
+                ClipMove{"two", std::nullopt, std::int64_t{110}},
+            }}));
+        },
+        "overlappingMoves"
+    );
+    require(nextId == 0, "overlapping move consumed a generated ID");
+    require(
+        session.revision() == 0
+        && palmier::json::canonical(session.snapshot().document.source()) == baseline,
+        "overlapping move changed the project"
+    );
+    const auto moved = session.moveClips(MoveClipsCommand{{
+        ClipMove{"one", std::nullopt, std::int64_t{100}},
+    }});
+    require(moved.actionId == "overlap-id-1", "rejected move advanced generated identity");
+}
+
+void linkedOverwriteIsRefusedWithoutMutation() {
+    const std::string source = R"({
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[
+            {"id":"video","type":"video","clips":[
+                {"id":"moving","mediaRef":"one","mediaType":"video","sourceClipType":"video",
+                 "startFrame":0,"durationFrames":20},
+                {"id":"linked-video","mediaRef":"two","mediaType":"video","sourceClipType":"video",
+                 "startFrame":40,"durationFrames":60,"linkGroupId":"link"}
+            ]},
+            {"id":"audio","type":"audio","clips":[
+                {"id":"linked-audio","mediaRef":"two","mediaType":"audio","sourceClipType":"audio",
+                 "startFrame":40,"durationFrames":60,"linkGroupId":"link"}
+            ]}
+        ]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    ProjectSession session(document, [] { return std::string("linked-overwrite-id"); });
+    const auto baseline = palmier::json::canonical(session.snapshot().document.source());
+    requireCommandError(
+        [&] {
+            static_cast<void>(session.moveClips(MoveClipsCommand{{
+                ClipMove{"moving", std::nullopt, std::int64_t{50}},
+            }}));
+        },
+        "unsupportedLinkedOverwrite"
+    );
+    require(
+        session.revision() == 0
+        && palmier::json::canonical(session.snapshot().document.source()) == baseline,
+        "linked overwrite refusal changed the project"
+    );
+}
+
+void moveCancellationDuringPlanningDoesNotCommit() {
+    const std::string source = R"({
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{
+            "id":"track","type":"video","clips":[
+                {"id":"moving","mediaRef":"one","mediaType":"video","sourceClipType":"video",
+                 "startFrame":0,"durationFrames":20},
+                {"id":"blocker","mediaRef":"two","mediaType":"video","sourceClipType":"video",
+                 "startFrame":40,"durationFrames":60,"speed":1}
+            ]
+        }]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    std::stop_source cancellation;
+    int nextId{};
+    ProjectSession session(document, [&] {
+        const auto generated = "cancel-move-id-" + std::to_string(++nextId);
+        if (nextId == 2) cancellation.request_stop();
+        return generated;
+    });
+    const auto baseline = palmier::json::canonical(session.snapshot().document.source());
+    requireCommandError(
+        [&] {
+            static_cast<void>(session.moveClips(
+                MoveClipsCommand{{
+                    ClipMove{"moving", std::nullopt, std::int64_t{50}},
+                }},
+                cancellation.get_token()
+            ));
+        },
+        "cancelled"
+    );
+    require(
+        session.revision() == 0
+        && !session.dirty()
+        && palmier::json::canonical(session.snapshot().document.source()) == baseline,
+        "move cancellation during planning committed state"
+    );
+}
+
+void moveOverwriteSplitsBlockerAtomically() {
+    const std::string source = R"({
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{
+            "id":"track","type":"video","clips":[
+                {"id":"moving","mediaRef":"one","mediaType":"video","sourceClipType":"video",
+                 "startFrame":0,"durationFrames":20},
+                {"id":"blocker","mediaRef":"two","mediaType":"video","sourceClipType":"video",
+                 "startFrame":40,"durationFrames":60,"trimStartFrame":10,"trimEndFrame":20,"speed":1}
+            ]
+        }]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    int nextId{};
+    ProjectSession session(document, [&] {
+        return "overwrite-id-" + std::to_string(++nextId);
+    });
+    const auto baseline = palmier::json::canonical(session.snapshot().document.source());
+    const auto result = session.moveClips(MoveClipsCommand{{
+        ClipMove{"moving", std::nullopt, std::int64_t{50}},
+    }});
+    require(result.changed && result.publication->undoDepth == 1, "overwrite move history");
+    const auto timeline = session.getTimeline();
+    const auto& clips = at(firstTrack(timeline), "clips").array();
+    require(clips.size() == 3, "overwrite did not split the blocker");
+    require(at(clips[0], "id").string() == "blocker", "left blocker ID changed");
+    require(integer(at(clips[0], "startFrame")) == 40, "left blocker start");
+    require(integer(at(clips[0], "durationFrames")) == 10, "left blocker duration");
+    require(integer(at(clips[0], "trimEndFrame")) == 70, "left blocker trim end");
+    require(at(clips[1], "id").string() == "moving", "moved clip placement");
+    require(integer(at(clips[1], "startFrame")) == 50, "moved clip start");
+    require(at(clips[2], "id").string() == "overwrite-id-2", "right blocker ID");
+    require(integer(at(clips[2], "startFrame")) == 70, "right blocker start");
+    require(integer(at(clips[2], "trimStartFrame")) == 40, "right blocker trim start");
+    static_cast<void>(session.undo());
+    require(
+        palmier::json::canonical(session.snapshot().document.source()) == baseline,
+        "overwrite move undo was not exact"
+    );
+}
+
+void invalidMovesDoNotMutate() {
+    const std::string source = R"({
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[
+            {"id":"video","type":"video","clips":[{
+                "id":"clip","mediaRef":"media","mediaType":"video","sourceClipType":"video",
+                "startFrame":0,"durationFrames":20
+            }]},
+            {"id":"audio","type":"audio","clips":[]}
+        ]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    ProjectSession session(document, [] { return std::string("unused-generated-id"); });
+    const auto baseline = palmier::json::canonical(session.snapshot().document.source());
+    requireCommandError(
+        [&] { static_cast<void>(session.moveClips(MoveClipsCommand{})); },
+        "invalidMoves"
+    );
+    requireCommandError(
+        [&] {
+            static_cast<void>(session.moveClips(MoveClipsCommand{{
+                ClipMove{"clip", std::nullopt, std::nullopt},
+            }}));
+        },
+        "invalidMoveDestination"
+    );
+    requireCommandError(
+        [&] {
+            static_cast<void>(session.moveClips(MoveClipsCommand{{
+                ClipMove{"clip", std::size_t{1}, std::int64_t{10}},
+            }}));
+        },
+        "incompatibleTrackType"
+    );
+    requireCommandError(
+        [&] {
+            static_cast<void>(session.moveClips(MoveClipsCommand{{
+                ClipMove{"clip", std::nullopt, std::int64_t{-1}},
+            }}));
+        },
+        "invalidMoveFrame"
+    );
+    require(session.revision() == 0 && !session.dirty(), "invalid move changed identity");
+    require(
+        palmier::json::canonical(session.snapshot().document.source()) == baseline,
+        "invalid move changed project source"
+    );
+}
+
 void publicationPreparationFailureDoesNotCommit() {
     const auto source = std::string(R"({
         "timelines":[{
@@ -175,6 +498,20 @@ void publicationPreparationFailureDoesNotCommit() {
     );
     const auto baseline = palmier::json::canonical(session.snapshot().document.source());
     failPublication = true;
+    try {
+        static_cast<void>(session.moveClips(MoveClipsCommand{{
+            ClipMove{"target", std::nullopt, std::int64_t{20}},
+        }}));
+        throw std::runtime_error("expected move publication preparation failure");
+    } catch (const std::bad_alloc&) {
+    }
+    require(
+        session.revision() == 0
+        && session.stateId() == 0
+        && !session.dirty()
+        && palmier::json::canonical(session.snapshot().document.source()) == baseline,
+        "move publication failure must preserve the exact session"
+    );
     try {
         static_cast<void>(session.splitClips(SplitClipsCommand{
             std::vector<SplitPoint>{{"target", 40}}, std::nullopt, std::nullopt,
@@ -624,6 +961,13 @@ int wmain(int argumentCount, wchar_t* arguments[]) {
         }
         const std::filesystem::path root(arguments[1]);
         explicitSplitAndUndo(root);
+        moveAcrossTrackPrunesAndUndoesExactly();
+        linkedMoveAndNoOpShareOneHistory();
+        overlappingMovesDoNotConsumeGeneratedIds();
+        linkedOverwriteIsRefusedWithoutMutation();
+        moveOverwriteSplitsBlockerAtomically();
+        moveCancellationDuringPlanningDoesNotCommit();
+        invalidMovesDoNotMutate();
         publicationPreparationFailureDoesNotCommit();
         sourceCanariesAndPersistedIdentity();
         unstableWriteParentsAreRefused();

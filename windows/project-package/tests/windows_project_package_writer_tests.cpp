@@ -9,6 +9,7 @@
 #define NOMINMAX
 #include <Windows.h>
 
+#include <algorithm>
 #include <charconv>
 #include <exception>
 #include <filesystem>
@@ -29,6 +30,8 @@ namespace {
 
 using palmier::json::Value;
 using palmier::project::CommandError;
+using palmier::project::ClipMove;
+using palmier::project::MoveClipsCommand;
 using palmier::project::ProjectPackageWriteError;
 using palmier::project::ProjectPackageWriteWarning;
 using palmier::project::ProjectPackageServiceError;
@@ -547,9 +550,27 @@ void editSaveRestartPreservesCanariesAndState(const std::filesystem::path& root)
         11
     );
     require(split.command.changed && split.session->dirty(), "split did not make project dirty");
+    const auto splitTimeline = runtime.getTimeline({}, 11).timeline;
+    const auto& splitClips = splitTimeline.find("tracks")->array().front()
+        .find("clips")->array();
+    const auto movedClip = std::find_if(
+        splitClips.begin(),
+        splitClips.end(),
+        [](const Value& clip) { return clip.find("id")->string() != "clip-save-target"; }
+    );
+    require(movedClip != splitClips.end(), "split did not create a movable right clip");
+    const auto move = runtime.moveClips(
+        MoveClipsCommand{{ClipMove{
+            movedClip->find("id")->string(),
+            std::nullopt,
+            std::int64_t{200},
+        }}},
+        11
+    );
+    require(move.command.changed && move.session->revision == 2, "move did not update runtime");
     const auto receipt = palmier::project::writeProjectPackage(runtime, package.path(), 11);
     require(receipt.projectGeneration == 11, "write generation");
-    require(receipt.revision == 1 && receipt.stateId == split.session->stateId, "write identity");
+    require(receipt.revision == 2 && receipt.stateId == move.session->stateId, "write identity");
     require(receipt.runtimeAcknowledged && !receipt.runtimeDirty, "write did not clear exact dirty state");
     require(receipt.warning == ProjectPackageWriteWarning::none, "successful write returned warning");
     package.requireNoStagingFiles();
@@ -568,7 +589,7 @@ void editSaveRestartPreservesCanariesAndState(const std::filesystem::path& root)
         const auto start = clip.find("startFrame")->number().integer.value();
         const auto duration = clip.find("durationFrames")->number().integer.value();
         if (id == "clip-save-target") foundFirst = start == 60 && duration == 30;
-        if (id.starts_with("writer-generated-")) foundSecond = start == 90 && duration == 30;
+        if (id.starts_with("writer-generated-")) foundSecond = start == 200 && duration == 30;
     }
     require(foundFirst && foundSecond, "restart changed split IDs or frame timing");
     require(!reopened.snapshot(12).session->dirty(), "reopened project must start persisted");

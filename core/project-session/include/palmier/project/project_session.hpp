@@ -32,6 +32,16 @@ struct SplitClipsCommand final {
     std::optional<std::vector<std::int64_t>> frames;
 };
 
+struct ClipMove final {
+    std::string clipId;
+    std::optional<std::size_t> toTrack;
+    std::optional<std::int64_t> toFrame;
+};
+
+struct MoveClipsCommand final {
+    std::vector<ClipMove> moves;
+};
+
 struct ProjectSessionSnapshot final {
     ProjectDocument document;
     std::uint64_t revision;
@@ -87,6 +97,10 @@ public:
         const SplitClipsCommand& command,
         std::stop_token cancellation = {}
     );
+    CommandResult moveClips(
+        const MoveClipsCommand& command,
+        std::stop_token cancellation = {}
+    );
     CommandResult undo(std::stop_token cancellation = {});
 
     ProjectSessionSnapshot snapshot(std::stop_token cancellation = {}) const;
@@ -106,9 +120,16 @@ private:
         palmier::json::Value sourceClips;
     };
 
+    struct TimelineSnapshot final {
+        std::size_t timelineIndex;
+        Timeline timeline;
+        palmier::json::Value sourceTimeline;
+    };
+
     struct UndoEntry final {
         std::string actionId;
         std::vector<TrackSnapshot> tracks;
+        std::optional<TimelineSnapshot> timeline;
         std::vector<std::string> createdClipIds;
         std::uint64_t beforeStateId;
     };

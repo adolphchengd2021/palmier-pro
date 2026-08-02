@@ -315,6 +315,37 @@ ApplicationWindow {
                     splitFrame.text
                 )
             }
+            TextField {
+                id: moveTrack
+                objectName: "moveTrackField"
+                width: AppTheme.editFieldWidth
+                placeholderText: qsTr("Move track")
+                validator: RegularExpressionValidator { regularExpression: /[0-9]*/ }
+            }
+            TextField {
+                id: moveFrame
+                objectName: "moveFrameField"
+                width: AppTheme.editFieldWidth
+                placeholderText: qsTr("Move frame")
+                validator: RegularExpressionValidator { regularExpression: /[0-9]*/ }
+            }
+            Button {
+                objectName: "moveClipButton"
+                text: qsTr("Move")
+                enabled: window.selectedClipId.length > 0
+                    && (moveTrack.text.length > 0 || moveFrame.text.length > 0)
+                    && moveTrack.acceptableInput
+                    && moveFrame.acceptableInput
+                    && projectCoordinator.presentationReady
+                    && !projectCoordinator.loading
+                    && !editingCoordinator.busy
+                    && !exportCoordinator.exporting
+                onClicked: editingCoordinator.moveClip(
+                    window.selectedClipId,
+                    moveTrack.text,
+                    moveFrame.text
+                )
+            }
             Label {
                 visible: editingCoordinator.busy
                 text: qsTr("Editing…")

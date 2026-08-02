@@ -86,6 +86,40 @@ void ProjectEditingController::splitClip(
     start(Operation::split, clipId, atFrame);
 }
 
+void ProjectEditingController::moveClip(
+    const QString& clipId,
+    const QString& trackText,
+    const QString& frameText
+) {
+    static const QRegularExpression decimalValue(QStringLiteral("^[0-9]+$"));
+    const bool hasTrack = !trackText.isEmpty();
+    const bool hasFrame = !frameText.isEmpty();
+    bool trackIsValid = !hasTrack;
+    bool frameIsValid = !hasFrame;
+    const auto track = trackText.toULongLong(&trackIsValid, 10);
+    const auto frame = frameText.toLongLong(&frameIsValid, 10);
+    if (
+        clipId.isEmpty()
+        || (!hasTrack && !hasFrame)
+        || (hasTrack && (!decimalValue.match(trackText).hasMatch() || !trackIsValid))
+        || (hasFrame && (!decimalValue.match(frameText).hasMatch() || !frameIsValid))
+    ) {
+        setErrorCode(QStringLiteral("invalidArguments"));
+        setErrorMessage(QStringLiteral(
+            "Choose a clip and enter a non-negative track or frame."
+        ));
+        emit operationFinished(false);
+        return;
+    }
+    start(
+        Operation::move,
+        clipId,
+        0,
+        hasTrack ? std::optional<std::size_t>{static_cast<std::size_t>(track)} : std::nullopt,
+        hasFrame ? std::optional<std::int64_t>{frame} : std::nullopt
+    );
+}
+
 void ProjectEditingController::undo() {
     if (!canUndo_) {
         setErrorCode(QStringLiteral("nothingToUndo"));
@@ -99,7 +133,9 @@ void ProjectEditingController::undo() {
 void ProjectEditingController::start(
     Operation operation,
     QString clipId,
-    std::int64_t atFrame
+    std::int64_t atFrame,
+    std::optional<std::size_t> destinationTrack,
+    std::optional<std::int64_t> destinationFrame
 ) {
     if (shutdownRequested_ || busy_) return;
     if (projectGeneration_ == 0) {
@@ -138,6 +174,8 @@ void ProjectEditingController::start(
         operation,
         stableClipId,
         atFrame,
+        destinationTrack,
+        destinationFrame,
         generation,
         cancellation
     ] {
@@ -146,6 +184,20 @@ void ProjectEditingController::start(
                 project::SplitClipsCommand command;
                 command.splits = std::vector<project::SplitPoint>{{stableClipId, atFrame}};
                 auto result = runtime->splitClips(
+                    std::move(command),
+                    generation,
+                    cancellation
+                );
+                return EditResult{std::move(result.session), {}, {}};
+            }
+            if (operation == Operation::move) {
+                project::MoveClipsCommand command;
+                command.moves.push_back({
+                    stableClipId,
+                    destinationTrack,
+                    destinationFrame,
+                });
+                auto result = runtime->moveClips(
                     std::move(command),
                     generation,
                     cancellation

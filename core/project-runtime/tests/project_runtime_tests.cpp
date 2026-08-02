@@ -15,6 +15,8 @@
 
 namespace {
 
+using palmier::project::ClipMove;
+using palmier::project::MoveClipsCommand;
 using palmier::project::ProjectRuntime;
 using palmier::project::ProjectRuntimeError;
 using palmier::project::ProjectRuntimeObserver;
@@ -155,6 +157,30 @@ void mutationPublishesOneSessionState() {
         && publications[2].stateId == 0,
         "mutation publications preserve exact session identity"
     );
+}
+
+void moveNoOpDoesNotPublishOrAdvanceHistory() {
+    auto observer = std::make_shared<RuntimeObserver>();
+    ProjectRuntime runtime(observer);
+    int nextId{};
+    runtime.install(projectDocument(), 1, [&] {
+        return "runtime-move-id-" + std::to_string(++nextId);
+    });
+    const auto noOp = runtime.moveClips(MoveClipsCommand{{
+        ClipMove{"target", std::nullopt, std::int64_t{0}},
+    }});
+    require(!noOp.command.changed, "exact move should not change runtime state");
+    require(noOp.session->revision == 0 && noOp.session->undoDepth == 0, "move no-op history");
+    require(observer->publications().size() == 1, "move no-op must not publish state");
+
+    const auto moved = runtime.moveClips(MoveClipsCommand{{
+        ClipMove{"target", std::nullopt, std::int64_t{200}},
+    }});
+    require(moved.command.changed && moved.session->revision == 1, "runtime move commit");
+    require(moved.session->undoDepth == 1 && moved.session->dirty(), "runtime move identity");
+    const auto publications = observer->publications();
+    require(publications.size() == 2, "changed move should publish exactly once");
+    require(publications.back().revision == 1, "move publication revision");
 }
 
 void dirtyAndGenerationGatesProtectReplacement() {
@@ -396,6 +422,7 @@ void emptyRuntimeRefusesQueries() {
 int main() {
     try {
         mutationPublishesOneSessionState();
+        moveNoOpDoesNotPublishOrAdvanceHistory();
         dirtyAndGenerationGatesProtectReplacement();
         persistenceAcknowledgementPublishesOnlyOnChange();
         saveSnapshotCarriesExactRuntimeIdentity();

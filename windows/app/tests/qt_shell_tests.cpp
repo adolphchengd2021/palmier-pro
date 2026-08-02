@@ -212,6 +212,71 @@ private slots:
         QVERIFY(editing.requestShutdown());
     }
 
+    void editingControllerMovesByStableIdAndPreservesNoOpHistory() {
+        auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
+        auto runtime = std::make_shared<palmier::project::ProjectRuntime>(mailbox);
+        auto document = palmier::project::readProject(
+            splittableProjectJson,
+            [] { return std::string("generated"); }
+        );
+        static_cast<void>(runtime->install(
+            std::move(document),
+            14,
+            [nextId = 0]() mutable {
+                return "ui-move-generated-" + std::to_string(++nextId);
+            }
+        ));
+        palmier::windows::ProjectEditingController editing(runtime, mailbox, nullptr);
+        editing.activateProject(14);
+        QSignalSpy finished(
+            &editing,
+            &palmier::windows::ProjectEditingController::operationFinished
+        );
+
+        editing.moveClip(QStringLiteral("clip"), {}, QStringLiteral("30"));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 5000);
+        QCOMPARE(finished.at(0).at(0).toBool(), true);
+        auto snapshot = runtime->snapshot(14);
+        QCOMPARE(
+            snapshot.session->document.project().timelines.front()
+                .tracks.front().clips.front().startFrame,
+            std::int64_t{30}
+        );
+        QCOMPARE(snapshot.session->revision, std::uint64_t{1});
+        QCOMPARE(snapshot.session->undoDepth, std::size_t{1});
+
+        editing.moveClip(QStringLiteral("clip"), QStringLiteral("0"), QStringLiteral("30"));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 2, 5000);
+        QCOMPARE(finished.at(1).at(0).toBool(), true);
+        snapshot = runtime->snapshot(14);
+        QCOMPARE(snapshot.session->revision, std::uint64_t{1});
+        QCOMPARE(snapshot.session->undoDepth, std::size_t{1});
+
+        editing.moveClip(QStringLiteral("clip"), {}, {});
+        QCOMPARE(finished.count(), 3);
+        QCOMPARE(finished.last().at(0).toBool(), false);
+        QCOMPARE(editing.errorCode(), QStringLiteral("invalidArguments"));
+        editing.moveClip(QStringLiteral("clip"), QStringLiteral("1"), {});
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 4, 5000);
+        QCOMPARE(finished.last().at(0).toBool(), false);
+        QCOMPARE(editing.errorCode(), QStringLiteral("trackNotFound"));
+        snapshot = runtime->snapshot(14);
+        QCOMPARE(snapshot.session->revision, std::uint64_t{1});
+        QCOMPARE(snapshot.session->undoDepth, std::size_t{1});
+
+        editing.undo();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 5, 5000);
+        QCOMPARE(finished.last().at(0).toBool(), true);
+        snapshot = runtime->snapshot(14);
+        QCOMPARE(
+            snapshot.session->document.project().timelines.front()
+                .tracks.front().clips.front().startFrame,
+            std::int64_t{0}
+        );
+        QCOMPARE(snapshot.session->undoDepth, std::size_t{0});
+        QVERIFY(editing.requestShutdown());
+    }
+
     void persistenceShutdownRefreshesAuthoritativeDirtyState() {
         auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
         auto runtime = std::make_shared<palmier::project::ProjectRuntime>(mailbox);
@@ -1686,6 +1751,9 @@ private slots:
         QVERIFY(root->findChild<QObject*>(QStringLiteral("saveAsButton")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("saveAsDialog")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("cancelSaveButton")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("moveTrackField")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("moveFrameField")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("moveClipButton")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("previewViewport")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("previewErrorState")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("emptyState")) != nullptr);

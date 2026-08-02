@@ -5,8 +5,10 @@
 
 #include <QObject>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <stop_token>
 
 namespace palmier::windows {
@@ -35,6 +37,11 @@ public:
     void observeRuntimePublication(const ProjectRuntimePublication& publication);
 
     Q_INVOKABLE void splitClip(const QString& clipId, const QString& frameText);
+    Q_INVOKABLE void moveClip(
+        const QString& clipId,
+        const QString& trackText,
+        const QString& frameText
+    );
     Q_INVOKABLE void undo();
     Q_INVOKABLE bool requestShutdown();
 
@@ -47,9 +54,15 @@ signals:
     void shutdownReady();
 
 private:
-    enum class Operation { split, undo };
+    enum class Operation { split, move, undo };
 
-    void start(Operation operation, QString clipId = {}, std::int64_t atFrame = 0);
+    void start(
+        Operation operation,
+        QString clipId = {},
+        std::int64_t atFrame = 0,
+        std::optional<std::size_t> destinationTrack = {},
+        std::optional<std::int64_t> destinationFrame = {}
+    );
     void refreshFromMailbox();
     void setBusy(bool value);
     void setCanUndo(bool value);

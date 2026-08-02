@@ -5,6 +5,7 @@
   "endpoint": "http://127.0.0.1:19789/mcp",
   "toolNames": [
     "get_timeline",
+    "move_clips",
     "split_clips",
     "undo"
   ],
@@ -25,6 +26,38 @@
             "type": "boolean"
           }
         }
+      }
+    },
+    {
+      "name": "move_clips",
+      "description": "Moves clips atomically by stable ID to a compatible track and/or non-negative project frame, propagating frame deltas to linked partners.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "moves": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "clipId": {
+                  "type": "string"
+                },
+                "toTrack": {
+                  "type": "integer"
+                },
+                "toFrame": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "clipId"
+              ]
+            }
+          }
+        },
+        "required": [
+          "moves"
+        ]
       }
     },
     {
@@ -91,6 +124,7 @@
   "verifiedBoundary": [
     "loopback-only HTTP transport",
     "shared in-memory ProjectSession across MCP sessions",
+    "stable-ID move with linked-partner frame propagation and exact no-op receipts",
     "stable-ID split with integer project frames",
     "shared undo and independent timeline readback"
   ],
