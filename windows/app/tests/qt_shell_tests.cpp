@@ -132,22 +132,25 @@ std::string projectJsonWithClips(std::size_t clipCount, std::string_view timelin
     return projectJsonWithTrackClipCounts({clipCount}, timelineId);
 }
 
+constexpr std::string_view splittableProjectJson = R"({"timelines":[{"id":"timeline","name":"Timeline","fps":30,"width":1920,"height":1080,"tracks":[{"id":"track","type":"video","clips":[{"id":"clip","mediaRef":"media","mediaType":"video","sourceClipType":"video","startFrame":0,"durationFrames":20,"speed":1,"opacity":1,"blendMode":"normal"}]}]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]})";
+
 class QtShellTests final : public QObject {
     Q_OBJECT
 
 private slots:
     void runtimeMailboxPublishesUndoAndPersistenceIdentity() {
-        constexpr auto source = R"({"timelines":[{"id":"timeline","name":"Timeline","fps":30,"width":1920,"height":1080,"tracks":[{"id":"track","type":"video","clips":[{"id":"clip","mediaRef":"media","startFrame":0,"durationFrames":20}]}]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]})";
         auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
         palmier::project::ProjectRuntime runtime(mailbox);
         auto document = palmier::project::readProject(
-            source,
+            splittableProjectJson,
             [] { return std::string("generated"); }
         );
         const auto installed = runtime.install(
             std::move(document),
             1,
-            [] { return std::string("split-generated"); }
+            [nextId = 0]() mutable {
+                return "split-generated-" + std::to_string(++nextId);
+            }
         );
         auto publication = mailbox->latest();
         QVERIFY(publication.has_value());
@@ -190,7 +193,9 @@ private slots:
         palmier::windows::ProjectLoadCoordinator coordinator(
             runtime,
             mailbox,
-            [] { return std::string("qt-runtime-generated"); },
+            [nextId = 0]() mutable {
+                return "qt-runtime-generated-" + std::to_string(++nextId);
+            },
             nullptr
         );
         connect(
@@ -266,7 +271,9 @@ private slots:
         palmier::windows::ProjectLoadCoordinator coordinator(
             runtime,
             mailbox,
-            [] { return std::string("qt-runtime-generated"); },
+            [nextId = 0]() mutable {
+                return "qt-runtime-generated-" + std::to_string(++nextId);
+            },
             nullptr
         );
         coordinatorPointer = &coordinator;
@@ -287,7 +294,6 @@ private slots:
     }
 
     void persistencePublicationRetagsInFlightProjection() {
-        constexpr auto source = R"({"timelines":[{"id":"timeline","name":"Timeline","fps":30,"width":1920,"height":1080,"tracks":[{"id":"track","type":"video","clips":[{"id":"clip","mediaRef":"media","startFrame":0,"durationFrames":20}]}]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]})";
         QSemaphore projectionEntered;
         QSemaphore projectionGate;
         QSemaphoreReleaser releaseGateOnExit(projectionGate);
@@ -312,13 +318,15 @@ private slots:
             &palmier::windows::ProjectRuntimeProjectionBridge::projectionReady
         );
         auto document = palmier::project::readProject(
-            source,
+            splittableProjectJson,
             [] { return std::string("generated"); }
         );
         static_cast<void>(runtime.install(
             std::move(document),
             1,
-            [] { return std::string("split-generated"); }
+            [nextId = 0]() mutable {
+                return "split-generated-" + std::to_string(++nextId);
+            }
         ));
         QTRY_COMPARE_WITH_TIMEOUT(projectionReady.count(), 1, 5000);
         QVERIFY(bridge.takeReadyUpdateIfCurrent().has_value());
@@ -407,7 +415,9 @@ private slots:
         palmier::windows::ProjectLoadCoordinator coordinator(
             runtime,
             mailbox,
-            [] { return std::string("qt-runtime-generated"); },
+            [nextId = 0]() mutable {
+                return "qt-runtime-generated-" + std::to_string(++nextId);
+            },
             [&](const std::filesystem::path& path, std::stop_token cancellation)
                 -> palmier::windows::ProjectLoadCandidate {
                 if (path.filename() == L"replacement.palmier") {
