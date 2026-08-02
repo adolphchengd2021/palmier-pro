@@ -556,7 +556,9 @@ void editSaveRestartPreservesCanariesAndState(const std::filesystem::path& root)
     const auto movedClip = std::find_if(
         splitClips.begin(),
         splitClips.end(),
-        [](const Value& clip) { return clip.find("id")->string() != "clip-save-target"; }
+        [](const Value& clip) {
+            return clip.find("id")->string().starts_with("writer-generated-");
+        }
     );
     require(movedClip != splitClips.end(), "split did not create a movable right clip");
     const auto move = runtime.moveClips(
