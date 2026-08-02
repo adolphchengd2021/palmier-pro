@@ -23,6 +23,7 @@ jobs:
       VCPKG_DISABLE_METRICS: 1
       VCPKG_DEFAULT_TRIPLET: x64-windows
       PALMIER_WINDOWS_PROTOTYPE_VERSION: 0.6.16
+      QTBASE_SOURCE_SHA256: ddd7c0a3c798a8144a0fadb39c7c17b41cd5c55dd5caac22aca9ca3277b20024
     steps:
       - uses: actions/checkout@v6
 
@@ -131,6 +132,49 @@ jobs:
             exit $testExitCode
           }
 
+      - name: Bootstrap verified Qt 6.10.3 license bundle
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "qtbase-everywhere-src-6.10.3.zip"
+          $extract = Join-Path $env:RUNNER_TEMP "qtbase-license-source"
+          Invoke-WebRequest `
+            -Uri "https://download.qt.io/official_releases/qt/6.10/6.10.3/submodules/qtbase-everywhere-src-6.10.3.zip" `
+            -OutFile $archive
+          $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $env:QTBASE_SOURCE_SHA256) {
+            throw "Qt source archive SHA-256 mismatch: $actualHash"
+          }
+          $licenses = Join-Path $extract "LICENSES"
+          New-Item -ItemType Directory -Path $licenses | Out-Null
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($archive)
+          try {
+            $prefix = "qtbase-everywhere-src-6.10.3/LICENSES/"
+            $licenseEntries = @($zip.Entries | Where-Object {
+              $_.FullName.StartsWith($prefix, [System.StringComparison]::Ordinal) `
+                -and -not [string]::IsNullOrEmpty($_.Name)
+            })
+            if ($licenseEntries.Count -ne 38) {
+              throw "Verified Qt source archive license inventory changed: $($licenseEntries.Count)"
+            }
+            foreach ($entry in $licenseEntries) {
+              if ($entry.Name -ne $entry.FullName.Substring($prefix.Length)) {
+                throw "Qt license archive entry is not a flat filename: $($entry.FullName)"
+              }
+              [System.IO.Compression.ZipFileExtensions]::ExtractToFile(
+                $entry,
+                (Join-Path $licenses $entry.Name),
+                $false
+              )
+            }
+          } finally {
+            $zip.Dispose()
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $licenses "LGPL-3.0-only.txt") -PathType Leaf)) {
+            throw "Verified Qt source archive did not contain LGPL-3.0-only.txt"
+          }
+          "QT_LICENSE_ROOT=$licenses" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Stage isolated prototype runtime
         shell: pwsh
         run: |
@@ -139,6 +183,7 @@ jobs:
             -RepositoryRoot $env:GITHUB_WORKSPACE `
             -BuildRoot (Join-Path $env:GITHUB_WORKSPACE "out/build/windows-msvc-x64-qt-shell") `
             -QtRoot $env:QT_ROOT_DIR `
+            -QtLicenseRoot $env:QT_LICENSE_ROOT `
             -VcRedistPath $env:VC_REDIST_X64 `
             -StageRoot $stage
           if ($LASTEXITCODE -ne 0) {

@@ -5038,7 +5038,7 @@ def windows_prototype_packaging_contract() -> None:
         "Qt6Core.dll",
         "platforms\\qwindows.dll",
         "avcodec-*.dll",
-        "LICENSES",
+        "QtLicenseRoot",
         "vcpkg_installed\\x64-windows\\share\\ffmpeg\\copyright",
         "vc_redist.x64.exe",
         "palmier_ffmpeg_distribution_probe.exe",
@@ -5085,17 +5085,60 @@ def windows_prototype_packaging_contract() -> None:
         "Pyrsys B\\.V\\.",
         "Microsoft.VCRedistVersion.default.txt",
         "$redistVersion -notmatch '^14\\.44\\.'",
+        "qtbase-everywhere-src-6.10.3.zip",
+        "ddd7c0a3c798a8144a0fadb39c7c17b41cd5c55dd5caac22aca9ca3277b20024",
+        "Qt source archive SHA-256 mismatch",
+        "$licenseEntries.Count -ne 38",
+        "ZipFileExtensions]::ExtractToFile",
+        "QT_LICENSE_ROOT",
         "actions/upload-artifact@v6",
         "test_prototype_installer.ps1",
         "retention-days: 14",
     ]:
         if token not in workflow:
             raise ContractError(f"Prototype packaging workflow missing token {token!r}")
+    qt_source_url = (
+        "https://download.qt.io/official_releases/qt/6.10/6.10.3/submodules/"
+        "qtbase-everywhere-src-6.10.3.zip"
+    )
+    qt_source_hash = "ddd7c0a3c798a8144a0fadb39c7c17b41cd5c55dd5caac22aca9ca3277b20024"
+    hash_assignment = f"      QTBASE_SOURCE_SHA256: {qt_source_hash}"
+    if workflow.count(hash_assignment) != 1:
+        raise ContractError("prototype workflow must assign the exact Qt source SHA-256 once")
+    qt_step_match = re.search(
+        r"(?ms)^      - name: Bootstrap verified Qt 6\.10\.3 license bundle\n"
+        r"(?P<body>.*?)(?=^      - name: )",
+        workflow,
+    )
+    if qt_step_match is None:
+        raise ContractError("prototype workflow Qt license bootstrap step is missing")
+    qt_step = qt_step_match.group("body")
+    if qt_step.count("Invoke-WebRequest") != 1 or qt_step.count("-Uri ") != 1:
+        raise ContractError("prototype workflow must use one Qt source download")
+    for linked_token in [
+        f'-Uri "{qt_source_url}" `',
+        "$actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()",
+        "$actualHash -ne $env:QTBASE_SOURCE_SHA256",
+        '"QT_LICENSE_ROOT=$licenses"',
+    ]:
+        if linked_token not in qt_step:
+            raise ContractError(
+                f"Prototype Qt license bootstrap missing linked token {linked_token!r}"
+            )
+    stage_step_match = re.search(
+        r"(?ms)^      - name: Stage isolated prototype runtime\n"
+        r"(?P<body>.*?)(?=^      - name: )",
+        workflow,
+    )
+    if stage_step_match is None or "-QtLicenseRoot $env:QT_LICENSE_ROOT `" not in stage_step_match.group("body"):
+        raise ContractError("prototype staging must consume the verified Qt license root")
     if 'Redist\\MSVC\\$tools' in workflow:
         raise ContractError("prototype workflow must resolve the independent redist version")
     for token in [
         "not approved",
         "dynamically linked DLLs",
+        "standard license text set",
+        "does not claim complete module or third-party attribution",
         "codec-patent review",
         "Commercial use requires",
     ]:

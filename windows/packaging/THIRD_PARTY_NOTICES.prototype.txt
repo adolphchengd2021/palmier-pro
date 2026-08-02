@@ -6,10 +6,12 @@ for public release.
 Qt 6.10.3
   Modules: Core, Gui, Qml, Quick, QuickControls2, QuickDialogs2, Concurrent.
   Deployment: dynamically linked DLLs collected by windeployqt.
-  License texts copied from the exact Qt binary installation are included under
-  licenses/qt/. Release requires a final LGPL/commercial-license review and a
-  decision on the first qualified Qt 6.12 Windows 10 line.
-  Source: https://code.qt.io/cgit/qt/qt5.git/
+  The standard license text set extracted from the pinned, SHA-256-verified Qt
+  6.10.3 qtbase source archive is included under licenses/qt/. This prototype
+  does not claim complete module or third-party attribution. Release requires a
+  final LGPL/commercial-license review and a decision on the first qualified Qt
+  6.12 Windows 10 line.
+  Source: https://download.qt.io/official_releases/qt/6.10/6.10.3/submodules/
 
 FFmpeg 8.1.2 (vcpkg baseline cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3)
   Libraries: libavcodec, libavformat, libavutil, libswresample, libswscale.

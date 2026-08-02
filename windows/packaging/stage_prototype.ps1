@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory = $true)][string]$RepositoryRoot,
     [Parameter(Mandatory = $true)][string]$BuildRoot,
     [Parameter(Mandatory = $true)][string]$QtRoot,
+    [Parameter(Mandatory = $true)][string]$QtLicenseRoot,
     [Parameter(Mandatory = $true)][string]$VcRedistPath,
     [Parameter(Mandatory = $true)][string]$StageRoot
 )
@@ -36,6 +37,7 @@ function Get-SourceLabel([string]$RelativePath) {
 $repository = Resolve-RequiredPath $RepositoryRoot 'Repository root'
 $build = Resolve-RequiredPath $BuildRoot 'Build root'
 $qt = Resolve-RequiredPath $QtRoot 'Qt root'
+$qtLicenseDirectory = Resolve-RequiredPath $QtLicenseRoot 'Qt license directory'
 $vcRedist = Resolve-RequiredPath $VcRedistPath 'Visual C++ redistributable'
 $stage = [System.IO.Path]::GetFullPath($StageRoot)
 if (Test-Path -LiteralPath $stage) {
@@ -88,22 +90,9 @@ New-Item -ItemType Directory -Path $licenses | Out-Null
 Copy-Item -LiteralPath (Join-Path $repository 'LICENSE') -Destination (Join-Path $licenses 'PalmierPro-GPLv3.txt')
 Copy-Item -LiteralPath (Join-Path $repository 'windows\packaging\THIRD_PARTY_NOTICES.prototype.txt') -Destination (Join-Path $stage 'THIRD_PARTY_NOTICES.txt')
 
-$qtVersionRoot = Split-Path -Parent $qt
-$qtInstallRoot = Split-Path -Parent $qtVersionRoot
-$qtLicenses = @(
-    (Join-Path $qt 'LICENSES'),
-    (Join-Path $qtVersionRoot 'LICENSES'),
-    (Join-Path $qtInstallRoot 'LICENSES'),
-    (Join-Path $qtInstallRoot 'Licenses')
-) | Where-Object {
-    Test-Path -LiteralPath $_ -PathType Container
-} | Where-Object {
-    Get-ChildItem -LiteralPath $_ -Recurse -File -Filter 'LGPL-3.0-only.txt' |
-        Select-Object -First 1
-} | Select-Object -First 1
-if (-not $qtLicenses) { throw 'Qt LGPL license directory was not found.' }
-$qtLicenses = (Resolve-Path -LiteralPath $qtLicenses).Path
-Copy-Item -LiteralPath $qtLicenses -Destination (Join-Path $licenses 'qt') -Recurse
+$qtLgpl = Join-Path $qtLicenseDirectory 'LGPL-3.0-only.txt'
+Resolve-RequiredPath $qtLgpl 'Qt LGPL-3.0 license text' | Out-Null
+Copy-Item -LiteralPath $qtLicenseDirectory -Destination (Join-Path $licenses 'qt') -Recurse
 $ffmpegCopyright = Resolve-RequiredPath (Join-Path $build 'vcpkg_installed\x64-windows\share\ffmpeg\copyright') 'vcpkg FFmpeg copyright record'
 $ffmpegLicenseDirectory = Join-Path $licenses 'ffmpeg'
 New-Item -ItemType Directory -Path $ffmpegLicenseDirectory | Out-Null

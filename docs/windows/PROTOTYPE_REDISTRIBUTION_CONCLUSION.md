@@ -14,7 +14,7 @@ only to the unsigned x64 prototype produced from the locked repository build.
 | Component | Prototype evidence | Current conclusion |
 |---|---|---|
 | Palmier Pro 0.6.16 | GPLv3 license and repository source are identified in the stage | Internal testing allowed; release source-delivery process still required |
-| Qt 6.10.3 | Dynamic DLL/QML deployment through `windeployqt`; exact installed license texts included | Conditional; final LGPL/commercial choice and Qt 6.12 Windows 10 review required |
+| Qt 6.10.3 | Dynamic DLL/QML deployment through `windeployqt`; verified qtbase license text set included | Conditional; complete deployed-module attribution, final LGPL/commercial choice, and Qt 6.12 Windows 10 review required |
 | FFmpeg 8.1.2 | Dynamic vcpkg DLLs; runtime probe rejects GPL/nonfree configuration and records license/configuration; vcpkg copyright included | Conditional; archive matching source, patches and build flags, then complete codec-patent review |
 | Visual C++ Runtime | Official x64 redistributable selected from Visual Studio 2022 17.14 | Conditional on Microsoft redistribution terms; installed as a prerequisite |
 | Inno Setup 7.0.2 | Compiler asset is release-attestation and Authenticode verified; compiler is not shipped | Conditional; commercial-use procurement decision is required before release |
