@@ -43,8 +43,9 @@ in the source DOM.
 Malformed visual values are also explicit refusals rather than Swift-compatible
 defaulting because rendering an identity value would hide a visible project
 error. Qt candidate selection cannot skip a refused earlier visual or timing
-contract for a later clip, and it refuses another non-audio visible layer
-overlapping the selected interval.
+contract for a later clip. The shared exclusive compiler operation scans the
+selected interval and refuses another non-audio visible layer; both Qt preview
+selection and project export call that same eligibility operation.
 
 ## Tests
 

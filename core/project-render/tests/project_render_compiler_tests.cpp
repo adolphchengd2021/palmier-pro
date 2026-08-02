@@ -414,6 +414,72 @@ void malformedVisualValuesAreRefusedInsteadOfDefaulted() {
     );
 }
 
+void exclusiveCompilerRefusesAnotherVisibleLayer() {
+    const auto overlapping = rawDocument(R"({
+        "timelines":[{
+            "id":"timeline","fps":30,"width":4,"height":4,
+            "tracks":[
+                {"id":"track","type":"video","clips":[{
+                    "id":"clip","mediaRef":"media","mediaType":"video",
+                    "sourceClipType":"video","startFrame":0,"durationFrames":10,
+                    "trimStartFrame":0,"trimEndFrame":0,"speed":1,
+                    "opacity":1,"blendMode":"normal"
+                }]},
+                {"id":"text-track","type":"text","clips":[{
+                    "id":"text","mediaRef":"title","mediaType":"text",
+                    "sourceClipType":"text","startFrame":4,"durationFrames":2
+                }]}
+            ]
+        }],
+        "activeTimelineId":"timeline"
+    })");
+    static_cast<void>(palmier::project_render::compileStaticVideoLayer(
+        overlapping,
+        "timeline",
+        "track",
+        "clip"
+    ));
+    requireCompileError(
+        [&] {
+            static_cast<void>(
+                palmier::project_render::compileExclusiveStaticVideoLayer(
+                    overlapping,
+                    "timeline",
+                    "track",
+                    "clip"
+                )
+            );
+        },
+        "overlappingVisibleLayer",
+        "/timelines/0/tracks/1/clips/0"
+    );
+
+    const auto hidden = rawDocument(R"({
+        "timelines":[{
+            "id":"timeline","fps":30,"width":4,"height":4,
+            "tracks":[
+                {"id":"track","type":"video","clips":[{
+                    "id":"clip","mediaRef":"media","mediaType":"video",
+                    "sourceClipType":"video","startFrame":0,"durationFrames":10,
+                    "trimStartFrame":0,"trimEndFrame":0,"speed":1,
+                    "opacity":1,"blendMode":"normal"
+                }]},
+                {"id":"hidden","type":"text","hidden":true,"clips":[{
+                    "id":"text","mediaRef":"title","mediaType":"text",
+                    "sourceClipType":"text","startFrame":4,"durationFrames":2
+                }]}
+            ]
+        }],
+        "activeTimelineId":"timeline"
+    })");
+    static_cast<void>(palmier::project_render::compileExclusiveStaticVideoLayer(
+        hidden,
+        "timeline",
+        "track",
+        "clip"
+    ));
+}
+
 }
 
 int wmain(int argumentCount, wchar_t*[]) {
@@ -425,6 +491,7 @@ int wmain(int argumentCount, wchar_t*[]) {
         lifecycleAndFrameBoundariesAreRefused();
         identityTimingAndNumericRefusals();
         malformedVisualValuesAreRefusedInsteadOfDefaulted();
+        exclusiveCompilerRefusesAnotherVisibleLayer();
         std::cout << "PALMIER_PROJECT_RENDER_COMPILER_TESTS_OK\n";
         return 0;
     } catch (const std::exception& error) {

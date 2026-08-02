@@ -720,6 +720,87 @@ StaticVideoLayer compileStaticVideoLayer(
     return result;
 }
 
+StaticVideoLayer compileExclusiveStaticVideoLayer(
+    const project::ProjectDocument& document,
+    std::string_view timelineId,
+    std::string_view trackId,
+    std::string_view clipId,
+    std::stop_token cancellation
+) {
+    auto result = compileStaticVideoLayer(
+        document,
+        timelineId,
+        trackId,
+        clipId,
+        cancellation
+    );
+    const project::Timeline* selectedTimeline = nullptr;
+    const project::Clip* selectedClip = nullptr;
+    std::size_t selectedTimelineIndex = 0;
+    for (std::size_t timelineIndex = 0;
+         timelineIndex < document.project().timelines.size();
+         ++timelineIndex) {
+        checkCancellation(cancellation);
+        const auto& timeline = document.project().timelines[timelineIndex];
+        if (timeline.id.value != timelineId) continue;
+        selectedTimeline = &timeline;
+        selectedTimelineIndex = timelineIndex;
+        for (const auto& track : timeline.tracks) {
+            checkCancellation(cancellation);
+            if (track.id.value != trackId) continue;
+            for (const auto& clip : track.clips) {
+                checkCancellation(cancellation);
+                if (clip.id.value == clipId) {
+                    selectedClip = &clip;
+                    break;
+                }
+            }
+        }
+    }
+    if (selectedTimeline == nullptr || selectedClip == nullptr) {
+        fail("missingEntity", "/timelines", "exclusive render entity disappeared");
+    }
+    const auto selectedEnd = selectedClip->startFrame + selectedClip->durationFrames;
+    for (std::size_t trackIndex = 0;
+         trackIndex < selectedTimeline->tracks.size();
+         ++trackIndex) {
+        checkCancellation(cancellation);
+        const auto& track = selectedTimeline->tracks[trackIndex];
+        if (track.hidden || track.type == "audio") continue;
+        for (std::size_t clipIndex = 0; clipIndex < track.clips.size(); ++clipIndex) {
+            checkCancellation(cancellation);
+            const auto& clip = track.clips[clipIndex];
+            if (&clip == selectedClip || clip.mediaType == "audio") continue;
+            const std::string pointer = "/timelines/"
+                + std::to_string(selectedTimelineIndex)
+                + "/tracks/"
+                + std::to_string(trackIndex)
+                + "/clips/"
+                + std::to_string(clipIndex);
+            if (clip.startFrame < 0
+                || clip.durationFrames <= 0
+                || clip.startFrame > std::numeric_limits<std::int64_t>::max()
+                    - clip.durationFrames) {
+                fail(
+                    "unsupportedClipTiming",
+                    pointer,
+                    "visible layer timing is invalid"
+                );
+            }
+            const auto clipEnd = clip.startFrame + clip.durationFrames;
+            if (clip.startFrame < selectedEnd
+                && selectedClip->startFrame < clipEnd) {
+                fail(
+                    "overlappingVisibleLayer",
+                    pointer,
+                    "exclusive static rendering found another visible layer"
+                );
+            }
+        }
+    }
+    return result;
+}
+
 render::RenderPlan makeRenderPlan(
     const StaticVideoLayer& layer,
     std::int64_t timelineFrame

@@ -7,9 +7,9 @@ current macOS product. It is not a conditional Swift build.
 
 M0 establishes product decisions, compatibility contracts, fixtures, drift
 checks, the compiled MSVC contract probe, and a read-only C++ project document.
-It now includes an optional read-only Qt shell and isolated media/audio
-prototypes. It does not yet provide an editor, project writer, integrated media
-pipeline, or installer.
+It now includes an optional read-only Qt shell, isolated media/audio prototypes,
+and one bounded project-driven H.264 export slice. It does not yet provide an
+editor, project writer, audio export, integrated export UI, or installer.
 
 - Requirements: `docs/WINDOWS_10_PORT_REQUIREMENTS.zh-CN.md`
 - Decisions: `docs/windows/adr/`
@@ -67,9 +67,14 @@ preview/export render test entry points. `core/project-render` now compiles one 
 static video clip through stable IDs into the same plan, including transform,
 opacity, normal blend, and one exposure effect. Unsupported visual properties
 are explicit refusals. This does not yet establish parity with the Swift BGRA8
-compositor or prove multi-layer composition, encoding, physical-GPU behavior,
-or Windows 10 runtime behavior. A production export planner/encoder is not yet
-connected. See ADR 0009 and ADR 0024.
+compositor or prove multi-layer composition, physical-GPU behavior, or Windows
+10 runtime behavior. The first production-owned video-only encoder consumes
+this exact compiler and render entry point, records and locks a sibling staging
+MP4's file identity, independently decodes it, and commits that verified object
+with one handle-based rename. It accepts
+only one exact-CFR source at source frame zero and the locked `h264_mf` encoder;
+audio, VFR, trim seeking, H.265, UI job ownership, and release approval remain
+open. See ADR 0009, ADR 0024, and ADR 0025.
 
 The optional FFmpeg prototype activates the first vcpkg manifest dependency:
 

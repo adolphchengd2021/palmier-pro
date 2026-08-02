@@ -48,6 +48,14 @@ StaticVideoLayer compileStaticVideoLayer(
     std::stop_token cancellation = {}
 );
 
+StaticVideoLayer compileExclusiveStaticVideoLayer(
+    const project::ProjectDocument& document,
+    std::string_view timelineId,
+    std::string_view trackId,
+    std::string_view clipId,
+    std::stop_token cancellation = {}
+);
+
 render::RenderPlan makeRenderPlan(
     const StaticVideoLayer& layer,
     std::int64_t timelineFrame

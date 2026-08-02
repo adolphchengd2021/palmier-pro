@@ -362,7 +362,7 @@ private slots:
             preview.availability,
             palmier::windows::PreviewCandidateAvailability::unsupported
         );
-        QCOMPARE(preview.reasonCode, std::string("multiLayerPreviewUnsupported"));
+        QCOMPARE(preview.reasonCode, std::string("overlappingVisibleLayer"));
         QVERIFY(!preview.candidate.has_value());
     }
 

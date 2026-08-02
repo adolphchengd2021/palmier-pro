@@ -116,32 +116,6 @@ bool supportedClip(const palmier::project::Clip& clip) {
         && (!clip.blendMode || *clip.blendMode == "normal");
 }
 
-bool hasOverlappingVisualClip(
-    const palmier::project::Timeline& timeline,
-    const palmier::project::Clip& candidate,
-    std::stop_token cancellation
-) {
-    const auto candidateEnd = checkedClipEnd(candidate);
-    if (!candidateEnd) return false;
-    for (const auto& track : timeline.tracks) {
-        checkCancellation(cancellation);
-        if (track.hidden || track.type == "audio") continue;
-        for (const auto& clip : track.clips) {
-            checkCancellation(cancellation);
-            if (&clip == &candidate || clip.mediaType == "audio") continue;
-            const auto clipEnd = checkedClipEnd(clip);
-            if (
-                clipEnd
-                && clip.startFrame < *candidateEnd
-                && candidate.startFrame < *clipEnd
-            ) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 }
 
 ProjectProjectionError::ProjectProjectionError(std::string codeValue, std::string detail)
@@ -280,7 +254,7 @@ ProjectPreviewProjection projectPreviewForActiveTimeline(
         }
         std::optional<project_render::StaticVideoLayer> renderLayer;
         try {
-            renderLayer = project_render::compileStaticVideoLayer(
+            renderLayer = project_render::compileExclusiveStaticVideoLayer(
                 document,
                 activeTimeline->id.value,
                 track.id.value,
@@ -292,13 +266,6 @@ ProjectPreviewProjection projectPreviewForActiveTimeline(
             return {
                 PreviewCandidateAvailability::unsupported,
                 error.code,
-                std::nullopt,
-            };
-        }
-        if (hasOverlappingVisualClip(*activeTimeline, clip, cancellation)) {
-            return {
-                PreviewCandidateAvailability::unsupported,
-                "multiLayerPreviewUnsupported",
                 std::nullopt,
             };
         }

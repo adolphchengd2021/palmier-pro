@@ -1872,6 +1872,7 @@ def windows_render_plan_contract() -> None:
         "struct StaticVideoLayer final",
         "class ProjectRenderCompileError final",
         "StaticVideoLayer compileStaticVideoLayer(",
+        "StaticVideoLayer compileExclusiveStaticVideoLayer(",
         "render::RenderPlan makeRenderPlan(",
     ]:
         if token not in compiler_header:
@@ -1886,6 +1887,7 @@ def windows_render_plan_contract() -> None:
         '"malformedVisualProperty"',
         "clip->trimStartFrame > std::numeric_limits<std::int64_t>::max()",
         "layer.sourceStartFrame + offset",
+        '"overlappingVisibleLayer"',
         "render::RenderPlan::create(",
     ]:
         if token not in compiler_source:
@@ -1897,6 +1899,7 @@ def windows_render_plan_contract() -> None:
         "lifecycleAndFrameBoundariesAreRefused",
         "identityTimingAndNumericRefusals",
         "malformedVisualValuesAreRefusedInsteadOfDefaulted",
+        "exclusiveCompilerRefusesAnotherVisibleLayer",
         "source frame mapping changed",
         "project preview/export pixels differ",
     ]:
@@ -4016,7 +4019,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "weakly_canonical",
         "unstableCandidateId",
         "mediaFileUnavailable",
-        "compileStaticVideoLayer",
+        "compileExclusiveStaticVideoLayer",
     ]:
         if token not in projection:
             raise ContractError(f"Qt project projection missing token {token!r}")
@@ -4064,7 +4067,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "unsupportedTimingCannotBeSkippedForLaterCandidate",
         "unsupportedClipTiming",
         "overlappingVisualLayerIsExplicitlyRefused",
-        "multiLayerPreviewUnsupported",
+        "overlappingVisibleLayer",
         "failurePreservesPreviousModel",
         "cancellationReachesReader",
         "cancellationAfterWorkBeforeCommitRejectsResult",
@@ -4324,6 +4327,90 @@ def windows_qt_preview_host_contract() -> None:
             raise ContractError(f"Qt preview host README missing token {token!r}")
 
 
+def windows_h264_project_export_contract() -> None:
+    header = read_text(
+        "windows/export-ffmpeg/include/palmier/exporting/"
+        "h264_project_exporter.hpp"
+    )
+    source = read_text("windows/export-ffmpeg/h264_project_exporter.cpp")
+    tests = read_text(
+        "windows/export-ffmpeg/tests/h264_project_exporter_tests.cpp"
+    )
+    module_cmake = read_text("windows/export-ffmpeg/CMakeLists.txt")
+    root_cmake = read_text("CMakeLists.txt")
+    adr = read_text("docs/windows/adr/0025-project-h264-export-slice.md")
+    readme = read_text("docs/windows/README.md")
+    for token in [
+        "H264ExportFailureCode",
+        "H264ProjectExportRequest",
+        "H264ProjectExportReceipt",
+        "maximumFrames",
+        "replaceExisting",
+        "exportStaticProjectH264(",
+    ]:
+        if token not in header:
+            raise ContractError(f"H.264 export API missing token {token!r}")
+    for token in [
+        "compileExclusiveStaticVideoLayer(",
+        "makeRenderPlan(layer, timelineFrame)",
+        "renderExportFrame(",
+        'avcodec_find_encoder_by_name("h264_mf")',
+        "av_compare_ts(",
+        "FfmpegVideoFrameReader reader",
+        "verifyOutput(staging.path()",
+        "GetFileInformationByHandleEx(",
+        "FileIdInfo",
+        "ReOpenFile(",
+        "identityHandle_",
+        "SetFileInformationByHandle(",
+        "FileRenameInfo",
+        "FileDispositionInfo",
+        "staging.lockForVerification()",
+        "staging.cleanup()",
+        "checkCancellation(cancellation",
+    ]:
+        if token not in source:
+            raise ContractError(f"H.264 export invariant missing token {token!r}")
+    for token in [
+        "exportsAndIndependentlyDecodesEveryFrame",
+        "refusesExistingDestinationWithoutMutation",
+        "replacementInstallsOnlyVerifiedOutput",
+        "failedInstallPreservesExistingDestination",
+        "cancellationAndLimitsDoNotCreateOutput",
+        "timingMismatchIsRefused",
+        "earlyEofCleansStaging",
+        "cancellationAfterStagingPreservesExistingDestination",
+        "cancellationBeforeInstallPreservesExistingDestination",
+        "invalidDestinationIsRefusedBeforeStaging",
+        "overlappingVisibleLayerIsRefusedBeforeStaging",
+        "requireNoStagingFiles",
+    ]:
+        if token not in tests:
+            raise ContractError(f"H.264 export test missing token {token!r}")
+    for token in [
+        "palmier_export_ffmpeg",
+        "palmier_h264_project_exporter_tests",
+        "export_ffmpeg.contract",
+        "export_ffmpeg.h264_project_native",
+        "SKIP_RETURN_CODE 77",
+    ]:
+        if token not in module_cmake:
+            raise ContractError(f"H.264 export CMake missing token {token!r}")
+    if "add_subdirectory(windows/export-ffmpeg)" not in root_cmake:
+        raise ContractError("root CMake does not build the H.264 export module")
+    for token in [
+        "sibling staging file",
+        "independent",
+        "h264_mf",
+        "preserves an existing destination",
+    ]:
+        if token not in adr:
+            raise ContractError(f"H.264 export ADR missing token {token!r}")
+    for token in ["project-driven H.264 export slice", "ADR 0025"]:
+        if token not in readme:
+            raise ContractError(f"H.264 export README missing token {token!r}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Palmier contract snapshots")
     parser.add_argument(
@@ -4355,6 +4442,7 @@ def main() -> int:
         ("Windows bounded WASAPI output", windows_wasapi_output_contract),
         ("Windows Qt read-only project shell", windows_qt_read_only_shell_contract),
         ("Windows Qt native preview host", windows_qt_preview_host_contract),
+        ("Windows project H.264 export", windows_h264_project_export_contract),
     ]
     for label, check in checks:
         check()
