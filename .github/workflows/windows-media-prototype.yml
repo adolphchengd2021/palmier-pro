@@ -60,7 +60,7 @@ jobs:
         run: cmake --preset windows-msvc-x64-ffmpeg
 
       - name: Build
-        run: cmake --build --preset windows-msvc-x64-ffmpeg-release --parallel 2
+        run: cmake --build --preset windows-msvc-x64-ffmpeg-release --parallel 1
 
       - name: Test
         run: ctest --preset windows-msvc-x64-ffmpeg-release

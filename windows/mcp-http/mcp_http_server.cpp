@@ -255,7 +255,7 @@ void sendResponse(SOCKET clientSocket, HttpResponse response) {
 }
 
 const Value& requiredField(const Object& object, std::string_view key) {
-    const auto field = object.find(key);
+    const auto field = object.find(std::string(key));
     if (field == object.end()) {
         throw palmier::project::CommandError("invalidArguments", "missing field: " + std::string(key));
     }
@@ -308,75 +308,51 @@ void rejectUnknownKeys(
     }
 }
 
-Value getTimelineSchema() {
-    return Value(Object{
-        {"properties", Value(Object{
-            {"captionDetail", Value(Object{{"type", Value("boolean")}})},
-            {"endFrame", Value(Object{{"type", Value("integer")}})},
-            {"startFrame", Value(Object{{"type", Value("integer")}})},
-        })},
-        {"type", Value("object")},
-    });
-}
-
-Value splitClipsSchema() {
-    return Value(Object{
-        {"properties", Value(Object{
-            {"frames", Value(Object{
-                {"items", Value(Object{{"type", Value("integer")}})},
-                {"type", Value("array")},
-            })},
-            {"splits", Value(Object{
-                {"items", Value(Object{
-                    {"properties", Value(Object{
-                        {"atFrame", Value(Object{{"type", Value("integer")}})},
-                        {"clipId", Value(Object{{"type", Value("string")}})},
-                    })},
-                    {"required", Value(Array{Value("clipId"), Value("atFrame")})},
-                    {"type", Value("object")},
-                })},
-                {"type", Value("array")},
-            })},
-            {"trackIndex", Value(Object{{"type", Value("integer")}})},
-        })},
-        {"type", Value("object")},
-    });
-}
-
-Value undoSchema() {
-    return Value(Object{{"type", Value("object")}});
-}
-
-Value toolDefinition(
-    std::string name,
-    std::string description,
-    Value inputSchema
-) {
-    return Value(Object{
-        {"description", Value(std::move(description))},
-        {"inputSchema", std::move(inputSchema)},
-        {"name", Value(std::move(name))},
-    });
-}
-
 Value toolsList() {
-    return Value(Object{{"tools", Value(Array{
-        toolDefinition(
-            "get_timeline",
-            "Reads the active timeline using stable IDs and integer project frames.",
-            getTimelineSchema()
-        ),
-        toolDefinition(
-            "split_clips",
-            "Splits clips atomically by stable ID or track frame in one shared undo action.",
-            splitClipsSchema()
-        ),
-        toolDefinition(
-            "undo",
-            "Reverts the latest action from the shared Windows project history.",
-            undoSchema()
-        ),
-    })}});
+    static const Value value = palmier::json::parse(R"json({
+        "tools": [
+            {
+                "name": "get_timeline",
+                "description": "Reads the active timeline using stable IDs and integer project frames.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "startFrame": {"type": "integer"},
+                        "endFrame": {"type": "integer"},
+                        "captionDetail": {"type": "boolean"}
+                    }
+                }
+            },
+            {
+                "name": "split_clips",
+                "description": "Splits clips atomically by stable ID or track frame in one shared undo action.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "splits": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "clipId": {"type": "string"},
+                                    "atFrame": {"type": "integer"}
+                                },
+                                "required": ["clipId", "atFrame"]
+                            }
+                        },
+                        "trackIndex": {"type": "integer"},
+                        "frames": {"type": "array", "items": {"type": "integer"}}
+                    }
+                }
+            },
+            {
+                "name": "undo",
+                "description": "Reverts the latest action from the shared Windows project history.",
+                "inputSchema": {"type": "object"}
+            }
+        ]
+    })json");
+    return value;
 }
 
 Value toolSuccess(Value payload) {

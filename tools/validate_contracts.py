@@ -1436,7 +1436,7 @@ def windows_bootstrap_contract() -> None:
         "^14\\.44\\.",
         "Windows Kits\\10\\Include\\10.0.26100.0",
         "cmake --preset windows-msvc-x64",
-        "cmake --build --preset windows-msvc-x64-release --parallel 2",
+        "cmake --build --preset windows-msvc-x64-release --parallel 1",
         "ctest --preset windows-msvc-x64-release",
     ]:
         if token not in workflow:
@@ -1513,7 +1513,7 @@ def windows_bootstrap_contract() -> None:
         "windows-vcpkg-v3-${{ steps.runner-image.outputs.version }}-x64-msvc-14.44-${{ hashFiles('vcpkg.json') }}",
         "cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3",
         "cmake --preset windows-msvc-x64-ffmpeg",
-        "cmake --build --preset windows-msvc-x64-ffmpeg-release --parallel 2",
+        "cmake --build --preset windows-msvc-x64-ffmpeg-release --parallel 1",
         "ctest --preset windows-msvc-x64-ffmpeg-release",
     ]:
         if token not in media_workflow:
@@ -4099,7 +4099,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "^14\\.44\\.",
         "Windows Kits\\10\\Include\\10.0.26100.0",
         "cmake --preset windows-msvc-x64-qt-shell",
-        "cmake --build --preset windows-msvc-x64-qt-shell-release --parallel 2",
+        "cmake --build --preset windows-msvc-x64-qt-shell-release --parallel 1",
         "ctest --preset windows-msvc-x64-qt-shell-release",
         "$testExitCode = $LASTEXITCODE",
         'Get-ChildItem -Path "out/build/windows-msvc-x64-qt-shell" -Recurse -Filter "qt*-test-*.txt"',
