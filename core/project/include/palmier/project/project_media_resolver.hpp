@@ -14,6 +14,7 @@ namespace palmier::project {
 struct ResolvedProjectMediaReference final {
     std::filesystem::path path;
     std::optional<bool> hasAudio;
+    MediaSourceKind sourceKind{MediaSourceKind::project};
 };
 
 class ProjectMediaResolveError final : public std::runtime_error {

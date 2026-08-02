@@ -1,5 +1,6 @@
 #pragma once
 
+#include "palmier/project/media_manifest_reader.hpp"
 #include "palmier/project_render/project_render_compiler.hpp"
 
 #include <cstdint>
@@ -21,6 +22,7 @@ struct PreviewMediaCandidateProjection final {
     std::filesystem::path inputPath;
     project_render::StaticVideoLayer renderLayer;
     std::optional<bool> hasAudio;
+    project::MediaSourceKind sourceKind{project::MediaSourceKind::project};
 };
 
 struct ProjectPreviewProjection final {

@@ -57,6 +57,22 @@ ProjectLoadCoordinator::ProjectLoadCoordinator(
     project::ProjectRuntime& runtime,
     std::shared_ptr<ProjectRuntimeMailbox> runtimeMailbox,
     project::IdGenerator idGenerator,
+    std::shared_ptr<project::ProjectPackageService> packageService,
+    QObject* parent
+) : ProjectLoadCoordinator(
+    runtime,
+    std::move(runtimeMailbox),
+    std::move(idGenerator),
+    loadProjectCandidate,
+    parent
+) {
+    packageService_ = std::move(packageService);
+}
+
+ProjectLoadCoordinator::ProjectLoadCoordinator(
+    project::ProjectRuntime& runtime,
+    std::shared_ptr<ProjectRuntimeMailbox> runtimeMailbox,
+    project::IdGenerator idGenerator,
     Loader loader,
     QObject* parent
 ) : ProjectLoadCoordinator(std::move(loader), {}, parent) {
@@ -101,6 +117,35 @@ std::filesystem::path ProjectLoadCoordinator::committedPackagePath() const {
 }
 ProjectPreviewProjection ProjectLoadCoordinator::committedPreview() const {
     return committedPreview_;
+}
+
+void ProjectLoadCoordinator::adoptPackagePath(
+    std::filesystem::path packagePath,
+    std::uint64_t generation
+) {
+    if (
+        shutdownRequested_
+        || generation == 0
+        || generation != committedGeneration_
+        || packagePath.empty()
+        || committedPackagePath_.empty()
+        || packagePath == committedPackagePath_
+    ) {
+        return;
+    }
+    if (
+        committedPreview_.candidate
+        && committedPreview_.candidate->sourceKind == project::MediaSourceKind::project
+    ) {
+        const auto relative = committedPreview_.candidate->inputPath.lexically_relative(
+            committedPackagePath_
+        );
+        if (!relative.empty() && *relative.begin() != std::filesystem::path(L"..")) {
+            committedPreview_.candidate->inputPath = packagePath / relative;
+        }
+    }
+    committedPackagePath_ = std::move(packagePath);
+    emit projectCommitted();
 }
 
 void ProjectLoadCoordinator::openFolder(const QUrl& folder) {
@@ -158,6 +203,7 @@ void ProjectLoadCoordinator::startLoad(PendingLoad request) {
     const auto loader = loader_;
     auto* const runtime = runtime_;
     const auto runtimeMailbox = runtimeMailbox_;
+    const auto packageService = packageService_;
     const auto idGenerator = idGenerator_;
     const auto resultDeliveryCheckpoint = resultDeliveryCheckpoint_;
     auto* watcher = new QFutureWatcher<LoadResult>(this);
@@ -228,9 +274,18 @@ void ProjectLoadCoordinator::startLoad(PendingLoad request) {
         resultDeliveryCheckpoint,
         runtime,
         runtimeMailbox,
+        packageService,
         idGenerator
     ] {
         try {
+            std::optional<project::ProjectPackageActivation> activation;
+            if (packageService) {
+                activation.emplace(packageService->prepareActivation(
+                    path,
+                    requestGeneration,
+                    cancellation
+                ));
+            }
             auto candidate = loader(path, cancellation);
             if (cancellation.stop_requested()) {
                 return LoadResult{
@@ -259,6 +314,16 @@ void ProjectLoadCoordinator::startLoad(PendingLoad request) {
             }
             std::uint64_t revision = 0;
             std::uint64_t publicationToken = 0;
+            auto committedPackagePath = path;
+            if (packageService) {
+                if (!activation) {
+                    throw project::ProjectPackageServiceError(
+                        "invalidPackageActivation",
+                        "project package activation is missing"
+                    );
+                }
+                committedPackagePath = activation->path();
+            }
             if (runtime != nullptr) {
                 if (!candidate.document || !runtimeMailbox || !idGenerator) {
                     throw project::ProjectRuntimeError(
@@ -282,10 +347,13 @@ void ProjectLoadCoordinator::startLoad(PendingLoad request) {
                 ) {
                     publicationToken = publication->token;
                 }
+                if (packageService) {
+                    packageService->activate(std::move(*activation));
+                }
             }
             return LoadResult{
                 std::move(candidate.projection),
-                path,
+                std::move(committedPackagePath),
                 revision,
                 publicationToken,
                 {},
@@ -305,6 +373,17 @@ void ProjectLoadCoordinator::startLoad(PendingLoad request) {
                 cancellation.stop_requested(),
             };
         } catch (const palmier::project::ProjectPackageReadError& error) {
+            return LoadResult{
+                std::nullopt,
+                {},
+                0,
+                0,
+                QString::fromStdString(error.code),
+                {},
+                QString::fromUtf8(error.what()),
+                cancellation.stop_requested(),
+            };
+        } catch (const palmier::project::ProjectPackageServiceError& error) {
             return LoadResult{
                 std::nullopt,
                 {},

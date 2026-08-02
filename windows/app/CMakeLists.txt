@@ -141,6 +141,10 @@ if(BUILD_TESTING)
         persistenceFailurePreservesDirtyState
     )
     add_palmier_qt_shell_test(
+        persistence_cancellation_reaches_save
+        persistenceCancellationReachesAdmittedSave
+    )
+    add_palmier_qt_shell_test(
         persistence_committed_warning
         persistenceCommittedWarningRemainsObservable
     )
@@ -175,6 +179,10 @@ if(BUILD_TESTING)
     add_palmier_qt_shell_test(
         stable_preview_candidate_uses_persisted_ids
         stablePreviewCandidateUsesPersistedIds
+    )
+    add_palmier_qt_shell_test(
+        save_as_rebases_only_project_preview_sources
+        saveAsRebasesOnlyProjectPreviewSources
     )
     add_palmier_qt_shell_test(
         unsupported_visual_properties_are_not_silently_dropped

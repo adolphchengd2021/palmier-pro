@@ -140,6 +140,16 @@ ApplicationWindow {
     }
 
     FileDialog {
+        id: saveAsDialog
+        objectName: "saveAsDialog"
+        title: qsTr("Save Palmier Pro Project As")
+        fileMode: FileDialog.SaveFile
+        nameFilters: [qsTr("Palmier Pro Project (*.palmier)")]
+        defaultSuffix: "palmier"
+        onAccepted: persistenceCoordinator.saveAs(selectedFile)
+    }
+
+    FileDialog {
         id: exportDialog
         title: qsTr("Export Selected Clip")
         fileMode: FileDialog.SaveFile
@@ -202,14 +212,32 @@ ApplicationWindow {
             Button {
                 text: qsTr("Save")
                 enabled: persistenceCoordinator.dirty
+                    && !projectCoordinator.loading
                     && !persistenceCoordinator.saving
                     && !editingCoordinator.busy
                     && !exportCoordinator.exporting
                 onClicked: persistenceCoordinator.save()
             }
             Button {
+                objectName: "saveAsButton"
+                text: qsTr("Save As…")
+                enabled: persistenceCoordinator.hasProject
+                    && !projectCoordinator.loading
+                    && !persistenceCoordinator.saving
+                    && !editingCoordinator.busy
+                    && !exportCoordinator.exporting
+                onClicked: saveAsDialog.open()
+            }
+            Button {
+                objectName: "cancelSaveButton"
+                text: qsTr("Cancel Save")
+                visible: persistenceCoordinator.saving
+                onClicked: persistenceCoordinator.cancelSave()
+            }
+            Button {
                 text: qsTr("Undo")
                 enabled: editingCoordinator.canUndo && !editingCoordinator.busy
+                    && !projectCoordinator.loading
                     && !exportCoordinator.exporting
                 onClicked: editingCoordinator.undo()
             }
@@ -279,6 +307,7 @@ ApplicationWindow {
                 enabled: window.selectedClipId.length > 0
                     && splitFrame.acceptableInput
                     && projectCoordinator.presentationReady
+                    && !projectCoordinator.loading
                     && !editingCoordinator.busy
                     && !exportCoordinator.exporting
                 onClicked: editingCoordinator.splitClip(

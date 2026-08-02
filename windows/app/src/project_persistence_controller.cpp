@@ -12,6 +12,7 @@ namespace {
 
 struct SaveResult final {
     std::optional<project::ProjectPackageWriteReceipt> receipt;
+    std::optional<project::ProjectPackageIdentity> adoptedIdentity;
     QString errorCode;
     QString errorMessage;
 };
@@ -38,6 +39,16 @@ ProjectPersistenceController::ProjectPersistenceController(
     project::writeProjectPackage,
     parent
 ) {}
+
+ProjectPersistenceController::ProjectPersistenceController(
+    std::shared_ptr<project::ProjectRuntime> runtime,
+    std::shared_ptr<ProjectRuntimeMailbox> runtimeMailbox,
+    std::shared_ptr<project::ProjectPackageService> packageService,
+    QObject* parent
+) : QObject(parent),
+    runtime_(std::move(runtime)),
+    runtimeMailbox_(std::move(runtimeMailbox)),
+    packageService_(std::move(packageService)) {}
 
 ProjectPersistenceController::ProjectPersistenceController(
     std::shared_ptr<project::ProjectRuntime> runtime,
@@ -92,6 +103,26 @@ void ProjectPersistenceController::observeRuntimePublication(
 }
 
 void ProjectPersistenceController::save() {
+    startSave(std::nullopt);
+}
+
+void ProjectPersistenceController::saveAs(const QUrl& destination) {
+    if (!destination.isLocalFile()) {
+        setErrorCode(QStringLiteral("invalidPackagePath"));
+        setErrorMessage(QStringLiteral("Choose a local .palmier destination."));
+        emit saveFinished(false);
+        return;
+    }
+    startSave(std::filesystem::path(destination.toLocalFile().toStdWString()));
+}
+
+void ProjectPersistenceController::cancelSave() {
+    if (saving_) stopSource_.request_stop();
+}
+
+void ProjectPersistenceController::startSave(
+    std::optional<std::filesystem::path> destination
+) {
     if (shutdownRequested_ || saving_) return;
     if (!hasProject()) {
         setErrorCode(QStringLiteral("noProject"));
@@ -99,7 +130,7 @@ void ProjectPersistenceController::save() {
         emit saveFinished(false);
         return;
     }
-    if (!dirty_) {
+    if (!destination && !dirty_) {
         setErrorCode({});
         setErrorMessage({});
         setWarningCode({});
@@ -118,6 +149,7 @@ void ProjectPersistenceController::save() {
     const auto path = packagePath_;
     const auto runtime = runtime_;
     const auto writer = writer_;
+    const auto packageService = packageService_;
     auto* watcher = new QFutureWatcher<SaveResult>(this);
     connect(watcher, &QFutureWatcher<SaveResult>::finished, this, [this, watcher] {
         auto result = watcher->future().takeResult();
@@ -142,6 +174,12 @@ void ProjectPersistenceController::save() {
                 setWarningCode({});
                 setWarningMessage({});
             }
+            if (result.adoptedIdentity) {
+                packagePath_ = result.adoptedIdentity->path;
+                projectGeneration_ = result.adoptedIdentity->projectGeneration;
+                emit projectChanged();
+                emit packageIdentityChanged();
+            }
         } else {
             setErrorCode(std::move(result.errorCode));
             setErrorMessage(std::move(result.errorMessage));
@@ -152,18 +190,59 @@ void ProjectPersistenceController::save() {
     watcher->setFuture(QtConcurrent::run(projectSavePool(), [
         runtime,
         writer,
+        packageService,
         path,
         generation,
+        destination = std::move(destination),
         cancellation
     ] {
         try {
+            if (packageService) {
+                if (destination) {
+                    auto result = packageService->saveAs(
+                        *runtime,
+                        *destination,
+                        generation,
+                        cancellation
+                    );
+                    return SaveResult{
+                        std::move(result.write),
+                        std::move(result.identity),
+                        {},
+                        {},
+                    };
+                }
+                return SaveResult{
+                    packageService->save(*runtime, generation, cancellation),
+                    std::nullopt,
+                    {},
+                    {},
+                };
+            }
+            if (destination) {
+                return SaveResult{
+                    std::nullopt,
+                    std::nullopt,
+                    QStringLiteral("saveAsUnavailable"),
+                    QStringLiteral("Save As is unavailable for this project session."),
+                };
+            }
             return SaveResult{
                 writer(*runtime, path, generation, cancellation),
+                std::nullopt,
                 {},
                 {},
             };
+        } catch (const project::ProjectPackageServiceError& error) {
+            return SaveResult{
+                std::nullopt,
+                std::nullopt,
+                QString::fromStdString(error.code),
+                QString::fromUtf8(error.what()),
+            };
         } catch (const project::ProjectPackageWriteError& error) {
             return SaveResult{
+                std::nullopt,
                 std::nullopt,
                 QString::fromStdString(error.code),
                 QString::fromUtf8(error.what()),
@@ -171,17 +250,20 @@ void ProjectPersistenceController::save() {
         } catch (const project::ProjectRuntimeError& error) {
             return SaveResult{
                 std::nullopt,
+                std::nullopt,
                 QString::fromStdString(error.code),
                 QString::fromUtf8(error.what()),
             };
         } catch (const std::exception& error) {
             return SaveResult{
                 std::nullopt,
+                std::nullopt,
                 QStringLiteral("projectSaveFailed"),
                 QString::fromUtf8(error.what()),
             };
         } catch (...) {
             return SaveResult{
+                std::nullopt,
                 std::nullopt,
                 QStringLiteral("projectSaveFailed"),
                 QStringLiteral("Project save failed."),

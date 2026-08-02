@@ -108,7 +108,7 @@ ResolvedProjectMediaReference resolveProjectMediaReference(
     if (error || !isRegularFile) {
         fail("mediaFileUnavailable", "media source is not an available regular file");
     }
-    return {canonicalCandidate, match->hasAudio};
+    return {canonicalCandidate, match->hasAudio, match->source.kind};
 }
 
 }

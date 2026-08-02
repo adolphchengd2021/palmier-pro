@@ -13,8 +13,10 @@ slice, and an atomic `project.json` edit-save-restart slice with stable-ID Split
 Undo, explicit Save, and dirty-close protection in Qt. The Qt workflow also
 builds an unsigned x64 prototype installer with a runtime hash manifest and
 distribution evidence, then tests isolated staging, install, launch, uninstall,
-and external user-data preservation. It does not yet provide general timeline
-editing, autosave, Save As, audio export, general timeline export, a signed
+   and external user-data preservation. It now also owns the active package
+   identity, holds a process-visible write lease, and provides crash-safe Save
+   As without discarding unknown package files. It does not yet provide general timeline
+   editing, autosave, audio export, general timeline export, a signed
 release installer, or clean Windows 10 19045 acceptance.
 
 - Requirements: `docs/WINDOWS_10_PORT_REQUIREMENTS.zh-CN.md`
@@ -95,8 +97,11 @@ without joining their workers on the GUI thread. A background writer now saves
 an exact runtime snapshot and acknowledges only that state after the atomic disk
 commit. A dedicated Qt persistence controller runs Save on a bounded background
 pool, blocks dirty project replacement, waits for an admitted save during close,
-and presents Save, Discard, and Cancel for dirty windows. Autosave, Save As, and
-package-wide transactions remain open; see ADR 0028 through ADR 0031.
+   and presents Save, Save As, Discard, and Cancel for dirty windows. Save As
+   builds a complete same-volume sibling package, verifies every copied file,
+   atomically installs a new destination, and switches identity only after the
+   exact runtime snapshot is acknowledged. Autosave and broader concurrent media
+   mutation coordination remain open; see ADR 0028 through ADR 0031 and ADR 0035.
 
 The same Qt workflow stages the Release executable through CMake install, runs
 the pinned `windeployqt` QML deployment, requires the complete app-local FFmpeg

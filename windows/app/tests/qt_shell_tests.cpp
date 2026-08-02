@@ -372,6 +372,57 @@ private slots:
         QCOMPARE(persistence.errorCode(), QStringLiteral("unsavedChanges"));
     }
 
+    void persistenceCancellationReachesAdmittedSave() {
+        auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
+        auto runtime = std::make_shared<palmier::project::ProjectRuntime>(mailbox);
+        auto document = palmier::project::readProject(
+            splittableProjectJson,
+            [] { return std::string("generated"); }
+        );
+        static_cast<void>(runtime->install(std::move(document), 13, [] {
+            return std::string("cancel-generated");
+        }));
+        static_cast<void>(runtime->splitClips({
+            std::vector<palmier::project::SplitPoint>{{"clip", 10}},
+            std::nullopt,
+            std::nullopt,
+        }));
+        QSemaphore writerEntered;
+        palmier::windows::ProjectPersistenceController persistence(
+            runtime,
+            mailbox,
+            [&writerEntered](
+                palmier::project::ProjectRuntime&,
+                const std::filesystem::path&,
+                std::optional<std::uint64_t>,
+                std::stop_token cancellation
+            ) -> palmier::project::ProjectPackageWriteReceipt {
+                writerEntered.release();
+                waitForCancellation(cancellation);
+                throw palmier::project::ProjectPackageWriteError(
+                    "cancelled",
+                    "testCancellation",
+                    "project save was cancelled"
+                );
+            },
+            nullptr
+        );
+        persistence.activateProject(L"C:/cancel-save.palmier", 13);
+        persistence.observeRuntimePublication(*mailbox->latest());
+        QSignalSpy saveFinished(
+            &persistence,
+            &palmier::windows::ProjectPersistenceController::saveFinished
+        );
+
+        persistence.save();
+        QTRY_COMPARE_WITH_TIMEOUT(writerEntered.available(), 1, 5000);
+        persistence.cancelSave();
+        QTRY_COMPARE_WITH_TIMEOUT(saveFinished.count(), 1, 5000);
+        QCOMPARE(saveFinished.at(0).at(0).toBool(), false);
+        QCOMPARE(persistence.errorCode(), QStringLiteral("cancelled"));
+        QVERIFY(persistence.dirty());
+    }
+
     void persistenceCommittedWarningRemainsObservable_data() {
         QTest::addColumn<bool>("runtimeAcknowledged");
         QTest::addColumn<QString>("expectedWarning");
@@ -952,6 +1003,62 @@ private slots:
         QCOMPARE(
             coordinator.committedPreview().reasonCode,
             std::string("mediaFileUnavailable")
+        );
+    }
+
+    void saveAsRebasesOnlyProjectPreviewSources() {
+        const std::filesystem::path source(L"C:/source.palmier");
+        const std::filesystem::path destination(L"C:/destination.palmier");
+        auto projectProjection = oneTrackProjection("project", "Project");
+        projectProjection.preview = {
+            palmier::windows::PreviewCandidateAvailability::available,
+            {},
+            palmier::windows::PreviewMediaCandidateProjection{
+                source / L"Media" / L"clip.mp4",
+                {},
+                true,
+                palmier::project::MediaSourceKind::project,
+            },
+        };
+        palmier::windows::ProjectLoadCoordinator projectCoordinator(
+            [projectProjection](const std::filesystem::path&, std::stop_token) {
+                return projectProjection;
+            },
+            nullptr
+        );
+        projectCoordinator.openFolder(QUrl::fromLocalFile(QString::fromStdWString(source.wstring())));
+        QTRY_COMPARE_WITH_TIMEOUT(projectCoordinator.state(), QStringLiteral("loaded"), 5000);
+        projectCoordinator.adoptPackagePath(destination, 1);
+        QVERIFY(projectCoordinator.committedPreview().candidate.has_value());
+        QVERIFY(
+            projectCoordinator.committedPreview().candidate->inputPath
+                == destination / L"Media" / L"clip.mp4"
+        );
+
+        auto externalProjection = oneTrackProjection("external", "External");
+        externalProjection.preview = {
+            palmier::windows::PreviewCandidateAvailability::available,
+            {},
+            palmier::windows::PreviewMediaCandidateProjection{
+                source / L"external.mp4",
+                {},
+                true,
+                palmier::project::MediaSourceKind::external,
+            },
+        };
+        palmier::windows::ProjectLoadCoordinator externalCoordinator(
+            [externalProjection](const std::filesystem::path&, std::stop_token) {
+                return externalProjection;
+            },
+            nullptr
+        );
+        externalCoordinator.openFolder(QUrl::fromLocalFile(QString::fromStdWString(source.wstring())));
+        QTRY_COMPARE_WITH_TIMEOUT(externalCoordinator.state(), QStringLiteral("loaded"), 5000);
+        externalCoordinator.adoptPackagePath(destination, 1);
+        QVERIFY(externalCoordinator.committedPreview().candidate.has_value());
+        QVERIFY(
+            externalCoordinator.committedPreview().candidate->inputPath
+                == source / L"external.mp4"
         );
     }
 
@@ -1572,6 +1679,9 @@ private slots:
         );
         QVERIFY(root->findChild<QObject*>(QStringLiteral("cancelExportButton")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("exportCloseDialog")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("saveAsButton")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("saveAsDialog")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("cancelSaveButton")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("previewViewport")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("previewErrorState")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("emptyState")) != nullptr);

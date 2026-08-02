@@ -1,5 +1,6 @@
 #pragma once
 
+#include "palmier/project/project_package_service.hpp"
 #include "palmier/windows/project_projection_loader.hpp"
 #include "palmier/windows/read_only_timeline_model.hpp"
 #include "palmier/windows/project_runtime_projection_bridge.hpp"
@@ -45,6 +46,13 @@ public:
         project::ProjectRuntime& runtime,
         std::shared_ptr<ProjectRuntimeMailbox> runtimeMailbox,
         project::IdGenerator idGenerator,
+        std::shared_ptr<project::ProjectPackageService> packageService,
+        QObject* parent
+    );
+    ProjectLoadCoordinator(
+        project::ProjectRuntime& runtime,
+        std::shared_ptr<ProjectRuntimeMailbox> runtimeMailbox,
+        project::IdGenerator idGenerator,
         Loader loader,
         QObject* parent
     );
@@ -70,6 +78,7 @@ public:
     ProjectPreviewProjection committedPreview() const;
     void observeRuntimePublication(const ProjectRuntimePublication& publication);
     void applyRuntimeProjection(RuntimeProjectionUpdate update);
+    void adoptPackagePath(std::filesystem::path packagePath, std::uint64_t generation);
 
     Q_INVOKABLE void openFolder(const QUrl& folder);
     Q_INVOKABLE void cancelLoading();
@@ -115,6 +124,7 @@ private:
     ResultDeliveryCheckpoint resultDeliveryCheckpoint_;
     project::ProjectRuntime* runtime_{};
     std::shared_ptr<ProjectRuntimeMailbox> runtimeMailbox_;
+    std::shared_ptr<project::ProjectPackageService> packageService_;
     project::IdGenerator idGenerator_;
     ReadOnlyTimelineModel model_;
     std::uint64_t generation_{};

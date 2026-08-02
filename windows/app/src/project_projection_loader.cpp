@@ -251,6 +251,7 @@ ProjectPreviewProjection projectPreviewForActiveTimeline(
                 std::move(resolved->path),
                 std::move(*renderLayer),
                 resolved->hasAudio,
+                resolved->sourceKind,
             },
         };
     }

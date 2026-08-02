@@ -1,6 +1,13 @@
 set(project_package_include_dir "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
-add_library(palmier_windows_project_package STATIC windows_project_package_writer.cpp)
+add_library(
+    palmier_windows_project_package
+    STATIC
+        include/palmier/project/project_package_service.hpp
+        include/palmier/project/windows_project_package_writer.hpp
+        project_package_service.cpp
+        windows_project_package_writer.cpp
+)
 target_include_directories(
     palmier_windows_project_package
     PUBLIC "${project_package_include_dir}"

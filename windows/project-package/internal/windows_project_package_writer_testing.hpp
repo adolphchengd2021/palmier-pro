@@ -29,4 +29,13 @@ ProjectPackageWriteReceipt writeProjectPackage(
     ProjectPackageWriteCheckpoints* checkpoints
 );
 
+ProjectPackageSaveAsReceipt writeProjectPackageAs(
+    ProjectRuntime& runtime,
+    const std::filesystem::path& sourcePackagePath,
+    const std::filesystem::path& destinationPackagePath,
+    std::optional<std::uint64_t> expectedProjectGeneration,
+    std::stop_token cancellation,
+    ProjectPackageWriteCheckpoints* checkpoints
+);
+
 }

@@ -192,16 +192,19 @@ int main(int argc, char* argv[]) {
         || application.arguments().contains(QStringLiteral("--smoke-test"));
     auto runtimeMailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
     auto runtime = std::make_shared<palmier::project::ProjectRuntime>(runtimeMailbox);
+    auto packageService = std::make_shared<palmier::project::ProjectPackageService>();
     palmier::windows::ProjectRuntimeProjectionBridge projectionBridge(runtimeMailbox);
     palmier::windows::ProjectLoadCoordinator coordinator(
         *runtime,
         runtimeMailbox,
         newUuid,
+        packageService,
         nullptr
     );
     palmier::windows::ProjectPersistenceController persistenceController(
         runtime,
         runtimeMailbox,
+        packageService,
         nullptr
     );
     palmier::windows::ProjectEditingController editingController(
@@ -279,6 +282,17 @@ int main(int argc, char* argv[]) {
                 coordinator.committedRevision(),
                 coordinator.committedPreview()
             );
+        }
+    );
+    QObject::connect(
+        &persistenceController,
+        &palmier::windows::ProjectPersistenceController::packageIdentityChanged,
+        &coordinator,
+        [&] {
+            const auto identity = packageService->identity();
+            if (identity) {
+                coordinator.adoptPackagePath(identity->path, identity->projectGeneration);
+            }
         }
     );
     bool shutdownDraining{};

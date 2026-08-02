@@ -1689,6 +1689,65 @@ def windows_project_reader_contract() -> None:
         if token not in writer_adr:
             raise ContractError(f"project writer ADR missing token {token!r}")
 
+    package_service_header = read_text(
+        "windows/project-package/include/palmier/project/project_package_service.hpp"
+    )
+    package_service_source = read_text(
+        "windows/project-package/project_package_service.cpp"
+    )
+    package_service_adr = read_text(
+        "docs/windows/adr/0035-project-package-service-and-save-as.md"
+    )
+    for token in [
+        "ProjectPackageIdentity",
+        "ProjectPackageActivation",
+        "prepareActivation",
+        "saveAs",
+    ]:
+        if token not in package_service_header:
+            raise ContractError(f"project package service header missing token {token!r}")
+    for token in [
+        "ProjectPackageBusy",
+        "CreateMutexW",
+        "WaitForSingleObject",
+        "writeProjectPackageAs",
+    ]:
+        if token.lower() not in package_service_source.lower():
+            raise ContractError(f"project package service source missing token {token!r}")
+    for token in [
+        "saveAsPreservesPackageAndAdoptsCommittedIdentity",
+        "saveAsRefusesExistingAndNestedDestinations",
+        "saveAsCancellationPreservesSourceAndCleansStaging",
+        "saveAsRefusesCommitRaceAndSourceMutation",
+        "saveAsAdoptsTargetAndLeavesNewerEditDirty",
+        "saveAsIdentityChangeAfterCommitKeepsRuntimeDirty",
+        "projectPackageLeaseRefusesAnotherProcessAndReleasesOnExit",
+        "projectPackageLeaseRefusesAnotherServiceInProcess",
+    ]:
+        if token not in writer_tests:
+            raise ContractError(f"project package service test missing token {token!r}")
+    for token in [
+        "authoritative owner",
+        "same-volume sibling",
+        "does not provide autosave",
+    ]:
+        if token not in package_service_adr:
+            raise ContractError(f"project package service ADR missing token {token!r}")
+
+    qt_persistence_header = read_text(
+        "windows/app/include/palmier/windows/project_persistence_controller.hpp"
+    )
+    qt_shell_tests = read_text("windows/app/tests/qt_shell_tests.cpp")
+    for token in ["saveAs", "cancelSave", "packageIdentityChanged"]:
+        if token not in qt_persistence_header:
+            raise ContractError(f"Qt persistence controller missing token {token!r}")
+    for token in [
+        "persistenceCancellationReachesAdmittedSave",
+        "saveAsRebasesOnlyProjectPreviewSources",
+    ]:
+        if token not in qt_shell_tests:
+            raise ContractError(f"Qt Save As test missing token {token!r}")
+
 
 def windows_render_plan_contract() -> None:
     contract = load_json("contracts/render/v1/render-plan.json")

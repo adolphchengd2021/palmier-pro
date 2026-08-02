@@ -1,9 +1,10 @@
 #pragma once
 
-#include "palmier/project/windows_project_package_writer.hpp"
+#include "palmier/project/project_package_service.hpp"
 #include "palmier/windows/project_runtime_mailbox.hpp"
 
 #include <QObject>
+#include <QUrl>
 
 #include <cstdint>
 #include <filesystem>
@@ -40,6 +41,12 @@ public:
     ProjectPersistenceController(
         std::shared_ptr<project::ProjectRuntime> runtime,
         std::shared_ptr<ProjectRuntimeMailbox> runtimeMailbox,
+        std::shared_ptr<project::ProjectPackageService> packageService,
+        QObject* parent
+    );
+    ProjectPersistenceController(
+        std::shared_ptr<project::ProjectRuntime> runtime,
+        std::shared_ptr<ProjectRuntimeMailbox> runtimeMailbox,
         Writer writer,
         QObject* parent
     );
@@ -58,6 +65,8 @@ public:
     void observeRuntimePublication(const ProjectRuntimePublication& publication);
 
     Q_INVOKABLE void save();
+    Q_INVOKABLE void saveAs(const QUrl& destination);
+    Q_INVOKABLE void cancelSave();
     Q_INVOKABLE bool requestShutdown(bool discardUnsavedChanges = false);
 
 signals:
@@ -69,6 +78,7 @@ signals:
     void warningCodeChanged();
     void warningMessageChanged();
     void saveFinished(bool succeeded);
+    void packageIdentityChanged();
     void shutdownReady();
 
 private:
@@ -79,10 +89,12 @@ private:
     void setWarningCode(QString value);
     void setWarningMessage(QString value);
     void refreshFromMailbox();
+    void startSave(std::optional<std::filesystem::path> destination);
 
     std::shared_ptr<project::ProjectRuntime> runtime_;
     std::shared_ptr<ProjectRuntimeMailbox> runtimeMailbox_;
     Writer writer_;
+    std::shared_ptr<project::ProjectPackageService> packageService_;
     std::filesystem::path packagePath_;
     std::uint64_t projectGeneration_{};
     std::stop_source stopSource_;

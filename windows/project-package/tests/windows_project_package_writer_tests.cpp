@@ -1,4 +1,5 @@
 #include "palmier/project/windows_project_package_writer.hpp"
+#include "palmier/project/project_package_service.hpp"
 
 #include "internal/windows_project_package_writer_testing.hpp"
 
@@ -30,6 +31,7 @@ using palmier::json::Value;
 using palmier::project::CommandError;
 using palmier::project::ProjectPackageWriteError;
 using palmier::project::ProjectPackageWriteWarning;
+using palmier::project::ProjectPackageServiceError;
 using palmier::project::ProjectRuntime;
 using palmier::project::SplitClipsCommand;
 using palmier::project::SplitPoint;
@@ -114,6 +116,22 @@ public:
 
     const std::filesystem::path& path() const noexcept { return path_; }
 
+    void requireAbsentAndNoStaging() const {
+        require(!std::filesystem::exists(path_), "Save As destination unexpectedly exists");
+        requireNoStaging();
+    }
+
+    void requireNoStaging() const {
+        const auto prefix = path_.filename().native() + L".palmier-";
+        for (const auto& entry : std::filesystem::directory_iterator(path_.parent_path())) {
+            const auto name = entry.path().filename().native();
+            require(
+                !name.starts_with(prefix) || !name.ends_with(L".partial"),
+                "Save As left a staging package"
+            );
+        }
+    }
+
     void resetProject(std::string_view content = minimalProject) const {
         writeText(path_ / "project.json", content);
     }
@@ -126,6 +144,34 @@ public:
             );
         }
     }
+
+private:
+    std::filesystem::path path_;
+};
+
+class TemporaryDestination final {
+public:
+    TemporaryDestination() {
+        std::random_device random;
+        for (int attempt = 0; attempt < 32; ++attempt) {
+            const auto candidate = std::filesystem::temp_directory_path()
+                / ("palmier-save-as-tests-" + std::to_string(random())
+                    + "-" + std::to_string(random()) + ".palmier");
+            std::error_code error;
+            if (!std::filesystem::exists(candidate, error) && !error) {
+                path_ = candidate;
+                return;
+            }
+        }
+        throw std::runtime_error("cannot reserve unique Save As destination");
+    }
+
+    ~TemporaryDestination() {
+        std::error_code error;
+        std::filesystem::remove_all(path_, error);
+    }
+
+    const std::filesystem::path& path() const noexcept { return path_; }
 
 private:
     std::filesystem::path path_;
@@ -156,6 +202,132 @@ void requireWriteError(Operation operation, const std::string& code) {
         return;
     }
     throw std::runtime_error("expected writer error: " + code);
+}
+
+template<typename Operation>
+void requireServiceError(Operation operation, const std::string& code) {
+    try {
+        operation();
+    } catch (const ProjectPackageServiceError& error) {
+        require(error.code == code, "unexpected package service error: " + error.code);
+        return;
+    }
+    throw std::runtime_error("expected package service error: " + code);
+}
+
+std::wstring currentExecutablePath() {
+    std::vector<wchar_t> buffer(32'768);
+    const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    require(length > 0 && length < buffer.size(), "cannot resolve package test executable");
+    return {buffer.data(), length};
+}
+
+std::wstring quoted(std::wstring_view value) {
+    require(value.find(L'"') == std::wstring_view::npos, "test process argument contains a quote");
+    return L"\"" + std::wstring(value) + L"\"";
+}
+
+class PackageLockChild final {
+public:
+    explicit PackageLockChild(const std::filesystem::path& packagePath) {
+        std::random_device random;
+        const auto suffix = std::to_wstring(GetCurrentProcessId())
+            + L"-" + std::to_wstring(random()) + L"-" + std::to_wstring(random());
+        readyName_ = L"Local\\PalmierPro.ProjectPackage.Tests.Ready." + suffix;
+        releaseName_ = L"Local\\PalmierPro.ProjectPackage.Tests.Release." + suffix;
+        ready_ = CreateEventW(nullptr, TRUE, FALSE, readyName_.c_str());
+        release_ = CreateEventW(nullptr, TRUE, FALSE, releaseName_.c_str());
+        if (ready_ == nullptr || release_ == nullptr) {
+            cleanupHandles();
+            throw std::runtime_error("cannot create package lock process events");
+        }
+        auto command = quoted(currentExecutablePath())
+            + L" --hold-package-lock " + quoted(packagePath.native())
+            + L" " + quoted(readyName_) + L" " + quoted(releaseName_);
+        std::vector<wchar_t> commandBuffer(command.begin(), command.end());
+        commandBuffer.push_back(L'\0');
+        STARTUPINFOW startup{};
+        startup.cb = sizeof(startup);
+        PROCESS_INFORMATION process{};
+        if (!CreateProcessW(
+                nullptr,
+                commandBuffer.data(),
+                nullptr,
+                nullptr,
+                FALSE,
+                CREATE_NO_WINDOW,
+                nullptr,
+                nullptr,
+                &startup,
+                &process
+            )) {
+            cleanupHandles();
+            throw std::runtime_error("cannot start package lock child process");
+        }
+        process_ = process.hProcess;
+        CloseHandle(process.hThread);
+    }
+
+    ~PackageLockChild() {
+        if (release_ != nullptr) SetEvent(release_);
+        if (process_ != nullptr) WaitForSingleObject(process_, 10'000);
+        cleanupHandles();
+    }
+
+    void waitUntilReady() const {
+        require(WaitForSingleObject(ready_, 10'000) == WAIT_OBJECT_0, "package lock child did not become ready");
+    }
+
+    void releaseAndRequireSuccess() {
+        require(SetEvent(release_) != FALSE, "cannot release package lock child");
+        require(WaitForSingleObject(process_, 10'000) == WAIT_OBJECT_0, "package lock child did not exit");
+        DWORD exitCode{};
+        require(GetExitCodeProcess(process_, &exitCode) != FALSE, "cannot read package lock child result");
+        require(exitCode == 0, "package lock child failed");
+    }
+
+private:
+    void cleanupHandles() noexcept {
+        if (process_ != nullptr) CloseHandle(process_);
+        if (ready_ != nullptr) CloseHandle(ready_);
+        if (release_ != nullptr) CloseHandle(release_);
+        process_ = nullptr;
+        ready_ = nullptr;
+        release_ = nullptr;
+    }
+
+    std::wstring readyName_;
+    std::wstring releaseName_;
+    HANDLE process_{};
+    HANDLE ready_{};
+    HANDLE release_{};
+};
+
+int holdPackageLock(
+    const std::filesystem::path& packagePath,
+    const std::wstring& readyName,
+    const std::wstring& releaseName
+) {
+    const HANDLE ready = OpenEventW(EVENT_MODIFY_STATE, FALSE, readyName.c_str());
+    const HANDLE release = OpenEventW(SYNCHRONIZE, FALSE, releaseName.c_str());
+    if (ready == nullptr || release == nullptr) {
+        if (ready != nullptr) CloseHandle(ready);
+        if (release != nullptr) CloseHandle(release);
+        return 2;
+    }
+    int result = 0;
+    try {
+        palmier::project::ProjectPackageService service;
+        service.activate(service.prepareActivation(packagePath, 1));
+        if (!SetEvent(ready) || WaitForSingleObject(release, 10'000) != WAIT_OBJECT_0) {
+            result = 3;
+        }
+    } catch (...) {
+        result = 4;
+    }
+    CloseHandle(ready);
+    CloseHandle(release);
+    return result;
 }
 
 std::string decodePointerToken(std::string_view token) {
@@ -286,6 +458,53 @@ class FailingAcknowledgementCheckpoint final : public ProjectPackageWriteCheckpo
 public:
     void arrive(ProjectPackageWriteCheckpoint) noexcept override {}
     bool failRuntimeAcknowledgement() const noexcept override { return true; }
+};
+
+class DestinationCreationCheckpoint final : public ProjectPackageWriteCheckpoints {
+public:
+    explicit DestinationCreationCheckpoint(std::filesystem::path destination)
+        : destination_(std::move(destination)) {}
+
+    void arrive(ProjectPackageWriteCheckpoint checkpoint) noexcept override {
+        if (checkpoint != ProjectPackageWriteCheckpoint::beforeCommit || attempted_) return;
+        attempted_ = true;
+        try {
+            std::filesystem::create_directory(destination_);
+            writeText(destination_ / "canary.txt", "external-destination");
+        } catch (...) {
+            failed_ = true;
+        }
+    }
+
+    bool succeeded() const noexcept { return attempted_ && !failed_; }
+
+private:
+    std::filesystem::path destination_;
+    bool attempted_{};
+    bool failed_{};
+};
+
+class SourceMutationCheckpoint final : public ProjectPackageWriteCheckpoints {
+public:
+    explicit SourceMutationCheckpoint(std::filesystem::path sourceFile)
+        : sourceFile_(std::move(sourceFile)) {}
+
+    void arrive(ProjectPackageWriteCheckpoint checkpoint) noexcept override {
+        if (checkpoint != ProjectPackageWriteCheckpoint::afterSnapshot || attempted_) return;
+        attempted_ = true;
+        try {
+            writeText(sourceFile_, "externally-replaced-with-longer-content");
+        } catch (...) {
+            failed_ = true;
+        }
+    }
+
+    bool succeeded() const noexcept { return attempted_ && !failed_; }
+
+private:
+    std::filesystem::path sourceFile_;
+    bool attempted_{};
+    bool failed_{};
 };
 
 class ExternalReplaceCheckpoint final : public ProjectPackageWriteCheckpoints {
@@ -557,6 +776,280 @@ void invalidAndBusyDestinationsFailBeforeMutation() {
     package.requireNoStagingFiles();
 }
 
+void saveAsPreservesPackageAndAdoptsCommittedIdentity(
+    const std::filesystem::path& repositoryRoot
+) {
+    TemporaryPackage source(
+        repositoryRoot / "fixtures/contracts/projects/unknown-fields.palmier"
+    );
+    TemporaryDestination destination;
+    std::filesystem::create_directories(source.path() / "Media" / "nested");
+    std::filesystem::create_directories(source.path() / "UnknownEmpty");
+    writeText(source.path() / "Media" / "nested" / "clip.bin", "media-payload");
+    writeText(source.path() / "extension.data", "unknown-payload");
+    const auto sourceProject = readText(source.path() / "project.json");
+
+    ProjectRuntime runtime;
+    installRuntime(runtime, source.path(), 9);
+    static_cast<void>(runtime.splitClips(SplitClipsCommand{
+        std::vector<SplitPoint>{{"clip-save-target", 90}}, std::nullopt, std::nullopt,
+    }));
+    palmier::project::ProjectPackageService service;
+    auto activation = service.prepareActivation(source.path(), 9);
+    service.activate(std::move(activation));
+    const auto initialIdentity = service.identity();
+    require(initialIdentity.has_value(), "source identity was not activated");
+    require(initialIdentity->path == std::filesystem::weakly_canonical(source.path()), "source identity was not normalized");
+
+    const auto result = service.saveAs(runtime, destination.path(), 9);
+    require(result.write.runtimeAcknowledged, "Save As was not acknowledged");
+    require(!result.write.runtimeDirty, "Save As left the committed state dirty");
+    require(result.identityAdopted && result.identity.has_value(), "Save As identity was not adopted");
+    require(result.identity->path == destination.path(), "Save As adopted the wrong destination");
+    require(result.package.copiedFileCount == 3, "Save As copied the wrong file count");
+    require(
+        result.package.copiedBytes
+            == 28 + std::filesystem::file_size(source.path() / "media.json"),
+        "Save As copied the wrong byte count"
+    );
+    require(readText(source.path() / "project.json") == sourceProject, "Save As changed source project.json");
+    require(readText(destination.path() / "extension.data") == "unknown-payload", "Save As lost an unknown file");
+    require(readText(destination.path() / "Media" / "nested" / "clip.bin") == "media-payload", "Save As changed media bytes");
+    require(std::filesystem::is_directory(destination.path() / "UnknownEmpty"), "Save As lost an empty directory");
+    const auto sourceDocument = palmier::project::readProjectPackage(source.path(), generatedIds());
+    const auto destinationDocument = palmier::project::readProjectPackage(destination.path(), generatedIds());
+    require(sourceDocument.project().timelines.front().tracks.front().clips.size() == 2, "Save As mutated the source package");
+    require(destinationDocument.project().timelines.front().tracks.front().clips.size() == 3, "Save As omitted runtime edits");
+    requireDeclaredCanaries(repositoryRoot, destination.path());
+    const auto currentIdentity = service.identity();
+    require(currentIdentity && currentIdentity->serial > initialIdentity->serial, "Save As identity serial did not advance");
+}
+
+void saveAsRefusesExistingAndNestedDestinations() {
+    TemporaryPackage source;
+    ProjectRuntime runtime;
+    installRuntime(runtime, source.path(), 4);
+    palmier::project::ProjectPackageService service;
+    service.activate(service.prepareActivation(source.path(), 4));
+
+    TemporaryPackage existing;
+    const auto existingProject = readText(existing.path() / "project.json");
+    requireWriteError(
+        [&] { static_cast<void>(service.saveAs(runtime, existing.path(), 4)); },
+        "destinationExists"
+    );
+    require(readText(existing.path() / "project.json") == existingProject, "existing destination was changed");
+
+    const auto nested = source.path() / "nested.palmier";
+    requireWriteError(
+        [&] { static_cast<void>(service.saveAs(runtime, nested, 4)); },
+        "invalidPackageRelationship"
+    );
+    require(!std::filesystem::exists(nested), "nested destination was created");
+    const auto identity = service.identity();
+    require(identity && identity->path == std::filesystem::weakly_canonical(source.path()), "failed Save As changed identity");
+}
+
+void saveAsCancellationPreservesSourceAndCleansStaging() {
+    for (const auto checkpoint : {
+        ProjectPackageWriteCheckpoint::afterSnapshot,
+        ProjectPackageWriteCheckpoint::afterSerialization,
+        ProjectPackageWriteCheckpoint::afterStagingCreation,
+        ProjectPackageWriteCheckpoint::afterWrite,
+        ProjectPackageWriteCheckpoint::afterFlush,
+        ProjectPackageWriteCheckpoint::beforeCommit,
+    }) {
+        TemporaryPackage source;
+        TemporaryDestination destination;
+        const auto baseline = readText(source.path() / "project.json");
+        ProjectRuntime runtime;
+        installRuntime(runtime, source.path(), 12);
+        static_cast<void>(runtime.splitClips(SplitClipsCommand{
+            std::vector<SplitPoint>{{"target", 40}}, std::nullopt, std::nullopt,
+        }));
+        std::stop_source cancellation;
+        CancellingCheckpoint checkpointHook(checkpoint, cancellation);
+        requireWriteError(
+            [&] {
+                static_cast<void>(palmier::project::testing::writeProjectPackageAs(
+                    runtime,
+                    source.path(),
+                    destination.path(),
+                    12,
+                    cancellation.get_token(),
+                    &checkpointHook
+                ));
+            },
+            "cancelled"
+        );
+        require(readText(source.path() / "project.json") == baseline, "cancelled Save As changed source");
+        require(runtime.snapshot(12).session->dirty(), "cancelled Save As cleared dirty state");
+        destination.requireAbsentAndNoStaging();
+    }
+}
+
+void saveAsRefusesCommitRaceAndSourceMutation() {
+    {
+        TemporaryPackage source;
+        TemporaryDestination destination;
+        ProjectRuntime runtime;
+        installRuntime(runtime, source.path(), 16);
+        DestinationCreationCheckpoint race(destination.path());
+        requireWriteError(
+            [&] {
+                static_cast<void>(palmier::project::testing::writeProjectPackageAs(
+                    runtime,
+                    source.path(),
+                    destination.path(),
+                    16,
+                    {},
+                    &race
+                ));
+            },
+            "destinationExists"
+        );
+        require(race.succeeded(), "destination race hook failed");
+        require(readText(destination.path() / "canary.txt") == "external-destination", "Save As overwrote raced destination");
+        destination.requireNoStaging();
+    }
+    {
+        TemporaryPackage source;
+        TemporaryDestination destination;
+        writeText(source.path() / "unknown.bin", "initial");
+        ProjectRuntime runtime;
+        installRuntime(runtime, source.path(), 17);
+        SourceMutationCheckpoint mutation(source.path() / "unknown.bin");
+        requireWriteError(
+            [&] {
+                static_cast<void>(palmier::project::testing::writeProjectPackageAs(
+                    runtime,
+                    source.path(),
+                    destination.path(),
+                    17,
+                    {},
+                    &mutation
+                ));
+            },
+            "sourceChanged"
+        );
+        require(mutation.succeeded(), "source mutation hook failed");
+        destination.requireAbsentAndNoStaging();
+    }
+}
+
+void saveAsAdoptsTargetAndLeavesNewerEditDirty() {
+    TemporaryPackage source;
+    TemporaryDestination destination;
+    ProjectRuntime runtime;
+    installRuntime(runtime, source.path(), 14);
+    palmier::project::ProjectPackageService service(
+        [](ProjectRuntime& targetRuntime,
+           const std::filesystem::path& sourcePath,
+           const std::filesystem::path& destinationPath,
+           std::optional<std::uint64_t> generation,
+           std::stop_token cancellation) {
+            auto receipt = palmier::project::writeProjectPackageAs(
+                targetRuntime,
+                sourcePath,
+                destinationPath,
+                generation,
+                cancellation
+            );
+            static_cast<void>(targetRuntime.splitClips(SplitClipsCommand{
+                std::vector<SplitPoint>{{"target", 40}}, std::nullopt, std::nullopt,
+            }));
+            return receipt;
+        }
+    );
+    service.activate(service.prepareActivation(source.path(), 14));
+
+    const auto result = service.saveAs(runtime, destination.path(), 14);
+    require(result.identityAdopted && result.write.runtimeAcknowledged, "Save As did not adopt target");
+    require(result.write.runtimeDirty, "newer edit was incorrectly marked persisted");
+    require(runtime.snapshot(14).session->dirty(), "newer runtime state is not dirty");
+    const auto firstDestination = palmier::project::readProjectPackage(destination.path(), generatedIds());
+    require(firstDestination.project().timelines.front().tracks.front().clips.size() == 1, "Save As snapshot included a newer edit");
+
+    const auto save = service.save(runtime, 14);
+    require(save.runtimeAcknowledged && !save.runtimeDirty, "follow-up Save did not persist target");
+    const auto secondDestination = palmier::project::readProjectPackage(destination.path(), generatedIds());
+    require(secondDestination.project().timelines.front().tracks.front().clips.size() == 2, "follow-up Save did not write adopted target");
+    const auto original = palmier::project::readProjectPackage(source.path(), generatedIds());
+    require(original.project().timelines.front().tracks.front().clips.size() == 1, "follow-up Save wrote the old source");
+}
+
+void saveAsIdentityChangeAfterCommitKeepsRuntimeDirty() {
+    TemporaryPackage source;
+    TemporaryDestination destination;
+    ProjectRuntime runtime;
+    installRuntime(runtime, source.path(), 15);
+    static_cast<void>(runtime.splitClips(SplitClipsCommand{
+        std::vector<SplitPoint>{{"target", 40}}, std::nullopt, std::nullopt,
+    }));
+    palmier::project::ProjectPackageService* servicePointer{};
+    palmier::project::ProjectPackageService service(
+        [&](ProjectRuntime& targetRuntime,
+            const std::filesystem::path& sourcePath,
+            const std::filesystem::path& destinationPath,
+            std::optional<std::uint64_t> generation,
+            std::stop_token cancellation) {
+            auto receipt = palmier::project::writeProjectPackageAs(
+                targetRuntime,
+                sourcePath,
+                destinationPath,
+                generation,
+                cancellation
+            );
+            servicePointer->close();
+            return receipt;
+        }
+    );
+    servicePointer = &service;
+    service.activate(service.prepareActivation(source.path(), 15));
+
+    const auto result = service.saveAs(runtime, destination.path(), 15);
+    require(!result.identityAdopted, "closed package service adopted a target");
+    require(!result.write.runtimeAcknowledged && result.write.runtimeDirty, "identity change cleared dirty state");
+    require(!service.identity().has_value(), "closed package service restored an identity");
+    require(runtime.snapshot(15).session->dirty(), "identity change marked runtime persisted");
+    const auto committedCopy = palmier::project::readProjectPackage(destination.path(), generatedIds());
+    require(committedCopy.project().timelines.front().tracks.front().clips.size() == 2, "committed copy is incomplete");
+    const auto original = palmier::project::readProjectPackage(source.path(), generatedIds());
+    require(original.project().timelines.front().tracks.front().clips.size() == 1, "identity race changed source");
+}
+
+void projectPackageLeaseRefusesAnotherProcessAndReleasesOnExit() {
+    TemporaryPackage package;
+    PackageLockChild child(package.path());
+    child.waitUntilReady();
+    palmier::project::ProjectPackageService service;
+    requireServiceError(
+        [&] { static_cast<void>(service.prepareActivation(package.path(), 1)); },
+        "projectPackageBusy"
+    );
+    child.releaseAndRequireSuccess();
+    auto activation = service.prepareActivation(package.path(), 1);
+    require(activation.valid(), "package lease was not released after process exit");
+}
+
+void projectPackageLeaseRefusesAnotherServiceInProcess() {
+    TemporaryPackage package;
+    palmier::project::ProjectPackageService first;
+    first.activate(first.prepareActivation(package.path(), 1));
+    auto reload = first.prepareActivation(package.path(), 2);
+    require(reload.valid(), "active service could not prepare its own package reload");
+
+    palmier::project::ProjectPackageService second;
+    requireServiceError(
+        [&] { static_cast<void>(second.prepareActivation(package.path(), 1)); },
+        "projectPackageBusy"
+    );
+    reload = {};
+    first.close();
+    auto activation = second.prepareActivation(package.path(), 1);
+    require(activation.valid(), "same-process package lease was not released");
+}
+
 void runTests(const std::filesystem::path& root) {
     editSaveRestartPreservesCanariesAndState(root);
     savingAnOlderSnapshotLeavesNewerRuntimeDirty();
@@ -565,11 +1058,27 @@ void runTests(const std::filesystem::path& root) {
     cancellationPreservesDestinationAndCleansStaging();
     concurrentExternalReplacementIsExcluded();
     invalidAndBusyDestinationsFailBeforeMutation();
+    saveAsPreservesPackageAndAdoptsCommittedIdentity(root);
+    saveAsRefusesExistingAndNestedDestinations();
+    saveAsCancellationPreservesSourceAndCleansStaging();
+    saveAsRefusesCommitRaceAndSourceMutation();
+    saveAsAdoptsTargetAndLeavesNewerEditDirty();
+    saveAsIdentityChangeAfterCommitKeepsRuntimeDirty();
+    projectPackageLeaseRefusesAnotherProcessAndReleasesOnExit();
+    projectPackageLeaseRefusesAnotherServiceInProcess();
 }
 
 }
 
-int main() {
+int wmain(int argc, wchar_t* argv[]) {
+    if (argc == 5 && std::wstring_view(argv[1]) == L"--hold-package-lock") {
+        int result = 5;
+        std::jthread worker([&] {
+            result = holdPackageLock(argv[2], argv[3], argv[4]);
+        });
+        worker.join();
+        return result;
+    }
     std::exception_ptr failure;
     std::jthread worker([&failure] {
         try {

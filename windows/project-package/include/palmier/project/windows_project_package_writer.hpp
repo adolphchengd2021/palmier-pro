@@ -29,6 +29,15 @@ struct ProjectPackageWriteReceipt final {
     ProjectPackageWriteWarning warning;
 };
 
+struct ProjectPackageSaveAsReceipt final {
+    std::uint64_t projectGeneration;
+    std::uint64_t revision;
+    std::uint64_t stateId;
+    std::size_t projectJsonBytes;
+    std::size_t copiedFileCount;
+    std::uint64_t copiedBytes;
+};
+
 class ProjectPackageWriteError final : public std::runtime_error {
 public:
     ProjectPackageWriteError(
@@ -47,6 +56,15 @@ public:
 ProjectPackageWriteReceipt writeProjectPackage(
     ProjectRuntime& runtime,
     const std::filesystem::path& packagePath,
+    std::optional<std::uint64_t> expectedProjectGeneration = {},
+    std::stop_token cancellation = {}
+);
+
+// Commits the new package but does not mark runtime state persisted.
+ProjectPackageSaveAsReceipt writeProjectPackageAs(
+    ProjectRuntime& runtime,
+    const std::filesystem::path& sourcePackagePath,
+    const std::filesystem::path& destinationPackagePath,
     std::optional<std::uint64_t> expectedProjectGeneration = {},
     std::stop_token cancellation = {}
 );
