@@ -1,0 +1,105 @@
+{
+  "contractVersion": 1,
+  "status": "Partial",
+  "protocolVersion": "2025-06-18",
+  "endpoint": "http://127.0.0.1:19789/mcp",
+  "toolNames": [
+    "get_timeline",
+    "split_clips",
+    "undo"
+  ],
+  "tools": [
+    {
+      "name": "get_timeline",
+      "description": "Reads the active timeline using stable IDs and integer project frames.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "startFrame": {
+            "type": "integer"
+          },
+          "endFrame": {
+            "type": "integer"
+          },
+          "captionDetail": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "split_clips",
+      "description": "Splits clips atomically by stable ID or track frame in one shared undo action.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "splits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "clipId": {
+                  "type": "string"
+                },
+                "atFrame": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "clipId",
+                "atFrame"
+              ]
+            }
+          },
+          "trackIndex": {
+            "type": "integer"
+          },
+          "frames": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "undo",
+      "description": "Reverts the latest action from the shared Windows project history.",
+      "inputSchema": {
+        "type": "object"
+      }
+    }
+  ],
+  "toolResult": {
+    "transport": "json-rpc-result",
+    "contentType": "text",
+    "payloadEncoding": "canonical-json",
+    "toolFailuresUseIsError": true,
+    "mutationReceiptFields": [
+      "actionId",
+      "changed",
+      "clips",
+      "createdTracks",
+      "notes",
+      "removedClipIds",
+      "revisionBefore",
+      "revisionAfter",
+      "shifted"
+    ]
+  },
+  "verifiedBoundary": [
+    "loopback-only HTTP transport",
+    "shared in-memory ProjectSession across MCP sessions",
+    "stable-ID split with integer project frames",
+    "shared undo and independent timeline readback"
+  ],
+  "notYetVerified": [
+    "Windows 10 build 19045 runtime",
+    "captionDetail expansion",
+    "full Swift get_timeline response shaping parity",
+    "Qt UI and MCP sharing the same ProjectSession",
+    "project.json save or reopen round trip",
+    "the remaining MCP tool surface"
+  ]
+}

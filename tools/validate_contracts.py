@@ -4432,6 +4432,214 @@ def windows_h264_project_export_contract() -> None:
             raise ContractError(f"H.264 export README missing token {token!r}")
 
 
+def windows_mcp_project_session_contract() -> None:
+    contract = load_json("contracts/mcp/v1/windows-technical-mvp.json")
+    full_surface = load_json("contracts/mcp/v1/tools.json")
+    require_equal("Windows MCP contract version", contract["contractVersion"], 1)
+    require_equal("Windows MCP status", contract["status"], "Partial")
+    require_equal(
+        "Windows MCP protocol version",
+        contract["protocolVersion"],
+        "2025-06-18",
+    )
+    require_equal(
+        "Windows MCP endpoint",
+        contract["endpoint"],
+        "http://127.0.0.1:19789/mcp",
+    )
+    expected_tools = ["get_timeline", "split_clips", "undo"]
+    require_equal("Windows MCP tool subset", contract["toolNames"], expected_tools)
+    require_equal(
+        "Windows MCP discovery names",
+        [tool["name"] for tool in contract["tools"]],
+        expected_tools,
+    )
+    if not set(expected_tools).issubset(full_surface["toolNames"]):
+        raise ContractError("Windows MCP tool subset is outside the full MCP surface")
+    for index, tool in enumerate(contract["tools"]):
+        if not isinstance(tool.get("description"), str) or not tool["description"]:
+            raise ContractError(f"Windows MCP tool {index} has no description")
+        schema = tool.get("inputSchema")
+        if not isinstance(schema, dict):
+            raise ContractError(f"Windows MCP tool {index} has no input schema")
+        validate_schema_node(schema, schema, f"Windows MCP tool {index} inputSchema")
+    swift_tools = read_text("Sources/PalmierPro/Agent/Tools/ToolDefinitions.swift")
+
+    def swift_tool_block(symbol: str) -> str:
+        match = re.search(
+            rf"AgentTool\(\s*name:\s*\.{symbol},(?P<body>.*?)"
+            r"(?=\n\s*\),\n\s*AgentTool\()",
+            swift_tools,
+            re.DOTALL,
+        )
+        if not match:
+            raise ContractError(f"Swift MCP tool block was not found: {symbol}")
+        return match.group("body")
+
+    swift_schema_tokens = {
+        "getTimeline": [
+            '"startFrame": ["type": "integer"',
+            '"endFrame": ["type": "integer"',
+            '"captionDetail": ["type": "boolean"',
+        ],
+        "splitClips": [
+            '"splits": [',
+            '"clipId": ["type": "string"',
+            '"atFrame": ["type": "integer"',
+            'required: ["clipId", "atFrame"]',
+            '"trackIndex": ["type": "integer"',
+            '"frames": [',
+            '"items": ["type": "integer"]',
+        ],
+        "undo": ["inputSchema: objectSchema()"],
+    }
+    for symbol, tokens in swift_schema_tokens.items():
+        block = swift_tool_block(symbol)
+        for token in tokens:
+            if token not in block:
+                raise ContractError(
+                    f"Swift MCP schema for {symbol} is missing token {token!r}"
+                )
+    swift_split_executor = read_text(
+        "Sources/PalmierPro/Agent/Tools/ToolExecutor+Clips.swift"
+    )
+    for token in [
+        "let hasSplits = !(input.splits ?? []).isEmpty",
+        "let hasTrack = input.trackIndex != nil || !(input.frames ?? []).isEmpty",
+        "guard hasSplits != hasTrack else",
+        "guard let frames = input.frames, !frames.isEmpty else",
+    ]:
+        if token not in swift_split_executor:
+            raise ContractError(f"Swift split mode invariant missing token {token!r}")
+    require_equal(
+        "Windows MCP mutation receipt fields",
+        contract["toolResult"]["mutationReceiptFields"],
+        [
+            "actionId",
+            "changed",
+            "clips",
+            "createdTracks",
+            "notes",
+            "removedClipIds",
+            "revisionBefore",
+            "revisionAfter",
+            "shifted",
+        ],
+    )
+
+    session_header = read_text(
+        "core/project-session/include/palmier/project/project_session.hpp"
+    )
+    session_source = read_text("core/project-session/project_session.cpp")
+    session_tests = read_text(
+        "core/project-session/tests/project_session_tests.cpp"
+    )
+    server_source = read_text("windows/mcp-http/mcp_http_server.cpp")
+    server_main = read_text("windows/mcp-http/app/main.cpp")
+    server_cmake = read_text("windows/mcp-http/CMakeLists.txt")
+    e2e = read_text("windows/mcp-http/tests/mcp_http_e2e.py")
+    root_cmake = read_text("CMakeLists.txt")
+    adr = read_text("docs/windows/adr/0026-loopback-mcp-project-session.md")
+    readme = read_text("docs/windows/README.md")
+    for token in [
+        "class ProjectSession final",
+        "TimelineQuery",
+        "SplitClipsCommand",
+        "CommandResult",
+        "revision() const",
+        "dirty() const",
+    ]:
+        if token not in session_header:
+            raise ContractError(f"ProjectSession API missing token {token!r}")
+    for token in [
+        "unsafeClipIds(document)",
+        "pass exactly one of splits or trackIndex with frames",
+        "linkedSplitMismatch",
+        "unsupportedClipSemantics",
+        "undoJournal_.push_back",
+        "project_ = std::move(planned)",
+        "Re-read get_timeline after undo.",
+        "checkCancellation(cancellation)",
+    ]:
+        if token not in session_source:
+            raise ContractError(f"ProjectSession invariant missing token {token!r}")
+    for token in [
+        "explicitSplitAndUndo",
+        "invalidBatchDoesNotMutate",
+        "duplicateAndMultipleCutsAreOneAction",
+        "trackModeResolvesClip",
+        "generatedRightIdRemainsEditable",
+        "emptySplitArraysAreInvalid",
+        "linkedClipsSplitTogether",
+        "unsupportedSourceFieldsAreRefused",
+        "cancellationDoesNotMutate",
+        "cancellationDuringPlanningDoesNotCommit",
+        "extremeTimingIsRefusedBeforeCommit",
+        "cancelledUndoPreservesHistory",
+    ]:
+        if token not in session_tests:
+            raise ContractError(f"ProjectSession test missing token {token!r}")
+    for token in [
+        "INADDR_LOOPBACK",
+        "SO_EXCLUSIVEADDRUSE",
+        "maximumHeaderBytes",
+        "maximumBodyBytes",
+        "maximumSessions",
+        "sessionIdleTimeout",
+        "pruneExpiredSessions",
+        "SO_RCVTIMEO",
+        "mediaType(",
+        "validateOrigin",
+        "Mcp-Session-Id",
+        "MCP protocol version",
+        "tools/list",
+        "tools/call",
+    ]:
+        if token not in server_source:
+            raise ContractError(f"Windows MCP server invariant missing token {token!r}")
+    for token in ["--project", "--port", "--exit-after-last-session", "ProjectSession"]:
+        if token not in server_main:
+            raise ContractError(f"Windows MCP process missing token {token!r}")
+    for token in [
+        "palmier_windows_mcp",
+        "mcp.http_split_undo_e2e",
+        "RESOURCE_LOCK palmier_mcp_port_19789",
+        "RUN_SERIAL TRUE",
+    ]:
+        if token not in server_cmake:
+            raise ContractError(f"Windows MCP CMake missing token {token!r}")
+    for token in [
+        "hostile Origin must be rejected",
+        "technical MVP discovery schema drift",
+        "cross-session split readback",
+        "rejected requests must not mutate",
+        "cross-session undo exact restore",
+        "require_port_released",
+        "require_loopback_listener",
+        "least-recent session must be evicted at capacity",
+        "invalid initialize must not create a session",
+    ]:
+        if token not in e2e:
+            raise ContractError(f"Windows MCP E2E missing token {token!r}")
+    for token in [
+        "add_subdirectory(core/project-session)",
+        "add_subdirectory(windows/mcp-http)",
+    ]:
+        if token not in root_cmake:
+            raise ContractError(f"root CMake missing token {token!r}")
+    for token in [
+        "single mutable owner",
+        "127.0.0.1:19789",
+        "does not write `project.json`",
+        "real loopback process boundary",
+    ]:
+        if token not in adr:
+            raise ContractError(f"Windows MCP ADR missing token {token!r}")
+    for token in ["three-tool loopback MCP", "ADR 0026"]:
+        if token not in readme:
+            raise ContractError(f"Windows README missing token {token!r}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Palmier contract snapshots")
     parser.add_argument(
@@ -4464,6 +4672,7 @@ def main() -> int:
         ("Windows Qt read-only project shell", windows_qt_read_only_shell_contract),
         ("Windows Qt native preview host", windows_qt_preview_host_contract),
         ("Windows project H.264 export", windows_h264_project_export_contract),
+        ("Windows MCP ProjectSession and loopback HTTP", windows_mcp_project_session_contract),
     ]
     for label, check in checks:
         check()
