@@ -116,22 +116,6 @@ public:
 
     const std::filesystem::path& path() const noexcept { return path_; }
 
-    void requireAbsentAndNoStaging() const {
-        require(!std::filesystem::exists(path_), "Save As destination unexpectedly exists");
-        requireNoStaging();
-    }
-
-    void requireNoStaging() const {
-        const auto prefix = path_.filename().native() + L".palmier-";
-        for (const auto& entry : std::filesystem::directory_iterator(path_.parent_path())) {
-            const auto name = entry.path().filename().native();
-            require(
-                !name.starts_with(prefix) || !name.ends_with(L".partial"),
-                "Save As left a staging package"
-            );
-        }
-    }
-
     void resetProject(std::string_view content = minimalProject) const {
         writeText(path_ / "project.json", content);
     }
@@ -172,6 +156,22 @@ public:
     }
 
     const std::filesystem::path& path() const noexcept { return path_; }
+
+    void requireAbsentAndNoStaging() const {
+        require(!std::filesystem::exists(path_), "Save As destination unexpectedly exists");
+        requireNoStaging();
+    }
+
+    void requireNoStaging() const {
+        const auto prefix = path_.filename().native() + L".palmier-";
+        for (const auto& entry : std::filesystem::directory_iterator(path_.parent_path())) {
+            const auto name = entry.path().filename().native();
+            require(
+                !name.starts_with(prefix) || !name.ends_with(L".partial"),
+                "Save As left a staging package"
+            );
+        }
+    }
 
 private:
     std::filesystem::path path_;
@@ -222,7 +222,7 @@ std::wstring currentExecutablePath() {
     return {buffer.data(), length};
 }
 
-std::wstring quoted(std::wstring_view value) {
+std::wstring quoteProcessArgument(std::wstring_view value) {
     require(value.find(L'"') == std::wstring_view::npos, "test process argument contains a quote");
     return L"\"" + std::wstring(value) + L"\"";
 }
@@ -241,9 +241,10 @@ public:
             cleanupHandles();
             throw std::runtime_error("cannot create package lock process events");
         }
-        auto command = quoted(currentExecutablePath())
-            + L" --hold-package-lock " + quoted(packagePath.native())
-            + L" " + quoted(readyName_) + L" " + quoted(releaseName_);
+        auto command = quoteProcessArgument(currentExecutablePath())
+            + L" --hold-package-lock " + quoteProcessArgument(packagePath.native())
+            + L" " + quoteProcessArgument(readyName_)
+            + L" " + quoteProcessArgument(releaseName_);
         std::vector<wchar_t> commandBuffer(command.begin(), command.end());
         commandBuffer.push_back(L'\0');
         STARTUPINFOW startup{};
