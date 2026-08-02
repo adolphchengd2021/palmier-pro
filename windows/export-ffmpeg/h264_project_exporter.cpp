@@ -381,24 +381,7 @@ public:
             );
         }
 
-        HandleOwner destinationDirectory(CreateFileW(
-            destination.parent_path().c_str(),
-            FILE_READ_ATTRIBUTES | FILE_TRAVERSE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            nullptr,
-            OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS,
-            nullptr
-        ));
-        if (!destinationDirectory.valid()) {
-            fail(
-                H264ExportFailureCode::installFailed,
-                "installDestination",
-                "destination directory could not be opened for install",
-                static_cast<int>(GetLastError())
-            );
-        }
-        const auto destinationName = destination.filename().native();
+        const auto destinationName = destination.native();
         constexpr auto maximumInfoBytes = (std::numeric_limits<DWORD>::max)();
         if (destinationName.size() > maximumInfoBytes / sizeof(wchar_t)) {
             fail(
@@ -419,7 +402,7 @@ public:
         std::vector<std::byte> storage(infoSize);
         auto* rename = reinterpret_cast<FILE_RENAME_INFO*>(storage.data());
         rename->ReplaceIfExists = static_cast<BOOLEAN>(replaceExisting);
-        rename->RootDirectory = destinationDirectory.get();
+        rename->RootDirectory = nullptr;
         rename->FileNameLength = static_cast<DWORD>(nameBytes);
         std::memcpy(rename->FileName, destinationName.data(), nameBytes);
         const BOOL renamed = SetFileInformationByHandle(
