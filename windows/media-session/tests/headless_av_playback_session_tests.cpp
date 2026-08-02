@@ -359,9 +359,13 @@ void startsVideoAndAudioAtTheSameTrimmedFrame() {
 }
 
 void pauseAndResumePreserveGenerationAndStopClockTicks() {
+    TemporaryDirectory media;
     const auto state = std::make_shared<FakeAudioState>();
     auto playback = session(state);
-    const auto input = fixture("opaque-qtrle-three.mov");
+    const auto input = media.write(
+        "opaque-qtrle-three.mov",
+        palmier::media::test_fixtures::qtrleOpaqueThreeFrames
+    );
     const auto started = playback->play(input, 0, {10, 1});
     require(started.generation == 1, "transport play failed");
 
