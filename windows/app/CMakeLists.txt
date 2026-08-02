@@ -52,6 +52,11 @@ target_link_libraries(
 target_compile_features(palmier_qt_preview PUBLIC cxx_std_20)
 
 qt_add_executable(palmier_qt_shell app/main.cpp)
+install(
+    TARGETS palmier_qt_shell
+    RUNTIME DESTINATION .
+    COMPONENT prototype
+)
 set_source_files_properties(qml/AppTheme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_qml_module(palmier_qt_shell
     URI PalmierPro.Windows

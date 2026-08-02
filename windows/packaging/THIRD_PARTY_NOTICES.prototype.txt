@@ -1,0 +1,36 @@
+Palmier Pro Windows Prototype - Third-Party Notices
+
+This unsigned installer is an internal Technical MVP artifact and is not approved
+for public release.
+
+Qt 6.10.3
+  Modules: Core, Gui, Qml, Quick, QuickControls2, QuickDialogs2, Concurrent.
+  Deployment: dynamically linked DLLs collected by windeployqt.
+  License texts copied from the exact Qt binary installation are included under
+  licenses/qt/. Release requires a final LGPL/commercial-license review and a
+  decision on the first qualified Qt 6.12 Windows 10 line.
+  Source: https://code.qt.io/cgit/qt/qt5.git/
+
+FFmpeg 8.1.2 (vcpkg baseline cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3)
+  Libraries: libavcodec, libavformat, libavutil, libswresample, libswscale.
+  Deployment: dynamically linked DLLs from the locked vcpkg manifest build.
+  The packaged runtime evidence records the exact library configuration and
+  refuses --enable-gpl, --enable-nonfree, or a non-LGPL license string.
+  The vcpkg copyright/license record is included under licenses/ffmpeg/.
+  Release still requires archiving matching source, patches and build flags,
+  plus codec-patent review.
+  Source: https://ffmpeg.org/releases/
+
+Microsoft Visual C++ Runtime
+  The official x64 redistributable from the selected Visual Studio 2022 17.14
+  installation is bundled and installed silently. Redistribution remains
+  subject to Microsoft's Visual Studio licensing terms.
+
+Inno Setup 7.0.2
+  Used to compile the prototype installer; it is not installed with Palmier Pro.
+  Commercial use requires the project's procurement decision before release.
+  Source: https://jrsoftware.org/isinfo.php
+
+Palmier Pro
+  Palmier Pro is distributed under GPLv3. The repository LICENSE is included as
+  licenses/PalmierPro-GPLv3.txt.

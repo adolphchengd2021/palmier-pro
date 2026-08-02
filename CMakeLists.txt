@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.31)
 
-project(PalmierProWindowsContracts LANGUAGES CXX)
+project(PalmierProWindowsContracts VERSION 0.6.16 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "The Palmier Pro Windows probe requires Windows.")
@@ -32,6 +32,7 @@ if(PALMIER_ENABLE_FFMPEG_PROTOTYPE)
     add_subdirectory(windows/media-ffmpeg)
     add_subdirectory(windows/media-render)
     add_subdirectory(windows/export-ffmpeg)
+    add_subdirectory(windows/packaging)
     add_subdirectory(windows/media-session)
     add_subdirectory(windows/preview-session)
 endif()

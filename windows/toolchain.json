@@ -72,7 +72,7 @@
       "name": "Inno Setup",
       "version": "7.0.2",
       "variant": "x64 installer",
-      "status": "prototype-locked",
+      "status": "prototype-ci-active",
       "releaseGate": "Validate signing, install, upgrade, downgrade refusal, uninstall and procurement"
     }
   ]

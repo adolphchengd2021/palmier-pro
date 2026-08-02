@@ -22,6 +22,7 @@ jobs:
       QT_QPA_PLATFORM: offscreen
       VCPKG_DISABLE_METRICS: 1
       VCPKG_DEFAULT_TRIPLET: x64-windows
+      PALMIER_WINDOWS_PROTOTYPE_VERSION: 0.6.16
     steps:
       - uses: actions/checkout@v6
 
@@ -82,6 +83,20 @@ jobs:
           if (-not (Test-Path -LiteralPath "${env:ProgramFiles(x86)}\Windows Kits\10\Include\10.0.26100.0")) {
             throw "Windows SDK 10.0.26100.0 is missing"
           }
+          $redistVersionFile = "$vs\VC\Auxiliary\Build\Microsoft.VCRedistVersion.default.txt"
+          if (-not (Test-Path -LiteralPath $redistVersionFile)) {
+            throw "Visual Studio redist version file is missing"
+          }
+          $redistVersion = (Get-Content -LiteralPath $redistVersionFile).Trim()
+          if ($redistVersion -notmatch '^14\.44\.') {
+            throw "Expected Visual C++ Redistributable 14.44.x, got: $redistVersion"
+          }
+          $redist = Get-ChildItem -LiteralPath "$vs\VC\Redist\MSVC\$redistVersion" -Recurse -File -Filter "vc_redist.x64.exe" |
+            Select-Object -First 1
+          if (-not $redist) {
+            throw "The selected Visual Studio toolchain has no x64 redistributable"
+          }
+          "VC_REDIST_X64=$($redist.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Install pinned Qt installer
         run: python -m pip install --disable-pip-version-check aqtinstall==3.3.0 py7zr==1.0.0
@@ -115,3 +130,131 @@ jobs:
               }
             exit $testExitCode
           }
+
+      - name: Stage isolated prototype runtime
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "palmier-prototype-stage"
+          & "windows/packaging/stage_prototype.ps1" `
+            -RepositoryRoot $env:GITHUB_WORKSPACE `
+            -BuildRoot (Join-Path $env:GITHUB_WORKSPACE "out/build/windows-msvc-x64-qt-shell") `
+            -QtRoot $env:QT_ROOT_DIR `
+            -VcRedistPath $env:VC_REDIST_X64 `
+            -StageRoot $stage
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          $previousPath = $env:PATH
+          $previousPlatform = $env:QT_QPA_PLATFORM
+          try {
+            $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+            $env:QT_QPA_PLATFORM = "windows"
+            $smoke = Start-Process `
+              -FilePath (Join-Path $stage "PalmierPro.exe") `
+              -ArgumentList "--smoke-test" `
+              -WorkingDirectory $stage `
+              -Wait `
+              -PassThru
+            if ($smoke.ExitCode -ne 0) {
+              throw "Staged application smoke failed with exit code $($smoke.ExitCode)"
+            }
+          } finally {
+            $env:PATH = $previousPath
+            $env:QT_QPA_PLATFORM = $previousPlatform
+          }
+          "PALMIER_STAGE_ROOT=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Bootstrap verified Inno Setup 7.0.2
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $download = Join-Path $env:RUNNER_TEMP "inno-download"
+          $install = Join-Path $env:RUNNER_TEMP "inno-setup-7.0.2"
+          New-Item -ItemType Directory -Path $download | Out-Null
+          Push-Location $download
+          try {
+            gh release download is-7_0_2 `
+              --repo jrsoftware/issrc `
+              --pattern "innosetup-7.0.2-x64.exe"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Inno Setup release download failed with exit code $LASTEXITCODE"
+            }
+            gh release verify-asset "innosetup-7.0.2-x64.exe" --repo jrsoftware/issrc
+            if ($LASTEXITCODE -ne 0) {
+              throw "Inno Setup release attestation failed with exit code $LASTEXITCODE"
+            }
+          } finally {
+            Pop-Location
+          }
+          $asset = Join-Path $download "innosetup-7.0.2-x64.exe"
+          $signature = Get-AuthenticodeSignature -LiteralPath $asset
+          if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Pyrsys B\.V\.") {
+            throw "Inno Setup Authenticode verification failed: $($signature.Status) $($signature.SignerCertificate.Subject)"
+          }
+          $bootstrap = Start-Process -FilePath $asset -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/SP-",
+            "/CURRENTUSER",
+            "/DIR=$install"
+          ) -Wait -PassThru
+          if ($bootstrap.ExitCode -ne 0) {
+            throw "Inno Setup bootstrap failed with exit code $($bootstrap.ExitCode)"
+          }
+          $compiler = Get-ChildItem -LiteralPath $install -Recurse -File -Filter "ISCC.exe" |
+            Select-Object -First 1
+          if (-not $compiler) {
+            throw "Inno Setup compiler was not installed"
+          }
+          "INNO_ISCC=$($compiler.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build unsigned prototype installer
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP "palmier-installer-output"
+          New-Item -ItemType Directory -Path $output | Out-Null
+          & $env:INNO_ISCC /Qp `
+            "/DSourceDir=$env:PALMIER_STAGE_ROOT" `
+            "/DOutputDir=$output" `
+            "/DAppVersion=$env:PALMIER_WINDOWS_PROTOTYPE_VERSION" `
+            "windows/packaging/prototype-installer.iss"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup compilation failed with exit code $LASTEXITCODE"
+          }
+          $installer = Get-ChildItem -LiteralPath $output -File -Filter "*.exe" |
+            Select-Object -First 1
+          if (-not $installer) {
+            throw "Inno Setup did not produce an installer"
+          }
+          $hash = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          [System.IO.File]::WriteAllText(
+            (Join-Path $output "$($installer.Name).sha256"),
+            "$hash  $($installer.Name)`n",
+            [System.Text.UTF8Encoding]::new($false)
+          )
+          Copy-Item -LiteralPath (Join-Path $env:PALMIER_STAGE_ROOT "RUNTIME_MANIFEST.json") -Destination $output
+          Copy-Item -LiteralPath (Join-Path $env:PALMIER_STAGE_ROOT "FFMPEG_RUNTIME_EVIDENCE.txt") -Destination $output
+          Copy-Item -LiteralPath (Join-Path $env:PALMIER_STAGE_ROOT "THIRD_PARTY_NOTICES.txt") -Destination $output
+          Copy-Item -LiteralPath "docs/windows/PROTOTYPE_REDISTRIBUTION_CONCLUSION.md" -Destination $output
+          "PALMIER_INSTALLER=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PALMIER_INSTALLER_OUTPUT=$output" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Test installed prototype and uninstall preservation
+        shell: pwsh
+        run: |
+          & "windows/packaging/test_prototype_installer.ps1" `
+            -InstallerPath $env:PALMIER_INSTALLER `
+            -WorkRoot (Join-Path $env:RUNNER_TEMP "palmier-installer-test")
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Upload unsigned prototype installer evidence
+        uses: actions/upload-artifact@v6
+        with:
+          name: palmier-pro-windows-unsigned-prototype-${{ github.sha }}
+          path: ${{ runner.temp }}/palmier-installer-output
+          if-no-files-found: error
+          retention-days: 14

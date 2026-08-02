@@ -10,9 +10,12 @@ checks, the compiled MSVC contract probe, and a safe-edit C++ project document.
 It now includes an optional Qt project shell, isolated media/audio prototypes,
 one bounded project-driven H.264 export slice, a three-tool loopback MCP editing
 slice, and an atomic `project.json` edit-save-restart slice with stable-ID Split,
-Undo, explicit Save, and dirty-close protection in Qt. It does not yet provide
-general timeline editing, autosave, Save As, audio export, integrated export UI,
-or an installer.
+Undo, explicit Save, and dirty-close protection in Qt. The Qt workflow also
+builds an unsigned x64 prototype installer with a runtime hash manifest and
+distribution evidence, then tests isolated staging, install, launch, uninstall,
+and external user-data preservation. It does not yet provide general timeline
+editing, autosave, Save As, audio export, integrated export UI, a signed release
+installer, or clean Windows 10 19045 acceptance.
 
 - Requirements: `docs/WINDOWS_10_PORT_REQUIREMENTS.zh-CN.md`
 - Decisions: `docs/windows/adr/`
@@ -94,6 +97,19 @@ commit. A dedicated Qt persistence controller runs Save on a bounded background
 pool, blocks dirty project replacement, waits for an admitted save during close,
 and presents Save, Discard, and Cancel for dirty windows. Autosave, Save As, and
 package-wide transactions remain open; see ADR 0028 through ADR 0031.
+
+The same Qt workflow stages the Release executable through CMake install, runs
+the pinned `windeployqt` QML deployment, requires the complete app-local FFmpeg
+DLL set, and includes exact Qt, FFmpeg, Palmier Pro, and Visual C++ runtime
+notices or records. A compiled probe refuses GPL/nonfree FFmpeg configuration
+and writes runtime license/configuration evidence. The pinned Inno Setup 7.0.2
+x64 compiler is release-attestation and Authenticode verified before it builds
+the unsigned installer. CI then launches the staged and installed application
+without development Qt/vcpkg paths, uninstalls it, verifies external user data
+survives, and uploads the installer plus evidence for 14 days. This is Windows
+Server 2022 automation, not clean Windows 10 certification or public-release
+approval; see ADR 0033 and
+`docs/windows/PROTOTYPE_REDISTRIBUTION_CONCLUSION.md`.
 
 The render boundary is also compiled in Windows CI.
 `core/render` defines the immutable v1 RenderPlan and CPU oracle;

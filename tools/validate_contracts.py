@@ -1334,7 +1334,7 @@ def windows_bootstrap_contract() -> None:
             "Qt": ["6.10.3", "prototype-locked"],
             "FFmpeg": ["8.1.2", "prototype-locked"],
             "ONNX Runtime": ["1.28.0", "prototype-locked"],
-            "Inno Setup": ["7.0.2", "prototype-locked"],
+            "Inno Setup": ["7.0.2", "prototype-ci-active"],
         },
     )
     qt = next(
@@ -1369,7 +1369,7 @@ def windows_bootstrap_contract() -> None:
     cmake = read_text("CMakeLists.txt")
     for token in [
         "cmake_minimum_required(VERSION 3.31)",
-        "project(PalmierProWindowsContracts LANGUAGES CXX)",
+        "project(PalmierProWindowsContracts VERSION 0.6.16 LANGUAGES CXX)",
         "if(NOT WIN32)",
         "if(NOT MSVC)",
         "if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)",
@@ -4991,6 +4991,136 @@ def windows_mcp_project_session_contract() -> None:
             raise ContractError(f"Windows README missing MCP service token {token!r}")
 
 
+def windows_prototype_packaging_contract() -> None:
+    root_cmake = read_text("CMakeLists.txt")
+    app_cmake = read_text("windows/app/CMakeLists.txt")
+    packaging_cmake = read_text("windows/packaging/CMakeLists.txt")
+    probe = read_text("windows/packaging/distribution_probe.cpp")
+    stage = read_text("windows/packaging/stage_prototype.ps1")
+    installer_test = read_text("windows/packaging/test_prototype_installer.ps1")
+    installer = read_text("windows/packaging/prototype-installer.iss")
+    notice = read_text("windows/packaging/THIRD_PARTY_NOTICES.prototype.txt")
+    workflow = read_text(".github/workflows/windows-qt-shell.yml")
+    adr = read_text("docs/windows/adr/0033-unsigned-prototype-installer.md")
+    conclusion = read_text("docs/windows/PROTOTYPE_REDISTRIBUTION_CONCLUSION.md")
+
+    for token in [
+        "add_subdirectory(windows/packaging)",
+        "project(PalmierProWindowsContracts VERSION 0.6.16 LANGUAGES CXX)",
+    ]:
+        if token not in root_cmake:
+            raise ContractError(f"Windows packaging root CMake missing token {token!r}")
+    for token in ["install(", "TARGETS palmier_qt_shell", "COMPONENT prototype"]:
+        if token not in app_cmake:
+            raise ContractError(f"Qt prototype install rule missing token {token!r}")
+    for token in [
+        "palmier_ffmpeg_distribution_probe",
+        "PRIVATE palmier_ffmpeg",
+        "/W4 /WX /permissive- /Zc:__cplusplus /utf-8",
+        "packaging.ffmpeg_distribution_probe",
+    ]:
+        if token not in packaging_cmake:
+            raise ContractError(f"FFmpeg distribution-probe CMake missing token {token!r}")
+    for token in [
+        "avcodec_license()",
+        "avformat_configuration()",
+        "swresample_license()",
+        '"--enable-gpl"',
+        '"--enable-nonfree"',
+        'contains(license, "LGPL")',
+    ]:
+        if token not in probe:
+            raise ContractError(f"FFmpeg distribution probe missing token {token!r}")
+    for token in [
+        "cmake --install $build --config Release --prefix $stage --component prototype",
+        "windeployqt.exe",
+        "--no-compiler-runtime",
+        "Qt6Core.dll",
+        "platforms\\qwindows.dll",
+        "avcodec-*.dll",
+        "LICENSES",
+        "vcpkg_installed\\x64-windows\\share\\ffmpeg\\copyright",
+        "vc_redist.x64.exe",
+        "palmier_ffmpeg_distribution_probe.exe",
+        "RUNTIME_MANIFEST.json",
+        "Get-FileHash",
+        "AppLocalDllNames",
+        "imageformats|iconengines|styles|networkinformation|tls|generic",
+        "Unclassified runtime binary",
+        "LGPL-3.0-only.txt",
+    ]:
+        if token not in stage:
+            raise ContractError(f"Prototype staging script missing token {token!r}")
+    for token in [
+        "SetupArchitecture=x64",
+        "MinVersion=10.0.19045",
+        "PrivilegesRequired=admin",
+        "THIRD_PARTY_NOTICES.txt",
+        "redist\\vc_redist.x64.exe",
+        "dontcopy noencryption",
+        "function PrepareToInstall(var NeedsRestart: Boolean): String;",
+        "ExtractTemporaryFile('vc_redist.x64.exe')",
+        "ResultCode = 3010",
+        "ResultCode <> 0",
+    ]:
+        if token not in installer:
+            raise ContractError(f"Prototype installer missing token {token!r}")
+    if "[Run]" in installer:
+        raise ContractError("prototype prerequisites must fail through PrepareToInstall")
+    if "[UninstallDelete]" in installer or ".palmier" in installer:
+        raise ContractError("prototype installer must not recursively target install or project data")
+    for token in [
+        '$env:PATH = "$env:SystemRoot\\System32;$env:SystemRoot"',
+        "--smoke-test",
+        "unins000.exe",
+        "preserve-me.txt",
+        "Uninstall removed external user project data.",
+    ]:
+        if token not in installer_test:
+            raise ContractError(f"Prototype installer test missing token {token!r}")
+    for token in [
+        "gh release download is-7_0_2",
+        "gh release verify-asset",
+        "Get-AuthenticodeSignature",
+        "Pyrsys B\\.V\\.",
+        "Microsoft.VCRedistVersion.default.txt",
+        "$redistVersion -notmatch '^14\\.44\\.'",
+        "actions/upload-artifact@v6",
+        "test_prototype_installer.ps1",
+        "retention-days: 14",
+    ]:
+        if token not in workflow:
+            raise ContractError(f"Prototype packaging workflow missing token {token!r}")
+    if 'Redist\\MSVC\\$tools' in workflow:
+        raise ContractError("prototype workflow must resolve the independent redist version")
+    for token in [
+        "not approved",
+        "dynamically linked DLLs",
+        "codec-patent review",
+        "Commercial use requires",
+    ]:
+        if token not in notice:
+            raise ContractError(f"Prototype third-party notice missing token {token!r}")
+    for token in [
+        "Windows Server 2022",
+        "clean Windows 10 19045",
+        "Public release remains blocked",
+        "User projects remain outside the install root",
+    ]:
+        if token not in adr:
+            raise ContractError(f"Prototype installer ADR missing token {token!r}")
+    for token in [
+        "GO WITH CONDITIONS for internal Technical MVP testing",
+        "Public release: **NO-GO**",
+        "not legal advice",
+        "RUNTIME_MANIFEST.json",
+        "Clean Windows 10 19045 gate",
+        "Release blockers",
+    ]:
+        if token not in conclusion:
+            raise ContractError(f"Redistribution conclusion missing token {token!r}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Palmier contract snapshots")
     parser.add_argument(
@@ -5024,6 +5154,7 @@ def main() -> int:
         ("Windows Qt native preview host", windows_qt_preview_host_contract),
         ("Windows project H.264 export", windows_h264_project_export_contract),
         ("Windows MCP ProjectSession and loopback HTTP", windows_mcp_project_session_contract),
+        ("Windows unsigned prototype packaging", windows_prototype_packaging_contract),
     ]
     for label, check in checks:
         check()
