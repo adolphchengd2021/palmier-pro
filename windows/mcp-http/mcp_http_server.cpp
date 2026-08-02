@@ -3,30 +3,53 @@
 #endif
 
 #include "palmier/mcp/mcp_http_server.hpp"
+#include "mcp_http_server_testing.hpp"
 
 #include "palmier/json/json_document.hpp"
 
 #include <WinSock2.h>
 #include <WS2tcpip.h>
+#include <Windows.h>
 
 #include <algorithm>
 #include <array>
 #include <charconv>
 #include <chrono>
 #include <cctype>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <iostream>
 #include <limits>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
+
+namespace palmier::mcp::testing {
+
+std::uint32_t socketTimeoutMilliseconds(
+    std::chrono::steady_clock::time_point now,
+    std::chrono::steady_clock::time_point deadline
+) noexcept {
+    if (now >= deadline) return 0;
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - now
+    ).count();
+    if (remaining <= 0) return 1;
+    return static_cast<std::uint32_t>(std::min<std::int64_t>(remaining, 1500));
+}
+
+}
 
 namespace palmier::mcp {
 namespace {
@@ -41,6 +64,7 @@ constexpr std::size_t maximumHeaderBytes = 64 * 1024;
 constexpr std::size_t maximumBodyBytes = 16 * 1024 * 1024;
 constexpr std::size_t maximumSessions = 32;
 constexpr auto sessionIdleTimeout = std::chrono::minutes(5);
+constexpr auto maximumRequestLifetime = std::chrono::seconds(5);
 
 class SocketSystem final {
 public:
@@ -85,6 +109,38 @@ private:
     SOCKET value_;
 };
 
+class UniqueHandle final {
+public:
+    explicit UniqueHandle(HANDLE value = nullptr) : value_(value) {}
+    ~UniqueHandle() {
+        if (value_ != nullptr) CloseHandle(value_);
+    }
+
+    UniqueHandle(const UniqueHandle&) = delete;
+    UniqueHandle& operator=(const UniqueHandle&) = delete;
+
+    HANDLE get() const noexcept { return value_; }
+
+private:
+    HANDLE value_;
+};
+
+class WinsockEvent final {
+public:
+    explicit WinsockEvent(WSAEVENT value = WSA_INVALID_EVENT) : value_(value) {}
+    ~WinsockEvent() {
+        if (value_ != WSA_INVALID_EVENT) WSACloseEvent(value_);
+    }
+
+    WinsockEvent(const WinsockEvent&) = delete;
+    WinsockEvent& operator=(const WinsockEvent&) = delete;
+
+    WSAEVENT get() const noexcept { return value_; }
+
+private:
+    WSAEVENT value_;
+};
+
 struct HttpRequest final {
     std::string method;
     std::string path;
@@ -115,6 +171,43 @@ public:
     const int status;
     const std::string reason;
 };
+
+class RequestCancelled final : public std::exception {};
+
+void checkRequestBoundary(
+    std::stop_token cancellation,
+    std::chrono::steady_clock::time_point deadline
+) {
+    if (cancellation.stop_requested()) throw RequestCancelled();
+    if (std::chrono::steady_clock::now() >= deadline) {
+        throw HttpError(408, "Request Timeout", "HTTP request exceeded five seconds");
+    }
+}
+
+void setSocketOperationTimeout(
+    SOCKET socketValue,
+    int option,
+    std::stop_token cancellation,
+    std::chrono::steady_clock::time_point deadline
+) {
+    checkRequestBoundary(cancellation, deadline);
+    const DWORD timeoutMilliseconds = testing::socketTimeoutMilliseconds(
+        std::chrono::steady_clock::now(),
+        deadline
+    );
+    if (timeoutMilliseconds == 0) {
+        throw HttpError(408, "Request Timeout", "HTTP request exceeded five seconds");
+    }
+    if (setsockopt(
+        socketValue,
+        SOL_SOCKET,
+        option,
+        reinterpret_cast<const char*>(&timeoutMilliseconds),
+        static_cast<int>(sizeof(timeoutMilliseconds))
+    ) == SOCKET_ERROR) {
+        throw std::runtime_error("cannot bound MCP socket operation to its deadline");
+    }
+}
 
 Number integerNumber(std::int64_t value) {
     return {std::to_string(value), value};
@@ -148,13 +241,22 @@ std::size_t parseContentLength(std::string_view value) {
     return parsed;
 }
 
-HttpRequest readRequest(SOCKET clientSocket) {
+HttpRequest readRequest(
+    SOCKET clientSocket,
+    std::stop_token cancellation,
+    std::chrono::steady_clock::time_point deadline,
+    const std::shared_ptr<HttpServerObserver>& observer
+) {
     std::string bytes;
     bytes.reserve(8192);
     std::array<char, 8192> buffer{};
     std::size_t headerEnd = std::string::npos;
     while (headerEnd == std::string::npos) {
+        checkRequestBoundary(cancellation, deadline);
+        if (observer) observer->clientReceiveWaiting(bytes.size());
+        setSocketOperationTimeout(clientSocket, SO_RCVTIMEO, cancellation, deadline);
         const auto received = recv(clientSocket, buffer.data(), static_cast<int>(buffer.size()), 0);
+        checkRequestBoundary(cancellation, deadline);
         if (received == 0) {
             throw HttpError(400, "Bad Request", "connection closed before HTTP headers");
         }
@@ -213,26 +315,39 @@ HttpRequest readRequest(SOCKET clientSocket) {
     }
     request.body.assign(bytes.data() + bodyStart, bytes.size() - bodyStart);
     while (request.body.size() < contentLength) {
+        checkRequestBoundary(cancellation, deadline);
+        if (observer) observer->clientReceiveWaiting(request.body.size());
+        setSocketOperationTimeout(clientSocket, SO_RCVTIMEO, cancellation, deadline);
         const auto remaining = contentLength - request.body.size();
         const auto amount = static_cast<int>(std::min(remaining, buffer.size()));
         const auto received = recv(clientSocket, buffer.data(), amount, 0);
+        checkRequestBoundary(cancellation, deadline);
         if (received <= 0) {
             throw HttpError(400, "Bad Request", "connection closed before request body");
         }
         request.body.append(buffer.data(), static_cast<std::size_t>(received));
     }
+    checkRequestBoundary(cancellation, deadline);
     return request;
 }
 
-void sendAll(SOCKET clientSocket, std::string_view bytes) {
+void sendAll(
+    SOCKET clientSocket,
+    std::string_view bytes,
+    std::stop_token cancellation,
+    std::chrono::steady_clock::time_point deadline
+) {
     std::size_t sent = 0;
     while (sent < bytes.size()) {
+        checkRequestBoundary(cancellation, deadline);
+        setSocketOperationTimeout(clientSocket, SO_SNDTIMEO, cancellation, deadline);
         const auto remaining = bytes.size() - sent;
         const auto chunk = static_cast<int>(std::min(
             remaining,
             static_cast<std::size_t>(std::numeric_limits<int>::max())
         ));
         const auto result = send(clientSocket, bytes.data() + sent, chunk, 0);
+        checkRequestBoundary(cancellation, deadline);
         if (result == SOCKET_ERROR || result == 0) {
             throw std::runtime_error("cannot send HTTP response");
         }
@@ -240,7 +355,12 @@ void sendAll(SOCKET clientSocket, std::string_view bytes) {
     }
 }
 
-void sendResponse(SOCKET clientSocket, HttpResponse response) {
+void sendResponse(
+    SOCKET clientSocket,
+    HttpResponse response,
+    std::stop_token cancellation,
+    std::chrono::steady_clock::time_point deadline
+) {
     response.headers.emplace("Connection", "close");
     response.headers.emplace("Content-Length", std::to_string(response.body.size()));
     if (!response.body.empty() && !response.headers.contains("Content-Type")) {
@@ -252,7 +372,7 @@ void sendResponse(SOCKET clientSocket, HttpResponse response) {
         output << name << ": " << value << "\r\n";
     }
     output << "\r\n" << response.body;
-    sendAll(clientSocket, output.str());
+    sendAll(clientSocket, output.str(), cancellation, deadline);
 }
 
 const Value& requiredField(const Object& object, std::string_view key) {
@@ -724,16 +844,15 @@ HttpResponse errorResponse(const HttpError& error) {
     );
 }
 
-}
-
-int runHttpServer(
+void serveHttpServer(
     palmier::project::ProjectRuntime& projectRuntime,
     const HttpServerOptions& options,
-    const std::function<std::string()>& sessionIdGenerator
+    const std::function<std::string()>& sessionIdGenerator,
+    std::stop_token cancellation,
+    HANDLE stopEvent,
+    const std::shared_ptr<HttpServerObserver>& observer,
+    const std::function<void(std::uint16_t)>& ready
 ) {
-    if (!sessionIdGenerator) {
-        throw std::runtime_error("MCP server requires a session ID generator");
-    }
     SocketSystem socketSystem;
     Socket listener(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
     if (listener.get() == INVALID_SOCKET) {
@@ -763,12 +882,51 @@ int runHttpServer(
     if (listen(listener.get(), SOMAXCONN) == SOCKET_ERROR) {
         throw std::runtime_error("cannot listen for MCP requests");
     }
-
-    std::cout << "PALMIER_WINDOWS_MCP_READY 127.0.0.1:" << options.port << '\n';
-    std::cout.flush();
+    WinsockEvent listenerEvent(WSACreateEvent());
+    if (listenerEvent.get() == WSA_INVALID_EVENT) {
+        throw std::runtime_error("cannot create MCP listener event");
+    }
+    if (WSAEventSelect(listener.get(), listenerEvent.get(), FD_ACCEPT) == SOCKET_ERROR) {
+        throw std::runtime_error("cannot make MCP listener wait cancellable");
+    }
+    sockaddr_in boundAddress{};
+    int boundAddressSize = static_cast<int>(sizeof(boundAddress));
+    if (getsockname(
+        listener.get(),
+        reinterpret_cast<sockaddr*>(&boundAddress),
+        &boundAddressSize
+    ) == SOCKET_ERROR) {
+        throw std::runtime_error("cannot inspect MCP listener address");
+    }
+    const auto boundPort = ntohs(boundAddress.sin_port);
+    if (cancellation.stop_requested()) return;
+    ready(boundPort);
     std::map<std::string, SessionState, std::less<>> sessions;
     bool shouldExit = false;
-    while (!shouldExit) {
+    while (!shouldExit && !cancellation.stop_requested()) {
+        const std::array<HANDLE, 2> events{stopEvent, listenerEvent.get()};
+        const auto waitResult = WaitForMultipleObjects(
+            static_cast<DWORD>(events.size()),
+            events.data(),
+            FALSE,
+            INFINITE
+        );
+        if (waitResult == WAIT_OBJECT_0) break;
+        if (waitResult != WAIT_OBJECT_0 + 1) {
+            throw std::runtime_error("cannot wait for MCP listener events");
+        }
+        WSANETWORKEVENTS networkEvents{};
+        if (WSAEnumNetworkEvents(
+            listener.get(),
+            listenerEvent.get(),
+            &networkEvents
+        ) == SOCKET_ERROR) {
+            throw std::runtime_error("cannot inspect MCP listener events");
+        }
+        if ((networkEvents.lNetworkEvents & FD_ACCEPT) == 0) continue;
+        if (networkEvents.iErrorCode[FD_ACCEPT_BIT] != 0) {
+            throw std::runtime_error("MCP listener reported an accept failure");
+        }
         sockaddr_in peer{};
         int peerSize = static_cast<int>(sizeof(peer));
         Socket client(accept(
@@ -777,37 +935,44 @@ int runHttpServer(
             &peerSize
         ));
         if (client.get() == INVALID_SOCKET) {
+            if (WSAGetLastError() == WSAEWOULDBLOCK) continue;
             throw std::runtime_error("cannot accept MCP connection");
         }
-        const DWORD timeoutMilliseconds = 1500;
+        if (cancellation.stop_requested()) break;
+        u_long blockingMode = 0;
         if (
-            setsockopt(
-                client.get(),
-                SOL_SOCKET,
-                SO_RCVTIMEO,
-                reinterpret_cast<const char*>(&timeoutMilliseconds),
-                static_cast<int>(sizeof(timeoutMilliseconds))
-            ) == SOCKET_ERROR
-            || setsockopt(
-                client.get(),
-                SOL_SOCKET,
-                SO_SNDTIMEO,
-                reinterpret_cast<const char*>(&timeoutMilliseconds),
-                static_cast<int>(sizeof(timeoutMilliseconds))
-            ) == SOCKET_ERROR
+            WSAEventSelect(client.get(), nullptr, 0) == SOCKET_ERROR
+            || ioctlsocket(client.get(), FIONBIO, &blockingMode) == SOCKET_ERROR
         ) {
-            throw std::runtime_error("cannot bound MCP connection timeouts");
+            throw std::runtime_error("cannot make MCP client socket blocking");
         }
+        if (observer) observer->clientAdmitted();
+        const auto requestDeadline = std::chrono::steady_clock::now()
+            + maximumRequestLifetime;
         if (peer.sin_addr.s_addr != htonl(INADDR_LOOPBACK)) {
             try {
-                sendResponse(client.get(), {403, "Forbidden", {}, {}});
+                sendResponse(
+                    client.get(),
+                    {403, "Forbidden", {}, {}},
+                    cancellation,
+                    requestDeadline
+                );
+            } catch (const RequestCancelled&) {
+                break;
             } catch (const std::exception&) {
             }
             continue;
         }
         HttpResponse response;
+        bool requestParsed = false;
         try {
-            const auto request = readRequest(client.get());
+            const auto request = readRequest(
+                client.get(),
+                cancellation,
+                requestDeadline,
+                observer
+            );
+            requestParsed = true;
             response = handleRequest(
                 request,
                 projectRuntime,
@@ -816,6 +981,8 @@ int runHttpServer(
                 sessions,
                 shouldExit
             );
+        } catch (const RequestCancelled&) {
+            break;
         } catch (const HttpError& error) {
             response = errorResponse(error);
         } catch (const std::exception& error) {
@@ -826,9 +993,205 @@ int runHttpServer(
             );
         }
         try {
-            sendResponse(client.get(), std::move(response));
+            const auto responseCancellation = requestParsed
+                ? std::stop_token{}
+                : cancellation;
+            sendResponse(
+                client.get(),
+                std::move(response),
+                responseCancellation,
+                std::chrono::steady_clock::now() + maximumRequestLifetime
+            );
+        } catch (const RequestCancelled&) {
+            break;
         } catch (const std::exception&) {
         }
+    }
+}
+
+}
+
+struct HttpServerService::Implementation final {
+    Implementation(
+        palmier::project::ProjectRuntime& projectRuntimeValue,
+        HttpServerOptions optionsValue,
+        std::function<std::string()> sessionIdGeneratorValue,
+        std::shared_ptr<HttpServerObserver> observerValue
+    )
+        : projectRuntime(projectRuntimeValue),
+          options(optionsValue),
+          sessionIdGenerator(std::move(sessionIdGeneratorValue)),
+          observer(std::move(observerValue)),
+          stopEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {
+        if (!sessionIdGenerator) {
+            throw std::runtime_error("MCP server requires a session ID generator");
+        }
+        if (stopEvent.get() == nullptr) {
+            throw std::runtime_error("cannot create MCP server stop event");
+        }
+    }
+
+    ~Implementation() {
+        requestStop();
+        join();
+    }
+
+    Implementation(const Implementation&) = delete;
+    Implementation& operator=(const Implementation&) = delete;
+
+    void start() {
+        std::scoped_lock threadLock(threadMutex);
+        {
+            std::scoped_lock statusLock(statusMutex);
+            if (statusValue.state != HttpServerState::idle) {
+                throw std::runtime_error("MCP server service can only be started once");
+            }
+            statusValue = {HttpServerState::starting, 0, {}};
+        }
+        statusCondition.notify_all();
+        try {
+            worker = std::thread([this] { run(); });
+        } catch (const std::exception& error) {
+            publish({HttpServerState::failed, 0, error.what()});
+            throw;
+        }
+    }
+
+    void requestStop() noexcept {
+        {
+            std::scoped_lock lock(statusMutex);
+            stopSource.request_stop();
+            if (statusValue.state == HttpServerState::idle) {
+                statusValue = {HttpServerState::stopped, 0, {}};
+            }
+        }
+        statusCondition.notify_all();
+        static_cast<void>(SetEvent(stopEvent.get()));
+    }
+
+    void join() noexcept {
+        std::scoped_lock threadLock(threadMutex);
+        if (!worker.joinable() || worker.get_id() == std::this_thread::get_id()) return;
+        worker.join();
+    }
+
+    HttpServerStatus status() const {
+        std::scoped_lock lock(statusMutex);
+        return statusValue;
+    }
+
+    HttpServerStatus waitForReadyOrTerminal() {
+        std::unique_lock lock(statusMutex);
+        statusCondition.wait(lock, [this] {
+            return statusValue.state == HttpServerState::ready
+                || statusValue.state == HttpServerState::failed
+                || statusValue.state == HttpServerState::stopped;
+        });
+        return statusValue;
+    }
+
+    void publish(HttpServerStatus value) noexcept {
+        {
+            std::scoped_lock lock(statusMutex);
+            statusValue = std::move(value);
+        }
+        statusCondition.notify_all();
+    }
+
+    void publishReady(std::uint16_t port) noexcept {
+        {
+            std::scoped_lock lock(statusMutex);
+            if (stopSource.stop_requested()) return;
+            statusValue = {HttpServerState::ready, port, {}};
+        }
+        statusCondition.notify_all();
+    }
+
+    void run() noexcept {
+        try {
+            serveHttpServer(
+                projectRuntime,
+                options,
+                sessionIdGenerator,
+                stopSource.get_token(),
+                stopEvent.get(),
+                observer,
+                [this](std::uint16_t port) { publishReady(port); }
+            );
+            publish({HttpServerState::stopped, status().port, {}});
+        } catch (const std::exception& error) {
+            if (stopSource.stop_requested()) {
+                publish({HttpServerState::stopped, status().port, {}});
+            } else {
+                publish({HttpServerState::failed, 0, error.what()});
+            }
+        } catch (...) {
+            if (stopSource.stop_requested()) {
+                publish({HttpServerState::stopped, status().port, {}});
+            } else {
+                publish({HttpServerState::failed, 0, "unknown MCP server failure"});
+            }
+        }
+    }
+
+    palmier::project::ProjectRuntime& projectRuntime;
+    const HttpServerOptions options;
+    const std::function<std::string()> sessionIdGenerator;
+    const std::shared_ptr<HttpServerObserver> observer;
+    std::stop_source stopSource;
+    UniqueHandle stopEvent;
+    mutable std::mutex statusMutex;
+    std::condition_variable statusCondition;
+    HttpServerStatus statusValue;
+    std::mutex threadMutex;
+    std::thread worker;
+};
+
+HttpServerService::HttpServerService(
+    palmier::project::ProjectRuntime& projectRuntime,
+    HttpServerOptions options,
+    std::function<std::string()> sessionIdGenerator,
+    std::shared_ptr<HttpServerObserver> observer
+)
+    : implementation_(std::make_unique<Implementation>(
+        projectRuntime,
+        options,
+        std::move(sessionIdGenerator),
+        std::move(observer)
+    )) {}
+
+HttpServerService::~HttpServerService() = default;
+
+void HttpServerService::start() { implementation_->start(); }
+
+void HttpServerService::requestStop() noexcept { implementation_->requestStop(); }
+
+void HttpServerService::join() noexcept { implementation_->join(); }
+
+HttpServerStatus HttpServerService::status() const { return implementation_->status(); }
+
+HttpServerStatus HttpServerService::waitForReadyOrTerminal() {
+    return implementation_->waitForReadyOrTerminal();
+}
+
+int runHttpServer(
+    palmier::project::ProjectRuntime& projectRuntime,
+    const HttpServerOptions& options,
+    const std::function<std::string()>& sessionIdGenerator
+) {
+    HttpServerService service(projectRuntime, options, sessionIdGenerator);
+    service.start();
+    const auto ready = service.waitForReadyOrTerminal();
+    if (ready.state == HttpServerState::failed) {
+        throw std::runtime_error(ready.error);
+    }
+    if (ready.state != HttpServerState::ready) return 0;
+    std::cout << "PALMIER_WINDOWS_MCP_READY 127.0.0.1:" << ready.port << '\n';
+    std::cout.flush();
+    service.join();
+    const auto terminal = service.status();
+    if (terminal.state == HttpServerState::failed) {
+        throw std::runtime_error(terminal.error);
     }
     return 0;
 }

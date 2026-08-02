@@ -4544,13 +4544,23 @@ def windows_mcp_project_session_contract() -> None:
         "core/project-runtime/tests/project_runtime_tests.cpp"
     )
     runtime_cmake = read_text("core/project-runtime/CMakeLists.txt")
+    server_header = read_text(
+        "windows/mcp-http/include/palmier/mcp/mcp_http_server.hpp"
+    )
     server_source = read_text("windows/mcp-http/mcp_http_server.cpp")
     server_main = read_text("windows/mcp-http/app/main.cpp")
     server_cmake = read_text("windows/mcp-http/CMakeLists.txt")
+    service_tests = read_text(
+        "windows/mcp-http/tests/mcp_http_service_tests.cpp"
+    )
+    service_testing_header = read_text(
+        "windows/mcp-http/internal/mcp_http_server_testing.hpp"
+    )
     e2e = read_text("windows/mcp-http/tests/mcp_http_e2e.py")
     root_cmake = read_text("CMakeLists.txt")
     adr = read_text("docs/windows/adr/0026-loopback-mcp-project-session.md")
     runtime_adr = read_text("docs/windows/adr/0027-serial-project-runtime.md")
+    service_adr = read_text("docs/windows/adr/0028-stoppable-embedded-mcp-service.md")
     readme = read_text("docs/windows/README.md")
     for token in [
         "class ProjectSession final",
@@ -4648,6 +4658,16 @@ def windows_mcp_project_session_contract() -> None:
         if token not in runtime_adr:
             raise ContractError(f"ProjectRuntime ADR missing token {token!r}")
     for token in [
+        "class HttpServerService final",
+        "HttpServerStatus",
+        "class HttpServerObserver",
+        "void requestStop() noexcept",
+        "void join() noexcept",
+        "waitForReadyOrTerminal",
+    ]:
+        if token not in server_header:
+            raise ContractError(f"Windows MCP service API missing token {token!r}")
+    for token in [
         "INADDR_LOOPBACK",
         "SO_EXCLUSIVEADDRUSE",
         "maximumHeaderBytes",
@@ -4666,6 +4686,16 @@ def windows_mcp_project_session_contract() -> None:
         "MCP protocol version",
         "tools/list",
         "tools/call",
+        "stopSource.request_stop()",
+        "cancellation.stop_requested()",
+        "getsockname(",
+        "WSAEventSelect(",
+        "WaitForMultipleObjects(",
+        "SetEvent(stopEvent.get())",
+        "maximumRequestLifetime",
+        "checkRequestBoundary(",
+        "setSocketOperationTimeout(",
+        "testing::socketTimeoutMilliseconds(",
     ]:
         if token not in server_source:
             raise ContractError(f"Windows MCP server invariant missing token {token!r}")
@@ -4675,11 +4705,31 @@ def windows_mcp_project_session_contract() -> None:
     for token in [
         "palmier_windows_mcp",
         "mcp.http_split_undo_e2e",
+        "mcp.http_service_lifecycle",
         "RESOURCE_LOCK palmier_mcp_port_19789",
         "RUN_SERIAL TRUE",
     ]:
         if token not in server_cmake:
             raise ContractError(f"Windows MCP CMake missing token {token!r}")
+    for token in [
+        "stopUnblocksAcceptAndReleasesPort",
+        "ephemeralOptions.port = 0",
+        "exclusive bind failure must publish a terminal error",
+        "released listener port must bind again",
+        "observer->waitForReceiveWaits(2)",
+        "stop must bound an admitted partial request",
+        "socketTimeoutTracksRemainingDeadline",
+        "socket timeout must shrink to the remaining deadline",
+    ]:
+        if token not in service_tests:
+            raise ContractError(f"Windows MCP service test missing token {token!r}")
+    for token in [
+        "socketTimeoutMilliseconds(",
+        "steady_clock::time_point now",
+        "steady_clock::time_point deadline",
+    ]:
+        if token not in service_testing_header:
+            raise ContractError(f"Windows MCP test seam missing token {token!r}")
     for token in [
         "hostile Origin must be rejected",
         "technical MVP discovery schema drift",
@@ -4711,6 +4761,17 @@ def windows_mcp_project_session_contract() -> None:
     for token in ["three-tool loopback MCP", "ADR 0026"]:
         if token not in readme:
             raise ContractError(f"Windows README missing token {token!r}")
+    for token in [
+        "only thread that closes the listener",
+        "already accepted before cancellation",
+        "must not start, stop, join",
+        "stop then join",
+    ]:
+        if token not in service_adr:
+            raise ContractError(f"Windows MCP service ADR missing token {token!r}")
+    for token in ["stoppable `HttpServerService`", "ADR 0028"]:
+        if token not in readme:
+            raise ContractError(f"Windows README missing MCP service token {token!r}")
 
 
 def main() -> int:

@@ -73,6 +73,15 @@ integration, project persistence, Windows 10 runtime behavior, or the remaining
 MCP surface. See ADR 0026, ADR 0027, and
 `contracts/mcp/v1/windows-technical-mvp.json`.
 
+The HTTP implementation also exposes a stoppable `HttpServerService` for future
+Qt ownership. It starts off the caller thread, publishes the actual bound
+loopback port or a terminal failure, uses a Windows stop event to wake the
+worker-owned listener without polling, bounds an already admitted connection by
+cancellation checks and socket timeouts reduced to the remaining total deadline,
+and joins before destruction. A lifecycle CTest stops a partial request at its
+second receive boundary, releases the port, then stops an idle rebound server.
+Qt sharing and close ordering remain unproved; see ADR 0028.
+
 The render boundary is also compiled in Windows CI.
 `core/render` defines the immutable v1 RenderPlan and CPU oracle;
 `windows/render-d3d11` consumes it through a headless feature-level 11_0 WARP

@@ -2,6 +2,10 @@ set(mcp_http_include_dir "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 add_library(palmier_mcp_http STATIC mcp_http_server.cpp)
 target_include_directories(palmier_mcp_http PUBLIC "${mcp_http_include_dir}")
+target_include_directories(
+    palmier_mcp_http
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/internal"
+)
 target_compile_features(palmier_mcp_http PUBLIC cxx_std_20)
 target_link_libraries(palmier_mcp_http PUBLIC palmier_project_runtime Ws2_32)
 
@@ -13,6 +17,24 @@ foreach(target palmier_mcp_http palmier_windows_mcp)
 endforeach()
 
 if(BUILD_TESTING)
+    add_executable(mcp_http_service_tests tests/mcp_http_service_tests.cpp)
+    target_link_libraries(mcp_http_service_tests PRIVATE palmier_mcp_http)
+    target_include_directories(
+        mcp_http_service_tests
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/internal"
+    )
+    target_compile_options(
+        mcp_http_service_tests
+        PRIVATE /W4 /WX /permissive- /Zc:__cplusplus /utf-8
+    )
+    add_test(NAME mcp.http_service_lifecycle COMMAND mcp_http_service_tests)
+    set_tests_properties(
+        mcp.http_service_lifecycle
+        PROPERTIES
+            TIMEOUT 15
+            LABELS "mcp;unit"
+    )
+
     find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
     add_test(
         NAME mcp.http_split_undo_e2e
