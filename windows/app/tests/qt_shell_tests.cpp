@@ -1459,10 +1459,10 @@ private slots:
         if (failure) std::rethrow_exception(failure);
         QCOMPARE(
             preview.availability,
-            palmier::windows::PreviewCandidateAvailability::ready
+            palmier::windows::PreviewCandidateAvailability::available
         );
         QVERIFY(preview.candidate.has_value());
-        QCOMPARE(preview.candidate->clipId, std::string("trimmed"));
+        QCOMPARE(preview.candidate->renderLayer.clipId, std::string("trimmed"));
         QCOMPARE(preview.candidate->renderLayer.sourceStartFrame, std::int64_t{1});
     }
 
