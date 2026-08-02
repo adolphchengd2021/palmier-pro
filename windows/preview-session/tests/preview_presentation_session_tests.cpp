@@ -830,7 +830,7 @@ void invalidAndStaleRequestsDoNotReachOwnedPorts() {
 void pauseResumePreservesGenerationAndCachedFrame() {
     Fixture fixture;
     start(fixture);
-    fixture.playback->ticks.push_back(tickReceipt(1, 3, 3072));
+    enqueueFrame(fixture, 3'072, 3);
     require(
         fixture.session->tick(1).outcome == PreviewPresentationOutcome::presented,
         "transport setup did not present"
