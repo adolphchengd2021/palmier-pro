@@ -379,9 +379,13 @@ private slots:
             splittableProjectJson,
             [] { return std::string("generated"); }
         );
-        static_cast<void>(runtime->install(std::move(document), 13, [] {
-            return std::string("cancel-generated");
-        }));
+        static_cast<void>(runtime->install(
+            std::move(document),
+            13,
+            [nextId = 0]() mutable {
+                return "cancel-generated-" + std::to_string(++nextId);
+            }
+        ));
         static_cast<void>(runtime->splitClips({
             std::vector<palmier::project::SplitPoint>{{"clip", 10}},
             std::nullopt,
