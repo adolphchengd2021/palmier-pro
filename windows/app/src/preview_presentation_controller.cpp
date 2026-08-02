@@ -1181,6 +1181,11 @@ void PreviewPresentationController::completeOperation(OperationResult result) {
             servicePendingWork();
             return;
         }
+        if (outcome == preview::PreviewPresentationOutcome::cancelled
+            && pendingSeek_) {
+            servicePendingWork();
+            return;
+        }
         setState(presentationStateName(result.receipt));
         if (shutdownRequested_ || shutdownComplete_) return;
         setErrorCode(errorName(result.receipt));

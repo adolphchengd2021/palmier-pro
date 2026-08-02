@@ -594,22 +594,16 @@ ApplicationWindow {
                 objectName: "previewFrameField"
                 width: AppTheme.trackHeaderWidth
                 inputMethodHints: Qt.ImhDigitsOnly
-                Component.onCompleted: text = previewCoordinator.currentFrame.toString()
-                onActiveFocusChanged: {
-                    if (!activeFocus)
-                        text = previewCoordinator.currentFrame.toString()
-                }
                 onAccepted: {
                     const frame = Number(text)
                     if (Number.isSafeInteger(frame))
                         previewCoordinator.seekToFrame(frame)
                 }
-                Connections {
-                    target: previewCoordinator
-                    function onCurrentFrameChanged() {
-                        if (!previewFrameField.activeFocus)
-                            previewFrameField.text = previewCoordinator.currentFrame.toString()
-                    }
+                Binding {
+                    target: previewFrameField
+                    property: "text"
+                    value: previewCoordinator.currentFrame.toString()
+                    when: !previewFrameField.activeFocus
                 }
             }
             Button {
