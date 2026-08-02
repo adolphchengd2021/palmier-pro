@@ -1119,8 +1119,7 @@ void redoRestoresSplitMoveAndRemoveExactly() {
         "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{
             "id":"track","type":"video","x-track":{"keep":true},"clips":[{
                 "id":"clip","mediaRef":"media","mediaType":"video",
-                "sourceClipType":"video","startFrame":0,"durationFrames":120,
-                "x-clip":{"keep":true}
+                "sourceClipType":"video","startFrame":0,"durationFrames":120
             }]
         }]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"],
         "x-root":{"keep":true}
