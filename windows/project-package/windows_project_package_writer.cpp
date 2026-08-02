@@ -104,6 +104,11 @@ public:
     HANDLE get() const noexcept { return value_; }
     bool valid() const noexcept { return value_ != INVALID_HANDLE_VALUE; }
 
+    void reset(HANDLE value = INVALID_HANDLE_VALUE) noexcept {
+        if (valid()) CloseHandle(value_);
+        value_ = value;
+    }
+
 private:
     HANDLE value_;
 };
@@ -171,15 +176,33 @@ bool sameDestination(
 class DestinationGuard final {
 public:
     explicit DestinationGuard(std::filesystem::path projectJson)
-        : projectJson_(std::move(projectJson)), file_(CreateFileW(
-              projectJson_.c_str(),
-              GENERIC_READ,
-              FILE_SHARE_READ,
-              nullptr,
-              OPEN_EXISTING,
-              FILE_ATTRIBUTE_NORMAL,
-              nullptr
-          )) {
+        : projectJson_(std::move(projectJson)) {
+        availability_.reset(CreateFileW(
+            projectJson_.c_str(),
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr
+        ));
+        if (!availability_.valid()) {
+            fail(
+                "projectJsonUnavailable",
+                "validateDestination",
+                "project.json cannot be opened for coordinated replacement",
+                GetLastError()
+            );
+        }
+        file_.reset(CreateFileW(
+            projectJson_.c_str(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr
+        ));
         if (!file_.valid()) {
             fail(
                 "projectJsonUnavailable",
@@ -202,6 +225,7 @@ public:
 
 private:
     std::filesystem::path projectJson_;
+    HandleOwner availability_;
     HandleOwner file_;
     DestinationSnapshot snapshot_{};
 };
