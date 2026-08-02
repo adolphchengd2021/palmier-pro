@@ -5064,9 +5064,39 @@ def windows_prototype_packaging_contract() -> None:
         "ResultCode = 3010",
         "ResultCode <> 0",
         "IntToStr(ResultCode)",
+        "function InstalledVcRuntimeIsCurrent: Boolean;",
+        "HKLM64",
+        "VC\\Runtimes\\x64",
+        "StrToVersion",
+        "ComparePackedVersion",
     ]:
         if token not in installer:
             raise ContractError(f"Prototype installer missing token {token!r}")
+    prepare_marker = "function PrepareToInstall(var NeedsRestart: Boolean): String;"
+    runtime_check = installer.split(
+        "function InstalledVcRuntimeIsCurrent: Boolean;", 1
+    )[1].split(prepare_marker, 1)[0]
+    for linked_token in [
+        "'SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64'",
+        "RegQueryStringValue(",
+        "StrToVersion('{#VcRedistVersion}', RequiredVersion)",
+        "ComparePackedVersion(InstalledVersion, RequiredVersion) >= 0",
+    ]:
+        if linked_token not in runtime_check:
+            raise ContractError(
+                f"Prototype runtime check missing linked token {linked_token!r}"
+            )
+    prepare_body = installer.split(prepare_marker, 1)[1]
+    skip_position = prepare_body.find("if InstalledVcRuntimeIsCurrent then")
+    exit_position = prepare_body.find("Exit;", skip_position)
+    extract_position = prepare_body.find("ExtractTemporaryFile('vc_redist.x64.exe')")
+    exec_position = prepare_body.find("if not Exec(", extract_position)
+    if min(skip_position, exit_position, extract_position, exec_position) < 0 or not (
+        skip_position < exit_position < extract_position < exec_position
+    ):
+        raise ContractError(
+            "Prototype installer must exit for a current runtime before extracting and executing the prerequisite"
+        )
     if "[Run]" in installer:
         raise ContractError("prototype prerequisites must fail through PrepareToInstall")
     if "[UninstallDelete]" in installer or ".palmier" in installer:
@@ -5074,6 +5104,11 @@ def windows_prototype_packaging_contract() -> None:
     for token in [
         '$env:PATH = "$env:SystemRoot\\System32;$env:SystemRoot"',
         "--smoke-test",
+        "/LOG=$setupLog",
+        "current=True",
+        "Skipping Microsoft Visual C++ Runtime installation.",
+        "Microsoft Visual C++ Runtime installer completed successfully.",
+        "did not prove the Visual C++ Runtime prerequisite path",
         "unins000.exe",
         "preserve-me.txt",
         "Uninstall removed external user project data.",
@@ -5086,7 +5121,11 @@ def windows_prototype_packaging_contract() -> None:
         "Get-AuthenticodeSignature",
         "Pyrsys B\\.V\\.",
         "Microsoft.VCRedistVersion.default.txt",
-        "$redistVersion -notmatch '^14\\.44\\.'",
+        "$redistVersion -notmatch '^14\\.44\\.\\d+(?:\\.\\d+)?$'",
+        "$redistFileVersion.FileMajorPart",
+        "$redistContractVersion -notmatch '^14\\.44\\.\\d+\\.\\d+$'",
+        "VC_REDIST_VERSION",
+        "/DVcRedistVersion=$env:VC_REDIST_VERSION",
         "qtbase-everywhere-src-6.10.3.zip",
         "ddd7c0a3c798a8144a0fadb39c7c17b41cd5c55dd5caac22aca9ca3277b20024",
         "Qt source archive SHA-256 mismatch",
@@ -5136,6 +5175,24 @@ def windows_prototype_packaging_contract() -> None:
         raise ContractError("prototype staging must consume the verified Qt license root")
     if 'Redist\\MSVC\\$tools' in workflow:
         raise ContractError("prototype workflow must resolve the independent redist version")
+    redist_version_assignment = (
+        '$redistContractVersion = "$($redistFileVersion.FileMajorPart).'
+        '$($redistFileVersion.FileMinorPart).$($redistFileVersion.FileBuildPart).'
+        '$($redistFileVersion.FilePrivatePart)"'
+    )
+    redist_validation = "$redistContractVersion -notmatch '^14\\.44\\.\\d+\\.\\d+$'"
+    redist_environment = '"VC_REDIST_VERSION=$redistContractVersion"'
+    redist_define = '"/DVcRedistVersion=$env:VC_REDIST_VERSION"'
+    redist_positions = [
+        workflow.find(redist_version_assignment),
+        workflow.find(redist_validation),
+        workflow.find(redist_environment),
+        workflow.find(redist_define),
+    ]
+    if min(redist_positions) < 0 or redist_positions != sorted(redist_positions):
+        raise ContractError(
+            "Prototype workflow must derive, validate, publish, and compile the exact redistributable version in order"
+        )
     for token in [
         "not approved",
         "dynamically linked DLLs",

@@ -89,7 +89,7 @@ jobs:
             throw "Visual Studio redist version file is missing"
           }
           $redistVersion = (Get-Content -LiteralPath $redistVersionFile).Trim()
-          if ($redistVersion -notmatch '^14\.44\.') {
+          if ($redistVersion -notmatch '^14\.44\.\d+(?:\.\d+)?$') {
             throw "Expected Visual C++ Redistributable 14.44.x, got: $redistVersion"
           }
           $redist = Get-ChildItem -LiteralPath "$vs\VC\Redist\MSVC\$redistVersion" -Recurse -File -Filter "vc_redist.x64.exe" |
@@ -97,7 +97,13 @@ jobs:
           if (-not $redist) {
             throw "The selected Visual Studio toolchain has no x64 redistributable"
           }
+          $redistFileVersion = $redist.VersionInfo
+          $redistContractVersion = "$($redistFileVersion.FileMajorPart).$($redistFileVersion.FileMinorPart).$($redistFileVersion.FileBuildPart).$($redistFileVersion.FilePrivatePart)"
+          if ($redistContractVersion -notmatch '^14\.44\.\d+\.\d+$') {
+            throw "Selected Visual C++ Redistributable file version is unexpected: $redistContractVersion"
+          }
           "VC_REDIST_X64=$($redist.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VC_REDIST_VERSION=$redistContractVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Install pinned Qt installer
         run: python -m pip install --disable-pip-version-check aqtinstall==3.3.0 py7zr==1.0.0
@@ -264,6 +270,7 @@ jobs:
             "/DSourceDir=$env:PALMIER_STAGE_ROOT" `
             "/DOutputDir=$output" `
             "/DAppVersion=$env:PALMIER_WINDOWS_PROTOTYPE_VERSION" `
+            "/DVcRedistVersion=$env:VC_REDIST_VERSION" `
             "windows/packaging/prototype-installer.iss"
           if ($LASTEXITCODE -ne 0) {
             throw "Inno Setup compilation failed with exit code $LASTEXITCODE"

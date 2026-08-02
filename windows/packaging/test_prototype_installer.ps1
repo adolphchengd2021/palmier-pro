@@ -21,15 +21,31 @@ $userProject = Join-Path $work 'user-project.palmier'
 New-Item -ItemType Directory -Path $userProject | Out-Null
 $sentinel = Join-Path $userProject 'preserve-me.txt'
 [System.IO.File]::WriteAllText($sentinel, 'user-project-data', [System.Text.UTF8Encoding]::new($false))
+$setupLog = Join-Path $work 'setup.log'
 
 $setup = Start-Process -FilePath $installer -ArgumentList @(
     '/VERYSILENT',
     '/SUPPRESSMSGBOXES',
     '/NORESTART',
     '/SP-',
+    "/LOG=$setupLog",
     "/DIR=$installRoot"
 ) -Wait -PassThru
-if ($setup.ExitCode -ne 0) { throw "Prototype installer failed with exit code $($setup.ExitCode)" }
+if ($setup.ExitCode -ne 0) {
+    if (Test-Path -LiteralPath $setupLog -PathType Leaf) {
+        Get-Content -LiteralPath $setupLog -Tail 100 -Encoding UTF8 | Write-Output
+    }
+    throw "Prototype installer failed with exit code $($setup.ExitCode)"
+}
+$setupLogText = Get-Content -LiteralPath $setupLog -Raw -Encoding UTF8
+$skippedRuntime = $setupLogText.Contains('current=True') -and
+    $setupLogText.Contains('Skipping Microsoft Visual C++ Runtime installation.')
+$installedRuntime = $setupLogText.Contains(
+    'Microsoft Visual C++ Runtime installer completed successfully.'
+)
+if (-not $skippedRuntime -and -not $installedRuntime) {
+    throw 'Prototype setup log did not prove the Visual C++ Runtime prerequisite path.'
+}
 
 $application = Join-Path $installRoot 'PalmierPro.exe'
 if (-not (Test-Path -LiteralPath $application -PathType Leaf)) {

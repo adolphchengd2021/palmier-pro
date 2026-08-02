@@ -7,6 +7,9 @@
 #ifndef AppVersion
   #error AppVersion is required
 #endif
+#ifndef VcRedistVersion
+  #error VcRedistVersion is required
+#endif
 
 [Setup]
 AppId={{B12503B7-4D6C-4B8D-9B78-9E28BEAEAA62}
@@ -49,11 +52,61 @@ Name: "{autodesktop}\Palmier Pro Windows Prototype"; Filename: "{app}\PalmierPro
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
 [Code]
+function InstalledVcRuntimeIsCurrent: Boolean;
+var
+  InstalledVersionText: String;
+  InstalledVersion: Int64;
+  RequiredVersion: Int64;
+begin
+  Result := False;
+  if not RegQueryStringValue(
+    HKLM64,
+    'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64',
+    'Version',
+    InstalledVersionText
+  ) then
+  begin
+    Log('Microsoft Visual C++ Runtime x64 registry version is unavailable.');
+    Exit;
+  end;
+  if (Length(InstalledVersionText) > 0)
+    and ((InstalledVersionText[1] = 'v') or (InstalledVersionText[1] = 'V')) then
+  begin
+    Delete(InstalledVersionText, 1, 1);
+  end;
+  if not StrToVersion(InstalledVersionText, InstalledVersion) then
+  begin
+    Log('Microsoft Visual C++ Runtime x64 registry version is malformed.');
+    Exit;
+  end;
+  if not StrToVersion('{#VcRedistVersion}', RequiredVersion) then
+  begin
+    Log('Bundled Microsoft Visual C++ Runtime version is malformed.');
+    Exit;
+  end;
+  Result := ComparePackedVersion(InstalledVersion, RequiredVersion) >= 0;
+  if Result then
+    Log(
+      'Microsoft Visual C++ Runtime x64 installed=' + InstalledVersionText
+        + ', required={#VcRedistVersion}, current=True'
+    )
+  else
+    Log(
+      'Microsoft Visual C++ Runtime x64 installed=' + InstalledVersionText
+        + ', required={#VcRedistVersion}, current=False'
+    );
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;
 begin
   Result := '';
+  if InstalledVcRuntimeIsCurrent then
+  begin
+    Log('Skipping Microsoft Visual C++ Runtime installation.');
+    Exit;
+  end;
   ExtractTemporaryFile('vc_redist.x64.exe');
   if not Exec(
     ExpandConstant('{tmp}\vc_redist.x64.exe'),
@@ -64,16 +117,23 @@ begin
     ResultCode
   ) then
   begin
+    Log('Microsoft Visual C++ Runtime installer could not be started.');
     Result := 'The Microsoft Visual C++ Runtime installer could not be started.';
   end
   else if ResultCode = 3010 then
   begin
+    Log('Microsoft Visual C++ Runtime installer requested a restart.');
     NeedsRestart := True;
     Result := 'Restart Windows, then run Palmier Pro Setup again.';
   end
   else if ResultCode <> 0 then
   begin
+    Log('Microsoft Visual C++ Runtime installer exit code ' + IntToStr(ResultCode) + '.');
     Result := 'The Microsoft Visual C++ Runtime installer failed with exit code '
       + IntToStr(ResultCode) + '.';
+  end
+  else
+  begin
+    Log('Microsoft Visual C++ Runtime installer completed successfully.');
   end;
 end;
