@@ -9,6 +9,7 @@ target_compile_features(palmier_json PUBLIC cxx_std_20)
 
 add_library(palmier_project_reader STATIC
     serialization/media_manifest_reader.cpp
+    serialization/project_media_resolver.cpp
     serialization/project_package_reader.cpp
     serialization/project_reader.cpp
 )

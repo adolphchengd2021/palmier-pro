@@ -326,10 +326,13 @@ public:
 
     const std::filesystem::path& path() const noexcept { return path_; }
 
-    void lockForVerification() {
+    void lockForVerification(
+        const detail::H264ExportTestHooks* hooks,
+        std::stop_token cancellation
+    ) {
         verificationHandle_ = CreateFileW(
             path_.c_str(),
-            GENERIC_READ,
+            GENERIC_READ | GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_DELETE,
             nullptr,
             OPEN_EXISTING,
@@ -352,6 +355,29 @@ public:
                 "staging file identity changed before verification"
             );
         }
+        runCheckpoint(hooks, "beforeFlush", cancellation);
+        const auto flushResult = [&] {
+            if (hooks != nullptr && hooks->flushFileBuffers) {
+                return hooks->flushFileBuffers(
+                    reinterpret_cast<std::uintptr_t>(verificationHandle_),
+                    path_
+                );
+            }
+            const bool flushed = FlushFileBuffers(verificationHandle_) != FALSE;
+            return detail::FileFlushResult{
+                flushed,
+                static_cast<int>(flushed ? ERROR_SUCCESS : GetLastError()),
+            };
+        }();
+        if (!flushResult.flushed) {
+            fail(
+                H264ExportFailureCode::stagingFailed,
+                "flushStaging",
+                "staging file could not be durably flushed",
+                flushResult.nativeCode
+            );
+        }
+        runCheckpoint(hooks, "afterFlush", cancellation);
     }
 
     void install(
@@ -361,7 +387,7 @@ public:
         HandleOwner commit(ReOpenFile(
             identityHandle_.get(),
             GENERIC_READ | DELETE,
-            FILE_SHARE_READ | FILE_SHARE_DELETE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             0
         ));
         if (!commit.valid()) {
@@ -1214,7 +1240,7 @@ H264ProjectExportReceipt exportStaticProjectH264Impl(
         failFfmpeg(H264ExportFailureCode::encodeFailed, "writeTrailer", trailerResult);
     }
     output.closeFile();
-    staging.lockForVerification();
+    staging.lockForVerification(hooks, cancellation);
 
     std::uint64_t verifiedFrames = 0;
     try {
@@ -1263,6 +1289,63 @@ H264ProjectExportReceipt exportStaticProjectH264(
 }
 
 namespace detail {
+
+void installStagingFileForTesting(
+    const std::filesystem::path& destination,
+    const std::vector<std::uint8_t>& payload,
+    bool replaceExisting,
+    std::stop_token cancellation,
+    const H264ExportTestHooks& hooks
+) {
+    StagingFile staging(destination);
+    try {
+        checkCancellation(cancellation, "writeStaging");
+        HandleOwner output(CreateFileW(
+            staging.path().c_str(),
+            GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr
+        ));
+        if (!output.valid()) {
+            fail(
+                H264ExportFailureCode::stagingFailed,
+                "writeStaging",
+                "staging test payload could not be opened",
+                static_cast<int>(GetLastError())
+            );
+        }
+        std::size_t offset{};
+        while (offset < payload.size()) {
+            checkCancellation(cancellation, "writeStaging");
+            const auto remaining = payload.size() - offset;
+            const DWORD chunk = static_cast<DWORD>((std::min)(
+                remaining,
+                static_cast<std::size_t>((std::numeric_limits<DWORD>::max)())
+            ));
+            DWORD written{};
+            if (!WriteFile(output.get(), payload.data() + offset, chunk, &written, nullptr)
+                || written != chunk) {
+                fail(
+                    H264ExportFailureCode::stagingFailed,
+                    "writeStaging",
+                    "staging test payload could not be written",
+                    static_cast<int>(GetLastError())
+                );
+            }
+            offset += written;
+        }
+        output.reset();
+        staging.lockForVerification(&hooks, cancellation);
+        runCheckpoint(&hooks, "beforeInstall", cancellation);
+        staging.install(destination, replaceExisting);
+    } catch (...) {
+        staging.cleanup();
+        throw;
+    }
+}
 
 H264ProjectExportReceipt exportStaticProjectH264ForTesting(
     const project::ProjectDocument& document,

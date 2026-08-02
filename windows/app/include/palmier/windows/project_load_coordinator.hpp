@@ -20,6 +20,7 @@ class ProjectLoadCoordinator final : public QObject {
     Q_OBJECT
     Q_PROPERTY(ReadOnlyTimelineModel* model READ model CONSTANT)
     Q_PROPERTY(bool loading READ loading NOTIFY loadingChanged)
+    Q_PROPERTY(bool presentationReady READ presentationReady NOTIFY presentationReadyChanged)
     Q_PROPERTY(QString state READ state NOTIFY stateChanged)
     Q_PROPERTY(QString warningSummary READ warningSummary NOTIFY warningSummaryChanged)
     Q_PROPERTY(QString errorCode READ errorCode NOTIFY errorCodeChanged)
@@ -57,6 +58,7 @@ public:
 
     ReadOnlyTimelineModel* model() noexcept;
     bool loading() const noexcept;
+    bool presentationReady() const noexcept;
     QString state() const;
     QString warningSummary() const;
     QString errorCode() const;
@@ -75,6 +77,7 @@ public:
 
 signals:
     void loadingChanged();
+    void presentationReadyChanged();
     void stateChanged();
     void warningSummaryChanged();
     void errorCodeChanged();
@@ -100,6 +103,7 @@ private:
         bool preservePresentedFailure = false
     );
     void setLoading(bool value);
+    void setPresentationReady(bool value);
     void setState(QString value);
     void setWarningSummary(QString value);
     void setErrorCode(QString value);
@@ -125,6 +129,7 @@ private:
     bool workerActive_{};
     bool shutdownRequested_{};
     bool loading_{};
+    bool presentationReady_{};
     bool preserveLoadFailureOnRuntimeRefresh_{};
     QString state_{QStringLiteral("empty")};
     QString committedState_{QStringLiteral("empty")};

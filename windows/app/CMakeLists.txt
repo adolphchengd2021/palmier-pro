@@ -10,6 +10,7 @@ set(app_include_dir "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_library(palmier_qt_shell_core STATIC
     include/palmier/windows/project_load_coordinator.hpp
     include/palmier/windows/project_editing_controller.hpp
+    include/palmier/windows/project_export_controller.hpp
     include/palmier/windows/project_persistence_controller.hpp
     include/palmier/windows/project_projection_loader.hpp
     include/palmier/windows/project_runtime_mailbox.hpp
@@ -18,6 +19,7 @@ add_library(palmier_qt_shell_core STATIC
     include/palmier/windows/read_only_timeline_model.hpp
     src/project_load_coordinator.cpp
     src/project_editing_controller.cpp
+    src/project_export_controller.cpp
     src/project_persistence_controller.cpp
     src/project_projection_loader.cpp
     src/project_runtime_mailbox.cpp
@@ -33,6 +35,7 @@ target_link_libraries(
         palmier_project_reader
         palmier_project_render
         palmier_project_runtime
+        palmier_export_ffmpeg
         palmier_windows_project_package
 )
 target_compile_features(palmier_qt_shell_core PUBLIC cxx_std_20)
@@ -204,6 +207,31 @@ if(BUILD_TESTING)
     add_palmier_qt_shell_test(qml_close_waits_for_worker qmlCloseWaitsForActiveWorker)
     add_test(NAME qt_shell.module_smoke COMMAND palmier_qt_shell --smoke-test)
     set_tests_properties(qt_shell.module_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    qt_add_executable(
+        palmier_project_export_controller_tests
+        tests/project_export_controller_tests.cpp
+    )
+    set_target_properties(
+        palmier_project_export_controller_tests
+        PROPERTIES WIN32_EXECUTABLE FALSE
+    )
+    target_link_libraries(
+        palmier_project_export_controller_tests
+        PRIVATE palmier_qt_shell_core Qt6::Test
+    )
+    target_compile_options(
+        palmier_project_export_controller_tests
+        PRIVATE /W4 /WX /permissive- /Zc:__cplusplus /utf-8
+    )
+    add_test(
+        NAME qt_shell.export_controller
+        COMMAND palmier_project_export_controller_tests -v1
+    )
+    set_tests_properties(
+        qt_shell.export_controller
+        PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30
+    )
 
     qt_add_executable(palmier_qt_preview_tests tests/qt_preview_tests.cpp)
     set_target_properties(palmier_qt_preview_tests PROPERTIES WIN32_EXECUTABLE FALSE)

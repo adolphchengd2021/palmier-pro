@@ -84,6 +84,7 @@ ProjectLoadCoordinator::~ProjectLoadCoordinator() {
 
 ReadOnlyTimelineModel* ProjectLoadCoordinator::model() noexcept { return &model_; }
 bool ProjectLoadCoordinator::loading() const noexcept { return loading_; }
+bool ProjectLoadCoordinator::presentationReady() const noexcept { return presentationReady_; }
 QString ProjectLoadCoordinator::errorMessage() const { return errorMessage_; }
 QString ProjectLoadCoordinator::errorCode() const { return errorCode_; }
 QString ProjectLoadCoordinator::errorJsonPointer() const { return errorJsonPointer_; }
@@ -421,6 +422,7 @@ void ProjectLoadCoordinator::commitProjection(
         deferredRuntimeUpdate_.reset();
     }
     committedPreview_ = std::move(committedPreview);
+    setPresentationReady(true);
     emit projectCommitted();
 }
 
@@ -452,8 +454,7 @@ void ProjectLoadCoordinator::observeRuntimePublication(
     const bool contentChanged = publication.projectGeneration != committedGeneration_
         || publication.session->revision > committedRevision_;
     if (!contentChanged) return;
-    committedGeneration_ = publication.projectGeneration;
-    committedRevision_ = publication.session->revision;
+    setPresentationReady(false);
     committedPreview_ = {
         PreviewCandidateAvailability::invalidated,
         "runtimeStateChanged",
@@ -503,6 +504,7 @@ void ProjectLoadCoordinator::applyRuntimeProjection(RuntimeProjectionUpdate upda
         committedErrorCode_ = update.errorCode;
         committedErrorJsonPointer_.clear();
         committedErrorMessage_ = update.errorMessage;
+        setPresentationReady(false);
         if (!preserveLoadFailureOnRuntimeRefresh_) {
             setWarningSummary({});
             setErrorCode(update.errorCode);
@@ -580,6 +582,12 @@ void ProjectLoadCoordinator::setLoading(bool value) {
     if (loading_ == value) return;
     loading_ = value;
     emit loadingChanged();
+}
+
+void ProjectLoadCoordinator::setPresentationReady(bool value) {
+    if (presentationReady_ == value) return;
+    presentationReady_ = value;
+    emit presentationReadyChanged();
 }
 
 void ProjectLoadCoordinator::setErrorMessage(QString value) {

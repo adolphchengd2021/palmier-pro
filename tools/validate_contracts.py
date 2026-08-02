@@ -3888,6 +3888,12 @@ def windows_qt_read_only_shell_contract() -> None:
     media_source = read_text(
         "core/project/serialization/media_manifest_reader.cpp"
     )
+    media_resolver_header = read_text(
+        "core/project/include/palmier/project/project_media_resolver.hpp"
+    )
+    media_resolver_source = read_text(
+        "core/project/serialization/project_media_resolver.cpp"
+    )
     package_header = read_text(
         "core/project/include/palmier/project/project_package_reader.hpp"
     )
@@ -3897,6 +3903,7 @@ def windows_qt_read_only_shell_contract() -> None:
     package_tests = read_text(
         "core/project/tests/project_package_reader_tests.cpp"
     )
+    project_cmake = read_text("core/project/CMakeLists.txt")
     for token in [
         "defaultMaximumProjectJsonBytes",
         "maximumProjectJsonBytes",
@@ -3960,6 +3967,37 @@ def windows_qt_read_only_shell_contract() -> None:
     ]:
         if token not in package_tests:
             raise ContractError(f"media manifest reader test missing token {token!r}")
+    for token in [
+        "ResolvedProjectMediaReference",
+        "ProjectMediaResolveError",
+        "resolveProjectMediaReference(",
+        "Caller must run this synchronous filesystem operation off the UI thread",
+    ]:
+        if token not in media_resolver_header:
+            raise ContractError(f"project media resolver header missing token {token!r}")
+    for token in [
+        "ambiguousMediaRef",
+        "mediaEntryMissing",
+        "mediaTypeMismatch",
+        "invalidMediaSourcePath",
+        "mediaFileUnavailable",
+        "weakly_canonical",
+        "is_regular_file",
+        "isContainedBy(canonicalCandidate, canonicalPackage)",
+        "checkCancellation(cancellation)",
+    ]:
+        if token not in media_resolver_source:
+            raise ContractError(f"project media resolver invariant missing token {token!r}")
+    for token in [
+        "resolvesProjectMediaReferences",
+        "ambiguousMediaRef",
+        "invalidMediaSourcePath",
+        "mediaFileUnavailable",
+    ]:
+        if token not in package_tests:
+            raise ContractError(f"project media resolver test missing token {token!r}")
+    if "serialization/project_media_resolver.cpp" not in project_cmake:
+        raise ContractError("project media resolver is not compiled into the project core")
 
     root_cmake = read_text("CMakeLists.txt")
     presets = load_json("CMakePresets.json")
@@ -3970,6 +4008,15 @@ def windows_qt_read_only_shell_contract() -> None:
     )
     editing_source = read_text(
         "windows/app/src/project_editing_controller.cpp"
+    )
+    export_header = read_text(
+        "windows/app/include/palmier/windows/project_export_controller.hpp"
+    )
+    export_source = read_text(
+        "windows/app/src/project_export_controller.cpp"
+    )
+    export_tests = read_text(
+        "windows/app/tests/project_export_controller_tests.cpp"
     )
     persistence_header = read_text(
         "windows/app/include/palmier/windows/project_persistence_controller.hpp"
@@ -4021,6 +4068,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "qt_add_qml_module(palmier_qt_shell",
         "include/palmier/windows/project_load_coordinator.hpp",
         "include/palmier/windows/project_editing_controller.hpp",
+        "include/palmier/windows/project_export_controller.hpp",
         "include/palmier/windows/project_persistence_controller.hpp",
         "include/palmier/windows/project_runtime_mailbox.hpp",
         "include/palmier/windows/project_runtime_projection_bridge.hpp",
@@ -4064,10 +4112,68 @@ def windows_qt_read_only_shell_contract() -> None:
         "persistenceWorkerRetainsRuntimeAfterControllerTeardown",
         "dirtyRuntimeRefusesProjectReplacement",
         "editingControllerSplitsAndUndoesByStableId",
+        "palmier_project_export_controller_tests",
+        "qt_shell.export_controller",
         "persistenceShutdownRefreshesAuthoritativeDirtyState",
     ]:
         if token not in app_cmake:
             raise ContractError(f"Qt shell CMake missing token {token!r}")
+    for token in [
+        "class ProjectExportController final",
+        "Q_PROPERTY(bool exporting",
+        "Q_PROPERTY(bool canCancel",
+        "Q_PROPERTY(QString state",
+        "Q_PROPERTY(QString errorStage",
+        "Q_PROPERTY(QString outputPath",
+        "ExportOperation",
+        "activateProject(",
+        "observeRuntimePublication(",
+        "exportSelectedClip(",
+        "cancel()",
+        "requestShutdown()",
+        "bool presentationReady = true",
+        "requestRefused(QString code, QString message)",
+        "shutdownReady()",
+    ]:
+        if token not in export_header:
+            raise ContractError(f"Qt export controller API missing token {token!r}")
+    for token in [
+        "value->setMaxThreadCount(1)",
+        "publication->session->revision != presentedRevision_",
+        "const auto snapshot = publication->session",
+        "8'000'000,\n        false,",
+        'QStringLiteral("completedOutdated")',
+        'QStringLiteral("exportedOlderState")',
+        "latest->session->revision == activeJobRevision_",
+        "packagePath_ == activeJobPackagePath_",
+        "presentationReady_",
+        'errorCode_ == QStringLiteral("presentationPending")',
+        "stopSource_.request_stop()",
+        "if (jobId != activeJobId_) return;",
+        "QtConcurrent::run(projectExportPool()",
+        "if (shutdownRequested_) emit shutdownReady();",
+    ]:
+        if token not in export_source:
+            raise ContractError(f"Qt export controller invariant missing token {token!r}")
+    if ".waitForFinished(" in export_source or "QThread::wait" in export_source:
+        raise ContractError("Qt export controller must not wait on the UI thread")
+    for token in [
+        "ownsOneBackgroundJobAndRefusesDuplicateAdmission",
+        "committedOutputFromChangedRevisionIsCompletedOutdated",
+        "pendingPresentationRefusesStaleSelection",
+        "persistenceOnlyPublicationDoesNotCancel",
+        "completedReceiptBecomesOutdatedAfterLaterRevision",
+        "packageChangeCancelsAndMarksCommittedOutputOutdated",
+        "shutdownRejectsNewAdmission",
+        "shutdownCancelsAndDrainsOneAdmittedJob",
+        "mapsEveryExporterFailureCode",
+        "exportBusy",
+        "completedOutdated",
+        "QThread::currentThread()",
+        "state->condition.wait(",
+    ]:
+        if token not in export_tests:
+            raise ContractError(f"Qt export controller test missing token {token!r}")
     for token in [
         "std::stop_source",
         "request_stop()",
@@ -4081,6 +4187,8 @@ def windows_qt_read_only_shell_contract() -> None:
         "errorPointer",
         "restoreCommittedPresentation()",
         "committedErrorMessage_ = update.errorMessage",
+        "setPresentationReady(false)",
+        "setPresentationReady(true)",
     ]:
         if token not in coordinator:
             raise ContractError(f"Qt load coordinator missing token {token!r}")
@@ -4154,7 +4262,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "firstDiagnostic",
         "skippedUnsafeClipCount",
         "projectPreviewForActiveTimeline",
-        "weakly_canonical",
+        "resolveProjectMediaReference",
         "unstableCandidateId",
         "mediaFileUnavailable",
         "compileExclusiveStaticVideoLayer",
@@ -4176,6 +4284,15 @@ def windows_qt_read_only_shell_contract() -> None:
         "offsetRatio",
         "extentRatio",
         "AppTheme.",
+        "FileDialog",
+        "Export Selected Clip…",
+        "window.selectedTrackId",
+        "exportCoordinator.exportSelectedClip(",
+        "exportCoordinator.cancel()",
+        "exportCloseDialog",
+        "MessageDialog.Yes | MessageDialog.No",
+        "projectCoordinator.presentationReady",
+        'exportCoordinator.state === "completedOutdated"',
         "requestShutdown()",
         "WindowContainer",
         "previewCoordinator.window",
@@ -4492,6 +4609,11 @@ def windows_qt_preview_host_contract() -> None:
         "QEventLoop::ExcludeUserInputEvents",
         "ProjectLoadCoordinator::projectCommitted",
         "replaceProjectPreview(",
+        "ProjectExportController exportController",
+        'QStringLiteral("exportCoordinator")',
+        "exportController.observeRuntimePublication",
+        "exportController.activateProject(",
+        "exporting.requestShutdown()",
     ]:
         if token not in main_source:
             raise ContractError(f"Qt preview host executable missing token {token!r}")
@@ -4533,6 +4655,13 @@ def windows_h264_project_export_contract() -> None:
         "h264_project_exporter.hpp"
     )
     source = read_text("windows/export-ffmpeg/h264_project_exporter.cpp")
+    workflow_header = read_text(
+        "windows/export-ffmpeg/include/palmier/exporting/"
+        "project_clip_h264_export_workflow.hpp"
+    )
+    workflow_source = read_text(
+        "windows/export-ffmpeg/project_clip_h264_export_workflow.cpp"
+    )
     media_header = read_text(
         "windows/media-ffmpeg/include/palmier/media/ffmpeg_media_reader.hpp"
     )
@@ -4543,6 +4672,9 @@ def windows_h264_project_export_contract() -> None:
     module_cmake = read_text("windows/export-ffmpeg/CMakeLists.txt")
     root_cmake = read_text("CMakeLists.txt")
     adr = read_text("docs/windows/adr/0025-project-h264-export-slice.md")
+    integrated_adr = read_text(
+        "docs/windows/adr/0034-integrated-selected-clip-export.md"
+    )
     readme = read_text("docs/windows/README.md")
     for token in [
         "H264ExportFailureCode",
@@ -4574,12 +4706,33 @@ def windows_h264_project_export_contract() -> None:
         "destination.native()",
         "sizeof(FILE_RENAME_INFO) + nameBytes",
         "FileDispositionInfo",
-        "staging.lockForVerification()",
+        "staging.lockForVerification(hooks, cancellation)",
+        "FlushFileBuffers(verificationHandle_)",
+        '"flushStaging"',
         "staging.cleanup()",
         "checkCancellation(cancellation",
     ]:
         if token not in source:
             raise ContractError(f"H.264 export invariant missing token {token!r}")
+    for token in [
+        "ProjectClipH264ExportRequest",
+        "exportProjectClipH264(",
+        "Caller must run this synchronous media and filesystem workflow off the UI thread",
+    ]:
+        if token not in workflow_header:
+            raise ContractError(f"selected-clip export workflow API missing token {token!r}")
+    for token in [
+        "resolveSelection(",
+        "EntityIdOrigin::persisted",
+        'selectedTrack->type != "video"',
+        "readMediaManifest(",
+        "resolveProjectMediaReference(",
+        "exportStaticProjectH264(",
+        "H264ExportFailureCode::mediaUnavailable",
+        "request.replaceExisting",
+    ]:
+        if token not in workflow_source:
+            raise ContractError(f"selected-clip export workflow missing token {token!r}")
     for token in [
         "isPrototypeBt709RgbColor",
         "DecodeColorMode::bt709Video",
@@ -4604,12 +4757,20 @@ def windows_h264_project_export_contract() -> None:
         "cancellationBeforeInstallPreservesExistingDestination",
         "invalidDestinationIsRefusedBeforeStaging",
         "overlappingVisibleLayerIsRefusedBeforeStaging",
+        "flushFailurePreservesExistingDestination",
+        "stagingFlushAndInstallAreHandleCompatible",
+        "receivedExactStagingHandle",
+        "sameFileIdentity",
+        "selectedClipWorkflowExportsAndIndependentlyDecodes",
+        "selectedClipWorkflowRefusesInvalidSelection",
+        "selectedClipWorkflowReportsBoundaryFailures",
         "requireNoStagingFiles",
     ]:
         if token not in tests:
             raise ContractError(f"H.264 export test missing token {token!r}")
     for token in [
         "palmier_export_ffmpeg",
+        "project_clip_h264_export_workflow.cpp",
         "palmier_h264_project_exporter_tests",
         "export_ffmpeg.contract",
         "export_ffmpeg.h264_project_native",
@@ -4630,6 +4791,19 @@ def windows_h264_project_export_contract() -> None:
     for token in ["project-driven H.264 export slice", "ADR 0025"]:
         if token not in readme:
             raise ContractError(f"H.264 export README missing token {token!r}")
+    for token in [
+        "ProjectExportController",
+        "exportProjectClipH264",
+        "resolveProjectMediaReference",
+        "completedOutdated",
+        "flushed through its verified handle",
+        "manual UI acceptance",
+    ]:
+        if token not in integrated_adr:
+            raise ContractError(f"integrated export ADR missing token {token!r}")
+    for token in ["selected-clip export", "completedOutdated", "ADR 0034"]:
+        if token not in readme:
+            raise ContractError(f"integrated export README missing token {token!r}")
 
 
 def windows_mcp_project_session_contract() -> None:

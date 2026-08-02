@@ -9,7 +9,11 @@ ApplicationWindow {
     property bool discardUnsavedChanges: false
     property bool closeAfterSave: false
     property bool closeAfterEdit: false
+    property bool closeAfterExport: false
     property string selectedClipId: ""
+    property string selectedTrackId: ""
+    property string selectedMediaType: ""
+    property string exportRequestMessage: ""
     property bool projectShutdownReady: false
     property bool persistenceShutdownReady: false
     property bool previewShutdownReady: false
@@ -32,6 +36,10 @@ ApplicationWindow {
             }
             if (persistenceCoordinator.dirty && !discardUnsavedChanges) {
                 unsavedChangesDialog.open()
+                return
+            }
+            if (exportCoordinator.exporting) {
+                if (!exportCloseDialog.visible) exportCloseDialog.open()
                 return
             }
             persistenceShutdownReady = persistenceCoordinator.requestShutdown(
@@ -89,6 +97,21 @@ ApplicationWindow {
     }
 
     Connections {
+        target: exportCoordinator
+        function onRequestRefused(code, message) {
+            window.exportRequestMessage = message
+        }
+        function onExportFinished(succeeded) {
+            window.exportRequestMessage = ""
+            if (exportCloseDialog.visible) exportCloseDialog.close()
+            if (window.closeAfterExport) {
+                window.closeAfterExport = false
+                window.close()
+            }
+        }
+    }
+
+    Connections {
         target: projectCoordinator
         function onShutdownReady() {
             window.projectShutdownReady = true
@@ -96,6 +119,9 @@ ApplicationWindow {
         }
         function onProjectCommitted() {
             window.selectedClipId = ""
+            window.selectedTrackId = ""
+            window.selectedMediaType = ""
+            window.exportRequestMessage = ""
         }
     }
 
@@ -111,6 +137,37 @@ ApplicationWindow {
         id: projectDialog
         title: qsTr("Open Palmier Pro Project")
         onAccepted: projectCoordinator.openFolder(selectedFolder)
+    }
+
+    FileDialog {
+        id: exportDialog
+        title: qsTr("Export Selected Clip")
+        fileMode: FileDialog.SaveFile
+        nameFilters: [qsTr("MP4 Video (*.mp4)")]
+        defaultSuffix: "mp4"
+        onAccepted: exportCoordinator.exportSelectedClip(
+            window.selectedTrackId,
+            window.selectedClipId,
+            selectedFile
+        )
+    }
+
+    MessageDialog {
+        id: exportCloseDialog
+        objectName: "exportCloseDialog"
+        title: qsTr("Cancel Export?")
+        text: qsTr("Cancel the active export and close Palmier Pro?")
+        informativeText: qsTr("The unfinished export file will not be kept.")
+        buttons: MessageDialog.Yes | MessageDialog.No
+        onButtonClicked: function(button, role) {
+            if (button !== MessageDialog.Yes) return
+            if (exportCoordinator.exporting) {
+                window.closeAfterExport = true
+                exportCoordinator.cancel()
+            } else {
+                window.close()
+            }
+        }
     }
 
     MessageDialog {
@@ -139,6 +196,7 @@ ApplicationWindow {
                 enabled: !persistenceCoordinator.dirty
                     && !persistenceCoordinator.saving
                     && !editingCoordinator.busy
+                    && !exportCoordinator.exporting
                 onClicked: projectDialog.open()
             }
             Button {
@@ -146,20 +204,47 @@ ApplicationWindow {
                 enabled: persistenceCoordinator.dirty
                     && !persistenceCoordinator.saving
                     && !editingCoordinator.busy
+                    && !exportCoordinator.exporting
                 onClicked: persistenceCoordinator.save()
             }
             Button {
                 text: qsTr("Undo")
                 enabled: editingCoordinator.canUndo && !editingCoordinator.busy
+                    && !exportCoordinator.exporting
                 onClicked: editingCoordinator.undo()
             }
             Button {
-                text: qsTr("Cancel")
+                objectName: "exportSelectedClipButton"
+                text: qsTr("Export Selected Clip…")
+                enabled: window.selectedTrackId.length > 0
+                    && window.selectedClipId.length > 0
+                    && window.selectedMediaType === "video"
+                    && exportCoordinator.hasProject
+                    && projectCoordinator.presentationReady
+                    && !projectCoordinator.loading
+                    && !persistenceCoordinator.saving
+                    && !editingCoordinator.busy
+                    && !exportCoordinator.exporting
+                onClicked: exportDialog.open()
+            }
+            Button {
+                objectName: "cancelExportButton"
+                text: qsTr("Cancel Export")
+                visible: exportCoordinator.exporting
+                enabled: exportCoordinator.canCancel
+                onClicked: exportCoordinator.cancel()
+            }
+            Button {
+                text: qsTr("Cancel Open")
                 visible: projectCoordinator.loading
                 onClicked: projectCoordinator.cancelLoading()
             }
             Label {
-                text: projectCoordinator.loading
+                text: exportCoordinator.exporting
+                    ? exportCoordinator.state === "cancelling"
+                        ? qsTr("Cancelling export…")
+                        : qsTr("Exporting…")
+                    : projectCoordinator.loading
                     ? qsTr("Opening…")
                     : persistenceCoordinator.saving
                         ? qsTr("Saving…")
@@ -193,7 +278,9 @@ ApplicationWindow {
                 text: qsTr("Split")
                 enabled: window.selectedClipId.length > 0
                     && splitFrame.acceptableInput
+                    && projectCoordinator.presentationReady
                     && !editingCoordinator.busy
+                    && !exportCoordinator.exporting
                 onClicked: editingCoordinator.splitClip(
                     window.selectedClipId,
                     splitFrame.text
@@ -211,6 +298,34 @@ ApplicationWindow {
             visible: editingCoordinator.errorMessage.length > 0
             text: editingCoordinator.errorMessage
             color: AppTheme.errorText
+            wrapMode: Text.Wrap
+        }
+
+        Label {
+            objectName: "exportErrorState"
+            visible: exportCoordinator.errorMessage.length > 0
+                || window.exportRequestMessage.length > 0
+            text: window.exportRequestMessage.length > 0
+                ? window.exportRequestMessage
+                : exportCoordinator.errorMessage
+            color: AppTheme.errorText
+            wrapMode: Text.Wrap
+        }
+
+        Label {
+            objectName: "exportWarningState"
+            visible: exportCoordinator.warningMessage.length > 0
+            text: exportCoordinator.warningMessage
+            color: AppTheme.warningText
+            wrapMode: Text.Wrap
+        }
+
+        Label {
+            objectName: "exportCompletedState"
+            visible: exportCoordinator.state === "completed"
+                || exportCoordinator.state === "completedOutdated"
+            text: qsTr("Exported: ") + exportCoordinator.outputPath
+            color: AppTheme.primaryText
             wrapMode: Text.Wrap
         }
 
@@ -284,6 +399,7 @@ ApplicationWindow {
             clip: true
             spacing: AppTheme.borderWidth
             delegate: Rectangle {
+                id: trackDelegate
                 required property int index
                 required property string stableId
                 required property string trackType
@@ -334,7 +450,12 @@ ApplicationWindow {
 
                             MouseArea {
                                 anchors.fill: parent
-                                onClicked: window.selectedClipId = modelData.stableId
+                                enabled: projectCoordinator.presentationReady
+                                onClicked: {
+                                    window.selectedTrackId = trackDelegate.stableId
+                                    window.selectedClipId = modelData.stableId
+                                    window.selectedMediaType = modelData.mediaType
+                                }
                             }
 
                             Label {

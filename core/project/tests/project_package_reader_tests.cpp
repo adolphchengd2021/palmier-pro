@@ -1,5 +1,6 @@
 #include "palmier/project/project_package_reader.hpp"
 #include "palmier/project/media_manifest_reader.hpp"
+#include "palmier/project/project_media_resolver.hpp"
 
 #include "project_package_reader_testing.hpp"
 
@@ -109,6 +110,17 @@ void requireManifestError(
         return;
     }
     throw std::runtime_error("expected media manifest failure");
+}
+
+template<typename Operation>
+void requireMediaResolveError(Operation operation, const std::string& code) {
+    try {
+        operation();
+    } catch (const palmier::project::ProjectMediaResolveError& error) {
+        require(error.code == code, "unexpected media resolve error code");
+        return;
+    }
+    throw std::runtime_error("expected media resolution failure");
 }
 
 class CancellingCheckpoint final : public ProjectPackageReadCheckpoints {
@@ -267,6 +279,139 @@ void validatesMediaManifestContract() {
             static_cast<void>(palmier::project::readMediaManifest(
                 package.path(),
                 {.cancellation = cancellation.get_token()}
+            ));
+        },
+        "cancelled"
+    );
+}
+
+void resolvesProjectMediaReferences() {
+    TemporaryDirectory package;
+    std::filesystem::create_directory(package.path() / "media");
+    package.write("media/source.mp4", "video-bytes");
+    const palmier::project::MediaManifest manifest{{
+        {
+            "media",
+            "video",
+            {palmier::project::MediaSourceKind::project, "media/source.mp4"},
+            true,
+        },
+    }};
+    const auto resolved = palmier::project::resolveProjectMediaReference(
+        manifest,
+        "media",
+        "video",
+        package.path()
+    );
+    require(
+        resolved.path == std::filesystem::weakly_canonical(package.path() / "media/source.mp4"),
+        "project media path did not resolve canonically"
+    );
+    require(resolved.hasAudio == true, "resolved media metadata changed");
+
+    auto duplicate = manifest;
+    duplicate.entries.push_back(manifest.entries.front());
+    requireMediaResolveError(
+        [&] {
+            static_cast<void>(palmier::project::resolveProjectMediaReference(
+                duplicate,
+                "media",
+                "video",
+                package.path()
+            ));
+        },
+        "ambiguousMediaRef"
+    );
+    requireMediaResolveError(
+        [&] {
+            static_cast<void>(palmier::project::resolveProjectMediaReference(
+                manifest,
+                "missing",
+                "video",
+                package.path()
+            ));
+        },
+        "mediaEntryMissing"
+    );
+    requireMediaResolveError(
+        [&] {
+            static_cast<void>(palmier::project::resolveProjectMediaReference(
+                manifest,
+                "media",
+                "audio",
+                package.path()
+            ));
+        },
+        "mediaTypeMismatch"
+    );
+
+    const palmier::project::MediaManifest relativeExternal{{
+        {
+            "external",
+            "video",
+            {palmier::project::MediaSourceKind::external, "relative.mp4"},
+            std::nullopt,
+        },
+    }};
+    requireMediaResolveError(
+        [&] {
+            static_cast<void>(palmier::project::resolveProjectMediaReference(
+                relativeExternal,
+                "external",
+                "video",
+                package.path()
+            ));
+        },
+        "invalidMediaSourcePath"
+    );
+    const palmier::project::MediaManifest traversal{{
+        {
+            "escape",
+            "video",
+            {palmier::project::MediaSourceKind::project, "../escape.mp4"},
+            std::nullopt,
+        },
+    }};
+    requireMediaResolveError(
+        [&] {
+            static_cast<void>(palmier::project::resolveProjectMediaReference(
+                traversal,
+                "escape",
+                "video",
+                package.path()
+            ));
+        },
+        "invalidMediaSourcePath"
+    );
+    const palmier::project::MediaManifest offline{{
+        {
+            "offline",
+            "video",
+            {palmier::project::MediaSourceKind::project, "media/missing.mp4"},
+            std::nullopt,
+        },
+    }};
+    requireMediaResolveError(
+        [&] {
+            static_cast<void>(palmier::project::resolveProjectMediaReference(
+                offline,
+                "offline",
+                "video",
+                package.path()
+            ));
+        },
+        "mediaFileUnavailable"
+    );
+    std::stop_source cancelled;
+    cancelled.request_stop();
+    requireMediaResolveError(
+        [&] {
+            static_cast<void>(palmier::project::resolveProjectMediaReference(
+                manifest,
+                "media",
+                "video",
+                package.path(),
+                cancelled.get_token()
             ));
         },
         "cancelled"
@@ -500,6 +645,7 @@ void runTests(const std::filesystem::path& root) {
     readsRepositoryPackages(root);
     readsMediaManifestContract(root);
     validatesMediaManifestContract();
+    resolvesProjectMediaReferences();
     validatesPackageAndLimit();
     validatesJsonComplexityBudgets();
     defaultBudgetAcceptsMaximumTimelineProjection();

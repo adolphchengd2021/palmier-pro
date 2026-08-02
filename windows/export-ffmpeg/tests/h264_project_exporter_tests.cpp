@@ -2,6 +2,7 @@
 #include "media_test_support.hpp"
 #include "internal/h264_project_exporter_testing.hpp"
 #include "palmier/exporting/h264_project_exporter.hpp"
+#include "palmier/exporting/project_clip_h264_export_workflow.hpp"
 #include "palmier/media/ffmpeg_media_reader.hpp"
 #include "palmier/project/project_reader.hpp"
 
@@ -12,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <stop_token>
 #include <string>
@@ -108,12 +110,17 @@ H264ProjectExportRequest request(
 }
 
 template<typename Operation>
-void requireExportError(Operation operation, H264ExportFailureCode code) {
+void requireExportError(
+    Operation operation,
+    H264ExportFailureCode code,
+    std::string_view stage = {}
+) {
     try {
         operation();
     } catch (const H264ExportError& error) {
         require(error.code == code, "unexpected export error code");
         require(!error.stage.empty(), "export error stage is empty");
+        if (!stage.empty()) require(error.stage == stage, "unexpected export error stage");
         return;
     }
     throw std::runtime_error("expected export failure");
@@ -133,6 +140,13 @@ std::vector<std::uint8_t> readBytes(const std::filesystem::path& path) {
     );
     require(input.good() || input.eof(), "test output bytes could not be read");
     return bytes;
+}
+
+void writeText(const std::filesystem::path& path, std::string_view text) {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    require(output.is_open(), "test text output could not be opened");
+    output.write(text.data(), static_cast<std::streamsize>(text.size()));
+    require(output.good(), "test text output could not be written");
 }
 
 void requireNoStagingFiles(const std::filesystem::path& directory) {
@@ -203,6 +217,119 @@ void exportsAndIndependentlyDecodesEveryFrame(
     }
     require(frames == 5, "independent output decode frame count changed");
     require(maximumRed > minimumRed, "exported video lost visible pixel variation");
+}
+
+void selectedClipWorkflowExportsAndIndependentlyDecodes(
+    const TemporaryDirectory& directory
+) {
+    writeText(
+        directory.path() / "media.json",
+        R"({"entries":[{"id":"media","name":"Source","type":"video","source":{"project":{"relativePath":"source.mp4"}},"duration":0.5,"hasAudio":true}]})"
+    );
+    const auto destination = directory.path() / "selected-clip.mp4";
+    const auto receipt = palmier::exporting::exportProjectClipH264(
+        document(),
+        {
+            directory.path(),
+            "track",
+            "clip",
+            destination,
+            500'000,
+            false,
+        }
+    );
+    require(receipt.destination == destination, "workflow destination changed");
+    require(
+        receipt.encodedFrames == 5 && receipt.verifiedFrames == 5,
+        "workflow receipt frame counts changed"
+    );
+    const auto probe = FfmpegMediaReader::probe(destination);
+    const auto videoCount = std::count_if(
+        probe.streams.begin(),
+        probe.streams.end(),
+        [](const auto& value) { return value.kind == StreamKind::video; }
+    );
+    const auto audioCount = std::count_if(
+        probe.streams.begin(),
+        probe.streams.end(),
+        [](const auto& value) { return value.kind == StreamKind::audio; }
+    );
+    require(videoCount == 1, "workflow output must contain one video stream");
+    require(audioCount == 0, "workflow output unexpectedly contains audio");
+    FfmpegVideoFrameReader reader(destination);
+    std::uint64_t decodedFrames = 0;
+    while (reader.nextFrame()) ++decodedFrames;
+    require(decodedFrames == receipt.verifiedFrames, "workflow decode count changed");
+    requireNoStagingFiles(directory.path());
+}
+
+void selectedClipWorkflowRefusesInvalidSelection(
+    const TemporaryDirectory& directory
+) {
+    requireExportError(
+        [&] {
+            static_cast<void>(palmier::exporting::exportProjectClipH264(
+                document(),
+                {
+                    directory.path(),
+                    "missing-track",
+                    "clip",
+                    directory.path() / "missing-selection.mp4",
+                }
+            ));
+        },
+        H264ExportFailureCode::invalidRequest
+    );
+    requireNoStagingFiles(directory.path());
+}
+
+void selectedClipWorkflowReportsBoundaryFailures(
+    const TemporaryDirectory& directory
+) {
+    const auto missingManifestDestination = directory.path() / "missing-manifest.mp4";
+    requireExportError(
+        [&] {
+            static_cast<void>(palmier::exporting::exportProjectClipH264(
+                document(),
+                {directory.path(), "track", "clip", missingManifestDestination}
+            ));
+        },
+        H264ExportFailureCode::mediaUnavailable,
+        "loadMediaManifest"
+    );
+    require(!std::filesystem::exists(missingManifestDestination), "missing manifest installed output");
+
+    writeText(directory.path() / "media.json", R"({"entries":[]})");
+    const auto missingMediaDestination = directory.path() / "missing-media.mp4";
+    requireExportError(
+        [&] {
+            static_cast<void>(palmier::exporting::exportProjectClipH264(
+                document(),
+                {directory.path(), "track", "clip", missingMediaDestination}
+            ));
+        },
+        H264ExportFailureCode::mediaUnavailable,
+        "resolveMediaReference"
+    );
+    require(!std::filesystem::exists(missingMediaDestination), "missing media installed output");
+
+    std::stop_source cancellation;
+    cancellation.request_stop();
+    const auto cancelledDestination = directory.path() / "cancelled-workflow.mp4";
+    requireExportError(
+        [&] {
+            static_cast<void>(palmier::exporting::exportProjectClipH264(
+                document(),
+                {directory.path(), "track", "clip", cancelledDestination},
+                {},
+                cancellation.get_token()
+            ));
+        },
+        H264ExportFailureCode::cancelled,
+        "resolveSelection"
+    );
+    require(!std::filesystem::exists(cancelledDestination), "cancelled workflow installed output");
+    requireNoStagingFiles(directory.path());
 }
 
 void refusesExistingDestinationWithoutMutation(
@@ -446,6 +573,96 @@ void cancellationBeforeInstallPreservesExistingDestination(
     requireNoStagingFiles(directory.path());
 }
 
+FILE_ID_INFO requireFileIdentity(HANDLE handle, std::string_view message) {
+    FILE_ID_INFO identity{};
+    require(
+        handle != INVALID_HANDLE_VALUE
+            && GetFileInformationByHandleEx(
+                handle,
+                FileIdInfo,
+                &identity,
+                static_cast<DWORD>(sizeof(identity))
+            ) != FALSE,
+        message
+    );
+    return identity;
+}
+
+bool sameFileIdentity(const FILE_ID_INFO& lhs, const FILE_ID_INFO& rhs) {
+    return lhs.VolumeSerialNumber == rhs.VolumeSerialNumber
+        && std::equal(
+            std::begin(lhs.FileId.Identifier),
+            std::end(lhs.FileId.Identifier),
+            std::begin(rhs.FileId.Identifier)
+        );
+}
+
+void stagingFlushAndInstallAreHandleCompatible(const TemporaryDirectory& directory) {
+    const std::vector<std::uint8_t> payload{1, 4, 9, 16};
+    const auto destination = directory.path() / "staging-install.mp4";
+    palmier::exporting::detail::installStagingFileForTesting(
+        destination,
+        payload,
+        false,
+        {},
+        {}
+    );
+    require(readBytes(destination) == payload, "staging install changed the payload");
+    requireNoStagingFiles(directory.path());
+}
+
+void flushFailurePreservesExistingDestination(const TemporaryDirectory& directory) {
+    const std::vector<std::uint8_t> sentinel{7, 5, 3, 1};
+    const auto destination = directory.write("flush-failure.mp4", sentinel);
+    bool receivedExactStagingHandle{};
+    palmier::exporting::detail::H264ExportTestHooks hooks;
+    hooks.flushFileBuffers = [
+        &receivedExactStagingHandle
+    ](std::uintptr_t rawHandle, const std::filesystem::path& stagingPath) {
+        const auto handle = reinterpret_cast<HANDLE>(rawHandle);
+        const auto hookIdentity = requireFileIdentity(handle, "flush hook handle is invalid");
+        const HANDLE pathHandle = CreateFileW(
+            stagingPath.c_str(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr
+        );
+        const auto pathIdentity = requireFileIdentity(
+            pathHandle,
+            "staging path could not be opened for identity comparison"
+        );
+        CloseHandle(pathHandle);
+        receivedExactStagingHandle = sameFileIdentity(hookIdentity, pathIdentity);
+        return palmier::exporting::detail::FileFlushResult{
+            false,
+            static_cast<int>(ERROR_DISK_FULL),
+        };
+    };
+    try {
+        palmier::exporting::detail::installStagingFileForTesting(
+            destination,
+            {2, 3, 5, 7},
+            true,
+            {},
+            hooks
+        );
+        throw std::runtime_error("expected staging flush failure");
+    } catch (const H264ExportError& error) {
+        require(
+            error.code == H264ExportFailureCode::stagingFailed,
+            "flush failure returned the wrong code"
+        );
+        require(error.stage == "flushStaging", "flush failure returned the wrong stage");
+        require(error.nativeCode == ERROR_DISK_FULL, "flush failure lost its native code");
+    }
+    require(receivedExactStagingHandle, "flush hook did not receive the exact staging handle");
+    require(readBytes(destination) == sentinel, "flush failure mutated destination");
+    requireNoStagingFiles(directory.path());
+}
+
 }
 
 int main(int argumentCount, char* arguments[]) {
@@ -464,6 +681,10 @@ int main(int argumentCount, char* arguments[]) {
             invalidDestinationIsRefusedBeforeStaging(directory, input);
             overlappingVisibleLayerIsRefusedBeforeStaging(directory, input);
             timingMismatchIsRefused(directory, input);
+            selectedClipWorkflowRefusesInvalidSelection(directory);
+            selectedClipWorkflowReportsBoundaryFailures(directory);
+            stagingFlushAndInstallAreHandleCompatible(directory);
+            flushFailurePreservesExistingDestination(directory);
             std::cout << "h264 project exporter contract tests passed\n";
             return 0;
         }
@@ -472,6 +693,7 @@ int main(int argumentCount, char* arguments[]) {
             const auto destination = directory.path() / "export.mp4";
             exportsAndIndependentlyDecodesEveryFrame(input, destination);
             requireNoStagingFiles(directory.path());
+            selectedClipWorkflowExportsAndIndependentlyDecodes(directory);
             replacementInstallsOnlyVerifiedOutput(directory, input);
             failedInstallPreservesExistingDestination(directory, input);
             earlyEofCleansStaging(directory, input);

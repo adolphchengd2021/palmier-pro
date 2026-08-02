@@ -17,6 +17,7 @@ enum class H264ExportFailureCode {
     resourceLimitExceeded,
     unsupportedSourceTiming,
     unsupportedEncoder,
+    mediaUnavailable,
     sourceEndedEarly,
     encodeFailed,
     verificationFailed,

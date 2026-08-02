@@ -14,8 +14,8 @@ Undo, explicit Save, and dirty-close protection in Qt. The Qt workflow also
 builds an unsigned x64 prototype installer with a runtime hash manifest and
 distribution evidence, then tests isolated staging, install, launch, uninstall,
 and external user-data preservation. It does not yet provide general timeline
-editing, autosave, Save As, audio export, integrated export UI, a signed release
-installer, or clean Windows 10 19045 acceptance.
+editing, autosave, Save As, audio export, general timeline export, a signed
+release installer, or clean Windows 10 19045 acceptance.
 
 - Requirements: `docs/WINDOWS_10_PORT_REQUIREMENTS.zh-CN.md`
 - Decisions: `docs/windows/adr/`
@@ -125,8 +125,14 @@ this exact compiler and render entry point, records and locks a sibling staging
 MP4's file identity, independently decodes it, and commits that verified object
 with one handle-based rename. It accepts
 only one exact-CFR source at source frame zero and the locked `h264_mf` encoder;
-audio, VFR, trim seeking, H.265, UI job ownership, and release approval remain
-open. See ADR 0009, ADR 0024, and ADR 0025.
+audio, VFR, trim seeking, H.265, and release approval remain open at the
+low-level boundary. The Qt shell now owns one background selected-clip export
+job, captures an immutable live runtime snapshot, resolves the media reference
+through the shared package-safe resolver, supports cancellation and shutdown
+drain, and reports a committed result from an older revision as
+`completedOutdated`. The staging file is durably flushed before independent
+decode and atomic installation. This remains a selected static video-clip slice,
+not general timeline export; see ADR 0009, ADR 0024, ADR 0025, and ADR 0034.
 
 The optional FFmpeg prototype activates the first vcpkg manifest dependency:
 

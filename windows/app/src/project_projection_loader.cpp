@@ -2,6 +2,7 @@
 
 #include "palmier/project/project_package_reader.hpp"
 #include "palmier/project/media_manifest_reader.hpp"
+#include "palmier/project/project_media_resolver.hpp"
 #include "palmier/project_render/project_render_compiler.hpp"
 
 #include <QVariantMap>
@@ -30,77 +31,6 @@ std::optional<std::int64_t> checkedClipEnd(const palmier::project::Clip& clip) {
         return std::nullopt;
     }
     return clip.startFrame + clip.durationFrames;
-}
-
-bool containsParentTraversal(const std::filesystem::path& path) {
-    return std::any_of(path.begin(), path.end(), [](const auto& component) {
-        return component == "..";
-    });
-}
-
-bool isContainedBy(
-    const std::filesystem::path& candidate,
-    const std::filesystem::path& packageRoot
-) {
-    const auto relative = candidate.lexically_relative(packageRoot);
-    return !relative.empty() && !relative.is_absolute() && !containsParentTraversal(relative);
-}
-
-std::filesystem::path pathFromUtf8(const std::string& value) {
-    return std::filesystem::path(std::u8string(value.begin(), value.end()));
-}
-
-std::optional<std::filesystem::path> resolvedInputPath(
-    const palmier::project::MediaManifestSource& source,
-    const std::filesystem::path& packagePath,
-    std::stop_token cancellation
-) {
-    checkCancellation(cancellation);
-    std::filesystem::path candidate;
-    if (source.kind == palmier::project::MediaSourceKind::external) {
-        candidate = pathFromUtf8(source.path);
-        if (!candidate.is_absolute()) return std::nullopt;
-    } else {
-        const auto relative = pathFromUtf8(source.path);
-        if (
-            relative.empty()
-            || relative.is_absolute()
-            || relative.has_root_name()
-            || relative.has_root_directory()
-            || containsParentTraversal(relative)
-        ) {
-            return std::nullopt;
-        }
-        candidate = packagePath / relative;
-    }
-
-    std::error_code error;
-    const auto canonicalCandidate = std::filesystem::weakly_canonical(candidate, error);
-    checkCancellation(cancellation);
-    if (error) return std::nullopt;
-    if (source.kind == palmier::project::MediaSourceKind::project) {
-        const auto canonicalPackage = std::filesystem::weakly_canonical(packagePath, error);
-        checkCancellation(cancellation);
-        if (error || !isContainedBy(canonicalCandidate, canonicalPackage)) return std::nullopt;
-    }
-    const bool isRegularFile = std::filesystem::is_regular_file(canonicalCandidate, error);
-    checkCancellation(cancellation);
-    if (!isRegularFile || error) {
-        return std::nullopt;
-    }
-    return canonicalCandidate;
-}
-
-const palmier::project::MediaManifestEntry* firstManifestEntry(
-    const palmier::project::MediaManifest& manifest,
-    const std::string& mediaId
-) {
-    const auto entry = std::find_if(
-        manifest.entries.begin(),
-        manifest.entries.end(),
-        [&mediaId](const auto& value) { return value.id == mediaId; }
-    );
-    return entry == manifest.entries.end() ? nullptr : &*entry;
 }
 
 bool supportedClip(const palmier::project::Clip& clip) {
@@ -285,35 +215,42 @@ ProjectPreviewProjection projectPreviewForActiveTimeline(
                 std::nullopt,
             };
         }
-        const auto* entry = firstManifestEntry(*manifest, clip.mediaRef);
-        if (entry == nullptr) {
-            firstReason = "mediaEntryMissing";
-            firstAvailability = PreviewCandidateAvailability::offline;
-            continue;
+        std::optional<palmier::project::ResolvedProjectMediaReference> resolved;
+        try {
+            resolved = palmier::project::resolveProjectMediaReference(
+                *manifest,
+                clip.mediaRef,
+                "video",
+                packagePath,
+                cancellation
+            );
+        } catch (const palmier::project::ProjectMediaResolveError& error) {
+            if (error.code == "cancelled") {
+                throw ProjectProjectionError("cancelled", error.what());
+            }
+            if (error.code == "mediaEntryMissing" || error.code == "mediaFileUnavailable") {
+                firstReason = error.code;
+                firstAvailability = PreviewCandidateAvailability::offline;
+                continue;
+            }
+            return {
+                PreviewCandidateAvailability::unsupported,
+                error.code,
+                std::nullopt,
+            };
         }
-        if (entry->type != "video") {
-            firstReason = "mediaTypeMismatch";
-            firstAvailability = PreviewCandidateAvailability::unsupported;
-            continue;
-        }
-        if (entry->hasAudio == false) {
+        if (resolved->hasAudio == false) {
             firstReason = "videoOnlyPlaybackUnsupported";
             firstAvailability = PreviewCandidateAvailability::unsupported;
-            continue;
-        }
-        const auto inputPath = resolvedInputPath(entry->source, packagePath, cancellation);
-        if (!inputPath) {
-            firstReason = "mediaFileUnavailable";
-            firstAvailability = PreviewCandidateAvailability::offline;
             continue;
         }
         return {
             PreviewCandidateAvailability::available,
             {},
             PreviewMediaCandidateProjection{
-                *inputPath,
+                std::move(resolved->path),
                 std::move(*renderLayer),
-                entry->hasAudio,
+                resolved->hasAudio,
             },
         };
     }

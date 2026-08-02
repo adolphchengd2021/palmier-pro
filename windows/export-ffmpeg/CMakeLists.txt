@@ -1,6 +1,9 @@
 set(export_ffmpeg_include_dir "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
-add_library(palmier_export_ffmpeg STATIC h264_project_exporter.cpp)
+add_library(palmier_export_ffmpeg STATIC
+    h264_project_exporter.cpp
+    project_clip_h264_export_workflow.cpp
+)
 target_include_directories(
     palmier_export_ffmpeg
     PUBLIC "${export_ffmpeg_include_dir}"
@@ -17,6 +20,7 @@ target_link_libraries(
         palmier_ffmpeg
         palmier_media_ffmpeg
         palmier_media_render
+        palmier_project_reader
         palmier_render
 )
 

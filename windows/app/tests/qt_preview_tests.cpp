@@ -4,6 +4,7 @@
 #include "palmier/windows/preview_presentation_controller.hpp"
 #include "palmier/windows/project_load_coordinator.hpp"
 #include "palmier/windows/project_editing_controller.hpp"
+#include "palmier/windows/project_export_controller.hpp"
 #include "palmier/windows/project_persistence_controller.hpp"
 
 #include <QDebug>
@@ -976,6 +977,7 @@ private slots:
             persistenceMailbox,
             nullptr
         );
+        palmier::windows::ProjectExportController exporting(persistenceMailbox);
         QQmlApplicationEngine engine;
         engine.rootContext()->setContextProperty(
             QStringLiteral("projectCoordinator"),
@@ -988,6 +990,10 @@ private slots:
         engine.rootContext()->setContextProperty(
             QStringLiteral("persistenceCoordinator"),
             &persistence
+        );
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("exportCoordinator"),
+            &exporting
         );
         engine.rootContext()->setContextProperty(
             QStringLiteral("previewCoordinator"),

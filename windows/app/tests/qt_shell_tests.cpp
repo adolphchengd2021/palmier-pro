@@ -1,5 +1,6 @@
 #include "palmier/windows/project_load_coordinator.hpp"
 #include "palmier/windows/project_editing_controller.hpp"
+#include "palmier/windows/project_export_controller.hpp"
 #include "palmier/windows/project_persistence_controller.hpp"
 #include "palmier/windows/project_projection_loader.hpp"
 #include "palmier/windows/preview_presentation_controller.hpp"
@@ -590,7 +591,16 @@ private slots:
     void runtimeMutationRefreshesQtProjectionAndInvalidatesPreview() {
         auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
         palmier::project::ProjectRuntime runtime(mailbox);
-        palmier::windows::ProjectRuntimeProjectionBridge bridge(mailbox);
+        auto projectionGate = std::make_shared<QSemaphore>();
+        palmier::windows::ProjectRuntimeProjectionBridge bridge(
+            mailbox,
+            [projectionGate](const palmier::windows::ProjectRuntimePublication& publication) {
+                if (publication.session && publication.session->revision == 1) {
+                    projectionGate->acquire();
+                }
+            },
+            nullptr
+        );
         palmier::windows::ProjectLoadCoordinator coordinator(
             runtime,
             mailbox,
@@ -599,6 +609,7 @@ private slots:
             },
             nullptr
         );
+        QSemaphoreReleaser releaseProjectionOnExit(*projectionGate);
         connect(
             &bridge,
             &palmier::windows::ProjectRuntimeProjectionBridge::publicationObserved,
@@ -623,6 +634,7 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(coordinator.state(), QStringLiteral("loaded"), 5000);
         QCOMPARE(coordinator.committedGeneration(), std::uint64_t{1});
         QCOMPARE(coordinator.committedRevision(), std::uint64_t{0});
+        QVERIFY(coordinator.presentationReady());
 
         std::exception_ptr mutationFailure;
         std::jthread mutation([&] {
@@ -636,12 +648,24 @@ private slots:
                 mutationFailure = std::current_exception();
             }
         });
-        QTRY_COMPARE_WITH_TIMEOUT(coordinator.committedRevision(), std::uint64_t{1}, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!coordinator.presentationReady(), 5000);
         QTRY_COMPARE_WITH_TIMEOUT(
             coordinator.committedPreview().availability,
             palmier::windows::PreviewCandidateAvailability::invalidated,
             5000
         );
+        QCOMPARE(coordinator.committedRevision(), std::uint64_t{0});
+        QCOMPARE(
+            coordinator.model()->data(
+                coordinator.model()->index(0, 0),
+                palmier::windows::ReadOnlyTimelineModel::ClipItemsRole
+            ).toList().size(),
+            1
+        );
+        projectionGate->release();
+        static_cast<void>(releaseProjectionOnExit.cancel());
+        QTRY_COMPARE_WITH_TIMEOUT(coordinator.committedRevision(), std::uint64_t{1}, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(coordinator.presentationReady(), 5000);
         QTRY_COMPARE_WITH_TIMEOUT(coordinator.model()->rowCount(), 1, 5000);
         QTRY_COMPARE_WITH_TIMEOUT(
             coordinator.model()->data(
@@ -1519,6 +1543,7 @@ private slots:
             persistenceMailbox,
             nullptr
         );
+        palmier::windows::ProjectExportController exportController(persistenceMailbox);
         QQmlApplicationEngine engine;
         engine.rootContext()->setContextProperty(QStringLiteral("projectCoordinator"), &coordinator);
         engine.rootContext()->setContextProperty(
@@ -1530,6 +1555,10 @@ private slots:
             &persistenceController
         );
         engine.rootContext()->setContextProperty(
+            QStringLiteral("exportCoordinator"),
+            &exportController
+        );
+        engine.rootContext()->setContextProperty(
             QStringLiteral("previewCoordinator"),
             &previewController
         );
@@ -1537,6 +1566,12 @@ private slots:
         QVERIFY2(!engine.rootObjects().isEmpty(), "Main QML did not load");
         auto* root = engine.rootObjects().front();
         QVERIFY(root->findChild<QObject*>(QStringLiteral("timelineTracks")) != nullptr);
+        QVERIFY(
+            root->findChild<QObject*>(QStringLiteral("exportSelectedClipButton"))
+                != nullptr
+        );
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("cancelExportButton")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("exportCloseDialog")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("previewViewport")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("previewErrorState")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("emptyState")) != nullptr);
@@ -1593,6 +1628,7 @@ private slots:
             persistenceMailbox,
             nullptr
         );
+        palmier::windows::ProjectExportController exportController(persistenceMailbox);
         QQmlApplicationEngine engine;
         engine.rootContext()->setContextProperty(QStringLiteral("projectCoordinator"), &coordinator);
         engine.rootContext()->setContextProperty(
@@ -1602,6 +1638,10 @@ private slots:
         engine.rootContext()->setContextProperty(
             QStringLiteral("persistenceCoordinator"),
             &persistenceController
+        );
+        engine.rootContext()->setContextProperty(
+            QStringLiteral("exportCoordinator"),
+            &exportController
         );
         engine.rootContext()->setContextProperty(
             QStringLiteral("previewCoordinator"),

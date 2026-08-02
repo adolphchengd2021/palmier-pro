@@ -2,6 +2,7 @@
 #include "palmier/project/project_runtime.hpp"
 #include "palmier/windows/project_load_coordinator.hpp"
 #include "palmier/windows/project_editing_controller.hpp"
+#include "palmier/windows/project_export_controller.hpp"
 #include "palmier/windows/project_persistence_controller.hpp"
 #include "palmier/windows/preview_presentation_controller.hpp"
 #include "palmier/windows/project_runtime_mailbox.hpp"
@@ -29,15 +30,23 @@ public:
     explicit QuitGuard(
         palmier::windows::ProjectPersistenceController& persistence,
         palmier::windows::ProjectEditingController& editing,
+        palmier::windows::ProjectExportController& exporting,
         QObject* parent
-    ) : QObject(parent), persistence_(&persistence), editing_(&editing) {}
+    ) : QObject(parent),
+        persistence_(&persistence),
+        editing_(&editing),
+        exporting_(&exporting) {}
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override {
         if (
             event->type() == QEvent::Quit
-            && !persistence_->shutdownAdmitted()
-            && (persistence_->dirty() || persistence_->saving() || editing_->busy())
+            && (
+                (!persistence_->shutdownAdmitted()
+                    && (persistence_->dirty() || persistence_->saving()))
+                || editing_->busy()
+                || exporting_->exporting()
+            )
         ) {
             event->ignore();
             QTimer::singleShot(0, this, [] {
@@ -51,11 +60,13 @@ protected:
 private:
     palmier::windows::ProjectPersistenceController* persistence_{};
     palmier::windows::ProjectEditingController* editing_{};
+    palmier::windows::ProjectExportController* exporting_{};
 };
 
 bool drainShutdown(
     palmier::windows::ProjectLoadCoordinator& project,
     palmier::windows::ProjectEditingController& editing,
+    palmier::windows::ProjectExportController& exporting,
     palmier::windows::ProjectPersistenceController& persistence,
     palmier::windows::PreviewPresentationController& preview,
     palmier::windows::ProjectRuntimeProjectionBridge& projectionBridge,
@@ -71,6 +82,16 @@ bool drainShutdown(
     );
     if (!editing.requestShutdown() && editing.busy()) {
         editingLoop.exec(QEventLoop::ExcludeUserInputEvents);
+    }
+    QEventLoop exportLoop;
+    QObject::connect(
+        &exporting,
+        &palmier::windows::ProjectExportController::shutdownReady,
+        &exportLoop,
+        &QEventLoop::quit
+    );
+    if (!exporting.requestShutdown() && exporting.exporting()) {
+        exportLoop.exec(QEventLoop::ExcludeUserInputEvents);
     }
     QEventLoop loop;
     bool projectReady{};
@@ -149,7 +170,8 @@ bool drainShutdown(
     runtimeWatcher.setFuture(QtConcurrent::run([&runtime] { runtime.close(); }));
     if (!runtimeWatcher.isFinished()) loop.exec(QEventLoop::ExcludeUserInputEvents);
     const auto mcpStatus = mcpService.status();
-    return projectReady && persistenceReady && previewReady && projectionReady && mcpReady
+    return !editing.busy() && !exporting.exporting()
+        && projectReady && persistenceReady && previewReady && projectionReady && mcpReady
         && runtimeWatcher.isFinished() && preview.shutdownComplete()
         && preview.errorCode().isEmpty()
         && mcpStatus.state != palmier::mcp::HttpServerState::failed;
@@ -187,13 +209,19 @@ int main(int argc, char* argv[]) {
         runtimeMailbox,
         nullptr
     );
+    palmier::windows::ProjectExportController exportController(runtimeMailbox);
     palmier::mcp::HttpServerService mcpService(
         *runtime,
         {.port = anySmoke ? std::uint16_t{0} : std::uint16_t{19789}},
         newUuid
     );
     mcpService.start();
-    QuitGuard quitGuard(persistenceController, editingController, &application);
+    QuitGuard quitGuard(
+        persistenceController,
+        editingController,
+        exportController,
+        &application
+    );
     application.installEventFilter(&quitGuard);
     palmier::windows::PreviewPresentationController previewController(
         quitSmoke
@@ -210,6 +238,7 @@ int main(int argc, char* argv[]) {
             if (publication) {
                 persistenceController.observeRuntimePublication(*publication);
                 editingController.observeRuntimePublication(*publication);
+                exportController.observeRuntimePublication(*publication);
                 coordinator.observeRuntimePublication(*publication);
             }
         }
@@ -230,6 +259,7 @@ int main(int argc, char* argv[]) {
         [
             &coordinator,
             &editingController,
+            &exportController,
             &previewController,
             &persistenceController
         ] {
@@ -238,6 +268,12 @@ int main(int argc, char* argv[]) {
                 coordinator.committedGeneration()
             );
             editingController.activateProject(coordinator.committedGeneration());
+            exportController.activateProject(
+                coordinator.committedPackagePath(),
+                coordinator.committedGeneration(),
+                coordinator.committedRevision(),
+                coordinator.presentationReady()
+            );
             previewController.replaceProjectPreview(
                 coordinator.committedGeneration(),
                 coordinator.committedRevision(),
@@ -254,6 +290,7 @@ int main(int argc, char* argv[]) {
         shutdownSucceeded = drainShutdown(
             coordinator,
             editingController,
+            exportController,
             persistenceController,
             previewController,
             projectionBridge,
@@ -311,6 +348,10 @@ int main(int argc, char* argv[]) {
     engine.rootContext()->setContextProperty(
         QStringLiteral("persistenceCoordinator"),
         &persistenceController
+    );
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("exportCoordinator"),
+        &exportController
     );
     engine.rootContext()->setContextProperty(
         QStringLiteral("previewCoordinator"),
