@@ -169,6 +169,11 @@ void exportsAndIndependentlyDecodesEveryFrame(
     require(video != probe.streams.end(), "exported MP4 has no video stream");
     require(video->codecName == "h264", "exported MP4 codec changed");
     require(video->width == 64 && video->height == 64, "exported dimensions changed");
+    require(
+        video->realFrameRate.numerator == 10
+            && video->realFrameRate.denominator == 1,
+        "exported frame cadence changed"
+    );
 
     FfmpegVideoFrameReader reader(destination);
     std::uint64_t frames = 0;

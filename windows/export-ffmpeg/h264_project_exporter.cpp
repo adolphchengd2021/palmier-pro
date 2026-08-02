@@ -727,7 +727,7 @@ std::uint64_t verifyOutput(
         || stream->codecName != "h264"
         || stream->width != static_cast<std::int32_t>(layer.canvasWidth)
         || stream->height != static_cast<std::int32_t>(layer.canvasHeight)
-        || !isExactRate(stream->averageFrameRate, layer.framesPerSecond)) {
+        || !isExactRate(stream->realFrameRate, layer.framesPerSecond)) {
         const std::string detail = stream == probe.streams.end()
             ? "encoded output has no video stream"
             : "encoded stream contract differs: codec="
