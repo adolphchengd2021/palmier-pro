@@ -866,7 +866,8 @@ void writeNewFile(
     std::size_t offset{};
     while (offset < content.size()) {
         checkCancellation(cancellation, "writeProjectJson");
-        const auto count = static_cast<DWORD>((std::min)(content.size() - offset, 1024U * 1024U));
+        constexpr std::size_t chunkBytes = 1024U * 1024U;
+        const auto count = static_cast<DWORD>((std::min)(content.size() - offset, chunkBytes));
         DWORD written{};
         if (!WriteFile(file.get(), content.data() + offset, count, &written, nullptr)) {
             fail("stagingFailed", "writeProjectJson", "staging project.json write failed", GetLastError());
