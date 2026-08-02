@@ -173,7 +173,7 @@ public:
     explicit DestinationGuard(std::filesystem::path projectJson)
         : projectJson_(std::move(projectJson)), file_(CreateFileW(
               projectJson_.c_str(),
-              FILE_READ_ATTRIBUTES,
+              GENERIC_READ,
               FILE_SHARE_READ,
               nullptr,
               OPEN_EXISTING,
