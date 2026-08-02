@@ -1671,6 +1671,7 @@ def windows_project_reader_contract() -> None:
     for token in [
         "editSaveRestartPreservesCanariesAndState",
         "move did not update runtime",
+        "clip properties did not update runtime",
         "remove did not update runtime",
         "restart unexpectedly retained a redo action",
         "savingAnOlderSnapshotLeavesNewerRuntimeDirty",
@@ -4260,6 +4261,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "Q_PROPERTY(bool canRedo READ canRedo NOTIFY canRedoChanged)",
         "moveClip(",
         "removeClip(const QString& clipId)",
+        "setClipTiming(",
         "clipRemoved(const QString& clipId)",
         "void historyRestored()",
         "splitClip(const QString& clipId, const QString& frameText)",
@@ -4274,6 +4276,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "^[0-9]+$",
         "runtime->moveClips(",
         "runtime->removeClips(",
+        "runtime->setClipProperties(",
         "runtime->splitClips(",
         "runtime->undo(generation, cancellation)",
         "runtime->redo(generation, cancellation)",
@@ -4327,6 +4330,9 @@ def windows_qt_read_only_shell_contract() -> None:
         "checkedClipEnd",
         "offsetRatio",
         "extentRatio",
+        "trimStartFrameText",
+        "trimEndFrameText",
+        "speedText",
         "track.clipItems",
         "maximumProjectedClipsPerTrack",
         "maximumProjectedTracksPerTimeline",
@@ -4374,6 +4380,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "persistenceShutdownReady",
         "editingCoordinator.moveClip(",
         "editingCoordinator.removeClip(",
+        "editingCoordinator.setClipTiming(",
         "function onClipRemoved(clipId)",
         "function onHistoryRestored()",
         "editingCoordinator.splitClip(",
@@ -4383,6 +4390,11 @@ def windows_qt_read_only_shell_contract() -> None:
         'objectName: "removeClipButton"',
         'objectName: "undoButton"',
         'objectName: "redoButton"',
+        'objectName: "durationFramesField"',
+        'objectName: "trimStartFrameField"',
+        'objectName: "trimEndFrameField"',
+        'objectName: "clipSpeedField"',
+        'objectName: "setClipTimingButton"',
         "editingCoordinator.undo()",
         "editingCoordinator.redo()",
         "modelData.stableId",
@@ -4439,6 +4451,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "editingControllerSplitsAndUndoesByStableId",
         "QSignalSpy historyRestored",
         "editingControllerMovesByStableIdAndPreservesNoOpHistory",
+        "editingControllerSetsClipTimingAndUndoes",
         "editingControllerRemovesByStableIdAndUndoes",
         "persistenceShutdownRefreshesAuthoritativeDirtyState",
     ]:
@@ -5035,6 +5048,7 @@ def windows_mcp_project_session_contract() -> None:
     move_adr = read_text("docs/windows/adr/0036-atomic-move-clips.md")
     remove_adr = read_text("docs/windows/adr/0037-atomic-remove-clips.md")
     redo_adr = read_text("docs/windows/adr/0038-exact-redo-history.md")
+    properties_adr = read_text("docs/windows/adr/0039-shared-clip-timing-properties.md")
     readme = read_text("docs/windows/README.md")
     for token in [
         "class ProjectSession final",
@@ -5045,6 +5059,7 @@ def windows_mcp_project_session_contract() -> None:
         "TimelineQuery",
         "MoveClipsCommand",
         "RemoveClipsCommand",
+        "SetClipPropertiesCommand",
         "SplitClipsCommand",
         "CommandResult",
         "ProjectSessionPublicationFactory",
@@ -5061,7 +5076,11 @@ def windows_mcp_project_session_contract() -> None:
         "unsafeClipIds(document)",
         "CommandResult ProjectSession::moveClips(",
         "CommandResult ProjectSession::removeClips(",
+        "CommandResult ProjectSession::setClipProperties(",
         "CommandResult ProjectSession::redo(",
+        "multicamTimingRefused",
+        "applyDurationSourceSemantics",
+        "speed skipped for nested timeline clip",
         "linked clips must preserve their frame offsets",
         "moved clips overlap on a destination track",
         "destination overlap would change a linked clip",
@@ -5116,10 +5135,15 @@ def windows_mcp_project_session_contract() -> None:
         "changedEditInvalidatesRedoButFailuresAndNoOpsPreserveIt",
         "persistenceKeepsHistoryAndUsesRestoredStateIdentity",
         "redoCancellationAfterPublicationDoesNotCommit",
+        "timingPropertiesPropagateAndRestoreSourceSemantics",
+        "timingValidationNoOpAndBranchingPreserveHistory",
+        "timingRefusesMulticamAndMalformedDependentState",
+        "timingCancellationAfterPublicationDoesNotCommit",
         "publicationPreparationFailureDoesNotCommit",
         "split publication failure must preserve the exact session",
         "move publication failure must preserve the exact session",
         "remove publication failure must preserve the exact session",
+        "property publication failure must preserve the exact session",
         "undo publication failure must retain the committed split and undo entry",
         "redo publication failure must retain the undone state and redo entry",
         "persistence publication failure must not acknowledge the state",
@@ -5133,6 +5157,7 @@ def windows_mcp_project_session_contract() -> None:
         "ProjectRuntimeCommandResult",
         "moveClips(",
         "removeClips(",
+        "setClipProperties(",
         "redo(",
         "projectGeneration(",
         "ProjectRuntimeObserver",
@@ -5152,6 +5177,7 @@ def windows_mcp_project_session_contract() -> None:
         "runtime.requireProjectGeneration(expectedProjectGeneration)",
         "runtime.observer->operationCommitted()",
         "runtime.requireSession().redo(cancellation)",
+        "runtime.requireSession().setClipProperties(command, cancellation)",
         "observer->statePublished(state)",
         "auto state = result.publication",
         "if (admissionObserver) admissionObserver->operationAdmitted()",
@@ -5163,6 +5189,7 @@ def windows_mcp_project_session_contract() -> None:
         "mutationPublishesOneSessionState",
         "moveNoOpDoesNotPublishOrAdvanceHistory",
         "removePublishesOneSharedStateAndUndo",
+        "clipPropertiesPublishOnlyChangedSharedState",
         "dirtyAndGenerationGatesProtectReplacement",
         "operationsAreSerializedAndQueuedCancellationDoesNotCommit",
         "cancellationAfterCommitStillPublishesSuccess",
@@ -5175,6 +5202,18 @@ def windows_mcp_project_session_contract() -> None:
     ]:
         if token not in runtime_tests:
             raise ContractError(f"ProjectRuntime test missing token {token!r}")
+    for token in [
+        "`ProjectSession::setClipProperties` is the sole Windows owner",
+        "Text partners",
+        "Multicam timing is refused before mutation",
+        "fade lengths clamp",
+        "keyframes outside the clip are\nremoved",
+        "text word timings rescale",
+        "does not expose `set_clip_properties` yet",
+        "not a Windows-only `trim_clips` tool",
+    ]:
+        if token not in properties_adr:
+            raise ContractError(f"clip properties ADR missing token {token!r}")
     for token in ["palmier_project_runtime", "project_runtime.serial_owner"]:
         if token not in runtime_cmake:
             raise ContractError(f"ProjectRuntime CMake missing token {token!r}")

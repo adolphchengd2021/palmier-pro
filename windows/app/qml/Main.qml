@@ -13,6 +13,10 @@ ApplicationWindow {
     property string selectedClipId: ""
     property string selectedTrackId: ""
     property string selectedMediaType: ""
+    property string selectedDurationText: ""
+    property string selectedTrimStartText: ""
+    property string selectedTrimEndText: ""
+    property string selectedSpeedText: ""
     property string exportRequestMessage: ""
     property bool projectShutdownReady: false
     property bool persistenceShutdownReady: false
@@ -81,11 +85,19 @@ ApplicationWindow {
             window.selectedClipId = ""
             window.selectedTrackId = ""
             window.selectedMediaType = ""
+            window.selectedDurationText = ""
+            window.selectedTrimStartText = ""
+            window.selectedTrimEndText = ""
+            window.selectedSpeedText = ""
         }
         function onHistoryRestored() {
             window.selectedClipId = ""
             window.selectedTrackId = ""
             window.selectedMediaType = ""
+            window.selectedDurationText = ""
+            window.selectedTrimStartText = ""
+            window.selectedTrimEndText = ""
+            window.selectedSpeedText = ""
         }
     }
 
@@ -132,6 +144,10 @@ ApplicationWindow {
             window.selectedClipId = ""
             window.selectedTrackId = ""
             window.selectedMediaType = ""
+            window.selectedDurationText = ""
+            window.selectedTrimStartText = ""
+            window.selectedTrimEndText = ""
+            window.selectedSpeedText = ""
             window.exportRequestMessage = ""
         }
     }
@@ -299,6 +315,72 @@ ApplicationWindow {
                         : persistenceCoordinator.dirty
                             ? qsTr("Edited")
                             : qsTr("Saved")
+            }
+        }
+
+        Row {
+            spacing: AppTheme.itemSpacing
+            Label {
+                text: qsTr("Clip timing")
+                color: AppTheme.secondaryText
+            }
+            TextField {
+                id: durationFrames
+                objectName: "durationFramesField"
+                width: AppTheme.editFieldWidth
+                text: window.selectedDurationText
+                placeholderText: qsTr("Duration frames")
+                validator: RegularExpressionValidator { regularExpression: /[0-9]*/ }
+            }
+            TextField {
+                id: trimStartFrame
+                objectName: "trimStartFrameField"
+                width: AppTheme.editFieldWidth
+                text: window.selectedTrimStartText
+                placeholderText: qsTr("Trim start")
+                validator: RegularExpressionValidator { regularExpression: /[0-9]*/ }
+            }
+            TextField {
+                id: trimEndFrame
+                objectName: "trimEndFrameField"
+                width: AppTheme.editFieldWidth
+                text: window.selectedTrimEndText
+                placeholderText: qsTr("Trim end")
+                validator: RegularExpressionValidator { regularExpression: /[0-9]*/ }
+            }
+            TextField {
+                id: clipSpeed
+                objectName: "clipSpeedField"
+                width: AppTheme.editFieldWidth
+                text: window.selectedSpeedText
+                placeholderText: qsTr("Speed")
+                validator: RegularExpressionValidator {
+                    regularExpression: /([0-9]+(\.[0-9]*)?|\.[0-9]+)?/
+                }
+            }
+            Button {
+                objectName: "setClipTimingButton"
+                text: qsTr("Set Timing")
+                enabled: window.selectedClipId.length > 0
+                    && (durationFrames.text.length > 0
+                        || trimStartFrame.text.length > 0
+                        || trimEndFrame.text.length > 0
+                        || clipSpeed.text.length > 0)
+                    && durationFrames.acceptableInput
+                    && trimStartFrame.acceptableInput
+                    && trimEndFrame.acceptableInput
+                    && clipSpeed.acceptableInput
+                    && projectCoordinator.presentationReady
+                    && !projectCoordinator.loading
+                    && !editingCoordinator.busy
+                    && !exportCoordinator.exporting
+                onClicked: editingCoordinator.setClipTiming(
+                    window.selectedClipId,
+                    durationFrames.text,
+                    trimStartFrame.text,
+                    trimEndFrame.text,
+                    clipSpeed.text
+                )
             }
         }
     }
@@ -542,10 +624,14 @@ ApplicationWindow {
                                 anchors.fill: parent
                                 enabled: projectCoordinator.presentationReady
                                 onClicked: {
-                                    window.selectedTrackId = trackDelegate.stableId
-                                    window.selectedClipId = modelData.stableId
-                                    window.selectedMediaType = modelData.mediaType
-                                }
+                                     window.selectedTrackId = trackDelegate.stableId
+                                     window.selectedClipId = modelData.stableId
+                                     window.selectedMediaType = modelData.mediaType
+                                     window.selectedDurationText = modelData.durationFramesText
+                                     window.selectedTrimStartText = modelData.trimStartFrameText
+                                     window.selectedTrimEndText = modelData.trimEndFrameText
+                                     window.selectedSpeedText = modelData.speedText
+                                 }
                             }
 
                             Label {

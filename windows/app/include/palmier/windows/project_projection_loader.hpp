@@ -26,6 +26,9 @@ struct ClipProjection final {
     std::string mediaType;
     std::int64_t startFrame{};
     std::int64_t durationFrames{};
+    std::int64_t trimStartFrame{};
+    std::int64_t trimEndFrame{};
+    double speed{1.0};
     double offsetRatio{};
     double extentRatio{};
 };

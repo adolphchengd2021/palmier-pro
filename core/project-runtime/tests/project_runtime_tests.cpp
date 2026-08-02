@@ -21,6 +21,7 @@ using palmier::project::ProjectRuntime;
 using palmier::project::ProjectRuntimeError;
 using palmier::project::ProjectRuntimeObserver;
 using palmier::project::RemoveClipsCommand;
+using palmier::project::SetClipPropertiesCommand;
 using palmier::project::SplitClipsCommand;
 using palmier::project::SplitPoint;
 
@@ -214,6 +215,39 @@ void removePublishesOneSharedStateAndUndo() {
     const auto restored = runtime.undo(1);
     require(restored.session->undoDepth == 0 && !restored.session->dirty(), "runtime remove undo");
     require(observer->publications().size() == 3, "remove undo should publish exactly once");
+}
+
+void clipPropertiesPublishOnlyChangedSharedState() {
+    auto observer = std::make_shared<RuntimeObserver>();
+    ProjectRuntime runtime(observer);
+    int nextId{};
+    runtime.install(projectDocument(), 1, [&] {
+        return "runtime-properties-id-" + std::to_string(++nextId);
+    });
+    const auto noOp = runtime.setClipProperties(SetClipPropertiesCommand{
+        {"target"}, 120, std::nullopt, std::nullopt, 1.0,
+    });
+    require(!noOp.command.changed && noOp.session->revision == 0, "property no-op runtime state");
+    require(observer->publications().size() == 1, "property no-op must not publish");
+
+    const auto changed = runtime.setClipProperties(SetClipPropertiesCommand{
+        {"target"}, std::nullopt, 10, 20, 2.0,
+    }, 1);
+    require(changed.command.changed && changed.session->revision == 1, "property runtime commit");
+    require(changed.session->undoDepth == 1 && changed.session->dirty(), "property runtime history");
+    require(observer->publications().size() == 2, "property change should publish once");
+    const auto& clip = runtime.getTimeline().timeline.find("tracks")->array().front()
+        .find("clips")->array().front();
+    require(
+        clip.find("durationFrames")->number().integer == 60
+            && clip.find("trimStartFrame")->number().integer == 10
+            && clip.find("trimEndFrame")->number().integer == 20,
+        "property runtime readback"
+    );
+    const auto restored = runtime.undo(1);
+    require(restored.session->stateId == 0 && !restored.session->dirty(), "property runtime undo");
+    const auto redone = runtime.redo(1);
+    require(redone.command.actionId == changed.command.actionId, "property runtime redo identity");
 }
 
 void dirtyAndGenerationGatesProtectReplacement() {
@@ -457,6 +491,7 @@ int main() {
         mutationPublishesOneSessionState();
         moveNoOpDoesNotPublishOrAdvanceHistory();
         removePublishesOneSharedStateAndUndo();
+        clipPropertiesPublishOnlyChangedSharedState();
         dirtyAndGenerationGatesProtectReplacement();
         persistenceAcknowledgementPublishesOnlyOnChange();
         saveSnapshotCarriesExactRuntimeIdentity();

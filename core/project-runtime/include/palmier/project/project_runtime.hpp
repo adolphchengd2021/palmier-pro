@@ -92,6 +92,11 @@ public:
         std::optional<std::uint64_t> expectedProjectGeneration = {},
         std::stop_token cancellation = {}
     );
+    ProjectRuntimeCommandResult setClipProperties(
+        SetClipPropertiesCommand command,
+        std::optional<std::uint64_t> expectedProjectGeneration = {},
+        std::stop_token cancellation = {}
+    );
     ProjectRuntimeCommandResult undo(
         std::optional<std::uint64_t> expectedProjectGeneration = {},
         std::stop_token cancellation = {}

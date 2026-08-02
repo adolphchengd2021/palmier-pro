@@ -6,6 +6,7 @@
 #include <QThreadPool>
 
 #include <exception>
+#include <cmath>
 #include <utility>
 
 namespace palmier::windows {
@@ -132,6 +133,71 @@ void ProjectEditingController::removeClip(const QString& clipId) {
     start(Operation::remove, clipId);
 }
 
+void ProjectEditingController::setClipTiming(
+    const QString& clipId,
+    const QString& durationText,
+    const QString& trimStartText,
+    const QString& trimEndText,
+    const QString& speedText
+) {
+    static const QRegularExpression decimalFrame(QStringLiteral("^[0-9]+$"));
+    static const QRegularExpression decimalSpeed(QStringLiteral("^(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)$"));
+    const auto parseFrame = [&](const QString& value, bool& valid) -> std::optional<std::int64_t> {
+        if (value.isEmpty()) {
+            valid = true;
+            return {};
+        }
+        bool converted{};
+        const auto frame = value.toLongLong(&converted, 10);
+        valid = converted && decimalFrame.match(value).hasMatch();
+        return valid ? std::optional<std::int64_t>{frame} : std::nullopt;
+    };
+    bool durationValid{};
+    bool trimStartValid{};
+    bool trimEndValid{};
+    const auto duration = parseFrame(durationText, durationValid);
+    const auto trimStart = parseFrame(trimStartText, trimStartValid);
+    const auto trimEnd = parseFrame(trimEndText, trimEndValid);
+    bool speedValid = speedText.isEmpty();
+    std::optional<double> speed;
+    if (!speedText.isEmpty()) {
+        bool converted{};
+        const auto value = speedText.toDouble(&converted);
+        speedValid = converted
+            && decimalSpeed.match(speedText).hasMatch()
+            && std::isfinite(value)
+            && value > 0.0;
+        if (speedValid) speed = value;
+    }
+    if (
+        clipId.isEmpty()
+        || (!duration && !trimStart && !trimEnd && !speed)
+        || !durationValid
+        || !trimStartValid
+        || !trimEndValid
+        || !speedValid
+        || (duration && *duration < 1)
+    ) {
+        setErrorCode(QStringLiteral("invalidArguments"));
+        setErrorMessage(QStringLiteral(
+            "Choose a clip and enter at least one valid duration, trim, or speed value."
+        ));
+        emit operationFinished(false);
+        return;
+    }
+    start(
+        Operation::properties,
+        clipId,
+        0,
+        {},
+        {},
+        duration,
+        trimStart,
+        trimEnd,
+        speed
+    );
+}
+
 void ProjectEditingController::undo() {
     if (!canUndo_) {
         setErrorCode(QStringLiteral("nothingToUndo"));
@@ -157,7 +223,11 @@ void ProjectEditingController::start(
     QString clipId,
     std::int64_t atFrame,
     std::optional<std::size_t> destinationTrack,
-    std::optional<std::int64_t> destinationFrame
+    std::optional<std::int64_t> destinationFrame,
+    std::optional<std::int64_t> durationFrames,
+    std::optional<std::int64_t> trimStartFrame,
+    std::optional<std::int64_t> trimEndFrame,
+    std::optional<double> speed
 ) {
     if (shutdownRequested_ || busy_) return;
     if (projectGeneration_ == 0) {
@@ -207,6 +277,10 @@ void ProjectEditingController::start(
         atFrame,
         destinationTrack,
         destinationFrame,
+        durationFrames,
+        trimStartFrame,
+        trimEndFrame,
+        speed,
         generation,
         cancellation
     ] {
@@ -239,6 +313,20 @@ void ProjectEditingController::start(
                 project::RemoveClipsCommand command;
                 command.clipIds.push_back(stableClipId);
                 auto result = runtime->removeClips(
+                    std::move(command),
+                    generation,
+                    cancellation
+                );
+                return EditResult{std::move(result.session), {}, {}};
+            }
+            if (operation == Operation::properties) {
+                project::SetClipPropertiesCommand command;
+                command.clipIds.push_back(stableClipId);
+                command.durationFrames = durationFrames;
+                command.trimStartFrame = trimStartFrame;
+                command.trimEndFrame = trimEndFrame;
+                command.speed = speed;
+                auto result = runtime->setClipProperties(
                     std::move(command),
                     generation,
                     cancellation

@@ -9,8 +9,9 @@ M0 establishes product decisions, compatibility contracts, fixtures, drift
 checks, the compiled MSVC contract probe, and a safe-edit C++ project document.
 It now includes an optional Qt project shell, isolated media/audio prototypes,
 one bounded project-driven H.264 export slice, a five-tool loopback MCP editing
-slice, and an atomic `project.json` edit-save-restart slice with stable-ID Split,
-Move, Remove, shared Undo/Redo, explicit Save, and dirty-close protection in Qt. The Qt workflow also
+  slice, and an atomic `project.json` edit-save-restart slice with stable-ID Split,
+  Move, Remove, shared Undo/Redo, clip timing, explicit Save, and dirty-close
+  protection in Qt. The Qt workflow also
 builds an unsigned x64 prototype installer with a runtime hash manifest and
 distribution evidence, then tests isolated staging, install, launch, uninstall,
    and external user-data preservation. It now also owns the active package
@@ -110,6 +111,15 @@ edit clears Redo only at commit, while failures, cancellation, stale requests,
 and exact Move no-ops preserve it. Qt consumes the published undo/redo depths on
 the existing serial edit executor. MCP intentionally remains on the macOS-compatible
 five-tool inventory, which exposes Undo but not Redo; see ADR 0038.
+
+The first `set_clip_properties` domain slice owns duration, source-head trim,
+source-tail trim, and speed in that same session. It propagates timing across
+linked clips, preserves text-partner trim/speed, clamps duration-dependent fades
+and keyframes, rescales text word timings, saves the full source DOM, and shares
+Undo/Redo. Qt exposes these fields on the existing serial edit executor. MCP does
+not expose a partial property tool, and the prototype preview still refuses
+nonzero trim or general speed until its cursor can seek and retime safely; see
+ADR 0039.
 
 The same Qt workflow stages the Release executable through CMake install, runs
 the pinned `windeployqt` QML deployment, requires the complete app-local FFmpeg

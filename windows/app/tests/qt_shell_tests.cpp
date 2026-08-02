@@ -297,6 +297,87 @@ private slots:
         QVERIFY(editing.requestShutdown());
     }
 
+    void editingControllerSetsClipTimingAndUndoes() {
+        auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
+        auto runtime = std::make_shared<palmier::project::ProjectRuntime>(mailbox);
+        auto document = palmier::project::readProject(
+            splittableProjectJson,
+            [] { return std::string("generated"); }
+        );
+        static_cast<void>(runtime->install(
+            std::move(document),
+            16,
+            [] { return std::string("ui-properties-action"); }
+        ));
+        palmier::windows::ProjectEditingController editing(runtime, mailbox, nullptr);
+        editing.activateProject(16);
+        QSignalSpy finished(
+            &editing,
+            &palmier::windows::ProjectEditingController::operationFinished
+        );
+
+        editing.setClipTiming(
+            QStringLiteral("clip"),
+            QStringLiteral("10"),
+            QStringLiteral("2"),
+            QStringLiteral("3"),
+            QStringLiteral("2.0")
+        );
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 5000);
+        QCOMPARE(finished.at(0).at(0).toBool(), true);
+        auto snapshot = runtime->snapshot(16);
+        const auto& clip = snapshot.session->document.project().timelines.front()
+            .tracks.front().clips.front();
+        QCOMPARE(clip.durationFrames, std::int64_t{10});
+        QCOMPARE(clip.trimStartFrame, std::int64_t{2});
+        QCOMPARE(clip.trimEndFrame, std::int64_t{3});
+        QCOMPARE(clip.speed, 2.0);
+        QCOMPARE(snapshot.session->undoDepth, std::size_t{1});
+
+        editing.setClipTiming(QStringLiteral("clip"), {}, {}, {}, {});
+        QCOMPARE(finished.count(), 2);
+        QCOMPARE(finished.last().at(0).toBool(), false);
+        QCOMPARE(editing.errorCode(), QStringLiteral("invalidArguments"));
+        editing.setClipTiming(
+            QStringLiteral("clip"),
+            QStringLiteral("0"),
+            {},
+            {},
+            {}
+        );
+        QCOMPARE(finished.count(), 3);
+        QCOMPARE(finished.last().at(0).toBool(), false);
+        editing.setClipTiming(
+            QStringLiteral("clip"),
+            {},
+            QStringLiteral("-1"),
+            {},
+            {}
+        );
+        QCOMPARE(finished.count(), 4);
+        QCOMPARE(finished.last().at(0).toBool(), false);
+        editing.setClipTiming(
+            QStringLiteral("clip"),
+            {},
+            {},
+            {},
+            QStringLiteral("0")
+        );
+        QCOMPARE(finished.count(), 5);
+        QCOMPARE(finished.last().at(0).toBool(), false);
+        QCOMPARE(runtime->snapshot(16).session->revision, std::uint64_t{1});
+
+        editing.undo();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 6, 5000);
+        snapshot = runtime->snapshot(16);
+        QCOMPARE(
+            snapshot.session->document.project().timelines.front()
+                .tracks.front().clips.front().durationFrames,
+            std::int64_t{20}
+        );
+        QVERIFY(editing.requestShutdown());
+    }
+
     void editingControllerRemovesByStableIdAndUndoes() {
         auto mailbox = std::make_shared<palmier::windows::ProjectRuntimeMailbox>();
         auto runtime = std::make_shared<palmier::project::ProjectRuntime>(mailbox);
@@ -1417,8 +1498,8 @@ private slots:
         auto projection = oneTrackProjection("timeline-main", "Main");
         auto& track = projection.timelines.front().tracks.front();
         track.clips = {
-            {"clip-main-1", "video", 0, 150, 0.0, 0.5},
-            {"clip-main-2", "video", 150, 60, 0.5, 0.2},
+            {"clip-main-1", "video", 0, 150, 0, 0, 1.0, 0.0, 0.5},
+            {"clip-main-2", "video", 150, 60, 0, 0, 1.0, 0.5, 0.2},
         };
         track.clipItems = {
             QVariantMap{
@@ -1832,6 +1913,11 @@ private slots:
         QVERIFY(root->findChild<QObject*>(QStringLiteral("removeClipButton")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("undoButton")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("redoButton")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("durationFramesField")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("trimStartFrameField")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("trimEndFrameField")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("clipSpeedField")) != nullptr);
+        QVERIFY(root->findChild<QObject*>(QStringLiteral("setClipTimingButton")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("previewViewport")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("previewErrorState")) != nullptr);
         QVERIFY(root->findChild<QObject*>(QStringLiteral("emptyState")) != nullptr);

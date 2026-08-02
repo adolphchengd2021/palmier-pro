@@ -331,6 +331,9 @@ ProjectProjection projectDocumentForReadOnlyTimeline(
                     clip.mediaType,
                     clip.startFrame,
                     clip.durationFrames,
+                    clip.trimStartFrame,
+                    clip.trimEndFrame,
+                    clip.speed,
                     0,
                     0,
                 });
@@ -355,6 +358,9 @@ ProjectProjection projectDocumentForReadOnlyTimeline(
                 item.insert(QStringLiteral("mediaType"), QString::fromStdString(clip.mediaType));
                 item.insert(QStringLiteral("startFrameText"), QString::number(clip.startFrame));
                 item.insert(QStringLiteral("durationFramesText"), QString::number(clip.durationFrames));
+                item.insert(QStringLiteral("trimStartFrameText"), QString::number(clip.trimStartFrame));
+                item.insert(QStringLiteral("trimEndFrameText"), QString::number(clip.trimEndFrame));
+                item.insert(QStringLiteral("speedText"), QString::number(clip.speed, 'g', 15));
                 item.insert(QStringLiteral("offsetRatio"), clip.offsetRatio);
                 item.insert(QStringLiteral("extentRatio"), clip.extentRatio);
                 track.clipItems.push_back(std::move(item));

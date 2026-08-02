@@ -1,6 +1,7 @@
 #include "palmier/project/project_session.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <limits>
@@ -495,6 +496,168 @@ Array splitSourceClips(
         throw CommandError("sourceModelMismatch", "a split clip is missing from project source");
     }
     return result;
+}
+
+std::int64_t roundedFrame(double value, std::string_view label) {
+    const auto maximum = std::nextafter(
+        static_cast<double>(std::numeric_limits<std::int64_t>::max()),
+        0.0
+    );
+    if (!std::isfinite(value) || value < 0.0 || value > maximum) {
+        throw CommandError("unsafeTiming", std::string(label) + " exceeds the integer frame domain");
+    }
+    return static_cast<std::int64_t>(std::llround(value));
+}
+
+std::int64_t optionalSourceInteger(
+    const Object& object,
+    std::string_view key,
+    std::int64_t fallback
+) {
+    const auto field = object.find(std::string(key));
+    if (field == object.end()) return fallback;
+    if (field->second.kind() != Value::Kind::number || !field->second.number().integer) {
+        throw CommandError(
+            "unsafeDurationSemantics",
+            "clip " + std::string(key) + " is not an integer"
+        );
+    }
+    return *field->second.number().integer;
+}
+
+void clampSourceKeyframeTrack(Object& clip, std::string_view key, std::int64_t duration) {
+    const auto field = clip.find(std::string(key));
+    if (field == clip.end() || field->second.kind() == Value::Kind::nullValue) return;
+    if (field->second.kind() != Value::Kind::object) {
+        throw CommandError(
+            "unsafeDurationSemantics",
+            "clip " + std::string(key) + " is not a keyframe track"
+        );
+    }
+    auto track = field->second.object();
+    const auto keyframes = track.find("keyframes");
+    if (keyframes == track.end() || keyframes->second.kind() != Value::Kind::array) {
+        throw CommandError(
+            "unsafeDurationSemantics",
+            "clip " + std::string(key) + " has no keyframes array"
+        );
+    }
+
+    std::map<std::int64_t, Object> normalized;
+    for (const auto& keyframe : keyframes->second.array()) {
+        if (keyframe.kind() != Value::Kind::object) {
+            throw CommandError(
+                "unsafeDurationSemantics",
+                "clip " + std::string(key) + " contains a malformed keyframe"
+            );
+        }
+        const auto& object = keyframe.object();
+        const auto frame = object.find("frame");
+        if (
+            frame == object.end()
+            || frame->second.kind() != Value::Kind::number
+            || !frame->second.number().integer
+        ) {
+            throw CommandError(
+                "unsafeDurationSemantics",
+                "clip " + std::string(key) + " contains a non-integer frame"
+            );
+        }
+        const auto offset = *frame->second.number().integer;
+        if (offset < 0 || offset > duration) continue;
+        auto [entry, inserted] = normalized.emplace(offset, object);
+        if (!inserted) {
+            for (const auto& [name, value] : object) entry->second.insert_or_assign(name, value);
+        }
+    }
+
+    if (normalized.empty()) {
+        clip.erase(std::string(key));
+        return;
+    }
+    Array values;
+    values.reserve(normalized.size());
+    for (auto& [frame, object] : normalized) {
+        static_cast<void>(frame);
+        values.emplace_back(std::move(object));
+    }
+    track["keyframes"] = Value(std::move(values));
+    clip[std::string(key)] = Value(std::move(track));
+}
+
+void rescaleSourceWordTimings(
+    Object& clip,
+    std::int64_t oldDuration,
+    std::int64_t newDuration
+) {
+    const auto field = clip.find("wordTimings");
+    if (field == clip.end() || field->second.kind() == Value::Kind::nullValue) return;
+    if (field->second.kind() != Value::Kind::array) {
+        throw CommandError("unsafeDurationSemantics", "clip wordTimings is not an array");
+    }
+    const auto scale = static_cast<double>(newDuration) / static_cast<double>(oldDuration);
+    Array timings;
+    timings.reserve(field->second.array().size());
+    for (const auto& timing : field->second.array()) {
+        if (timing.kind() != Value::Kind::object) {
+            throw CommandError("unsafeDurationSemantics", "clip contains a malformed word timing");
+        }
+        auto object = timing.object();
+        const auto start = optionalSourceInteger(object, "startFrame", -1);
+        const auto end = optionalSourceInteger(object, "endFrame", -1);
+        if (start < 0 || end < 0) {
+            throw CommandError("unsafeDurationSemantics", "clip word timing has an invalid frame");
+        }
+        const auto scaledStart = std::min(
+            roundedFrame(static_cast<double>(start) * scale, "word timing start"),
+            newDuration - 1
+        );
+        const auto minimumEnd = scaledStart + 1;
+        const auto scaledEnd = std::min(
+            std::max(
+                minimumEnd,
+                roundedFrame(static_cast<double>(end) * scale, "word timing end")
+            ),
+            newDuration
+        );
+        object["startFrame"] = Value(integerNumber(scaledStart));
+        object["endFrame"] = Value(integerNumber(scaledEnd));
+        timings.emplace_back(std::move(object));
+    }
+    clip["wordTimings"] = Value(std::move(timings));
+}
+
+void applyDurationSourceSemantics(
+    Object& sourceClip,
+    const Clip& clip,
+    std::int64_t duration
+) {
+    const auto fadeIn = optionalSourceInteger(sourceClip, "fadeInFrames", 0);
+    const auto fadeOut = optionalSourceInteger(sourceClip, "fadeOutFrames", 0);
+    if (fadeIn < 0 || fadeOut < 0) {
+        throw CommandError("unsafeDurationSemantics", "clip fade duration is negative");
+    }
+    const auto clampedFadeIn = std::min(fadeIn, duration);
+    const auto clampedFadeOut = std::min(fadeOut, duration - clampedFadeIn);
+    if (sourceClip.contains("fadeInFrames") || clampedFadeIn != 0) {
+        sourceClip["fadeInFrames"] = Value(integerNumber(clampedFadeIn));
+    }
+    if (sourceClip.contains("fadeOutFrames") || clampedFadeOut != 0) {
+        sourceClip["fadeOutFrames"] = Value(integerNumber(clampedFadeOut));
+    }
+
+    static constexpr std::array keyframeTracks{
+        "opacityTrack",
+        "positionTrack",
+        "scaleTrack",
+        "rotationTrack",
+        "cropTrack",
+        "volumeTrack",
+    };
+    for (const auto key : keyframeTracks) clampSourceKeyframeTrack(sourceClip, key, duration);
+    if (clip.mediaType == "text") {
+        rescaleSourceWordTimings(sourceClip, clip.durationFrames, duration);
+    }
 }
 
 Object receiptBase(
@@ -1612,6 +1775,312 @@ CommandResult ProjectSession::removeClips(
             "Track indices shifted - re-read get_timeline before the next index-based call."
         )});
     }
+    auto publication = preparePublication({
+        ProjectDocument(*plannedSource, rootKind_, planned, diagnostics_),
+        revisionAfter,
+        stateAfter,
+        persistedStateId_,
+        undoJournal_.size() + 1,
+        0,
+    });
+    CommandResult result{
+        true,
+        revisionBefore,
+        revisionAfter,
+        actionId,
+        std::make_unique<Value>(std::move(payload)),
+        std::move(publication),
+    };
+    checkCancellation(cancellation);
+
+    static_assert(std::is_nothrow_move_assignable_v<Project>);
+    static_assert(std::is_nothrow_move_constructible_v<UndoEntry>);
+    static_assert(std::is_nothrow_move_constructible_v<CommandResult>);
+    static_assert(noexcept(source_.swap(plannedSource)));
+    project_ = std::move(planned);
+    source_.swap(plannedSource);
+    revision_ = revisionAfter;
+    stateId_ = stateAfter;
+    ++nextStateId_;
+    undoJournal_.push_back(std::move(undoEntry));
+    redoJournal_.clear();
+    return result;
+}
+
+CommandResult ProjectSession::setClipProperties(
+    const SetClipPropertiesCommand& command,
+    std::stop_token cancellation
+) {
+    std::scoped_lock lock(mutex_);
+    checkCancellation(cancellation);
+    if (command.clipIds.empty()) {
+        throw CommandError("invalidClipIds", "clipIds must be a non-empty array");
+    }
+    if (
+        !command.durationFrames
+        && !command.trimStartFrame
+        && !command.trimEndFrame
+        && !command.speed
+    ) {
+        throw CommandError(
+            "missingClipProperties",
+            "set_clip_properties requires at least one property"
+        );
+    }
+    if (command.durationFrames && *command.durationFrames < 1) {
+        throw CommandError("invalidDurationFrames", "durationFrames must be at least one");
+    }
+    if (command.trimStartFrame && *command.trimStartFrame < 0) {
+        throw CommandError("invalidTrimStartFrame", "trimStartFrame must not be negative");
+    }
+    if (command.trimEndFrame && *command.trimEndFrame < 0) {
+        throw CommandError("invalidTrimEndFrame", "trimEndFrame must not be negative");
+    }
+    if (command.speed && (!std::isfinite(*command.speed) || *command.speed <= 0.0)) {
+        throw CommandError("invalidSpeed", "speed must be finite and greater than zero");
+    }
+
+    auto& timeline = activeTimeline(project_);
+    if (rootKind_ != RootKind::current) {
+        throw CommandError(
+            "unsupportedProjectWriteRoot",
+            "the Windows mutation slice does not write legacy project roots"
+        );
+    }
+    if (timeline.id.origin != EntityIdOrigin::persisted) {
+        throw CommandError(
+            "unstableTimelineId",
+            "set_clip_properties requires a persisted active timeline ID"
+        );
+    }
+
+    std::set<std::string, std::less<>> directClipIds;
+    std::set<std::string, std::less<>> linkedGroups;
+    for (const auto& clipId : command.clipIds) {
+        checkCancellation(cancellation);
+        if (clipId.empty()) {
+            throw CommandError("invalidClipId", "set_clip_properties clipId must not be empty");
+        }
+        const auto location = uniqueClipLocation(timeline, clipId);
+        const auto& clip = timeline.tracks[location.trackIndex].clips[location.clipIndex];
+        if (clip.multicamGroupId) {
+            throw CommandError(
+                "multicamTimingRefused",
+                "timing properties would slip a multicam clip out of sync: " + clipId
+            );
+        }
+        directClipIds.insert(clipId);
+        if (clip.linkGroupId) {
+            if (clip.linkGroupId->empty()) {
+                throw CommandError("invalidLinkGroupId", "linkGroupId must not be empty");
+            }
+            linkedGroups.insert(*clip.linkGroupId);
+        }
+    }
+
+    std::set<std::string, std::less<>> resolvedClipIds = directClipIds;
+    for (const auto& track : timeline.tracks) {
+        for (const auto& clip : track.clips) {
+            checkCancellation(cancellation);
+            if (clip.linkGroupId && linkedGroups.contains(*clip.linkGroupId)) {
+                resolvedClipIds.insert(clip.id.value);
+            }
+        }
+    }
+
+    std::map<std::string, Clip, std::less<>> candidates;
+    std::set<std::string, std::less<>> skippedSequenceSpeed;
+    std::set<std::size_t> affectedTrackIndices;
+    for (const auto& clipId : resolvedClipIds) {
+        checkCancellation(cancellation);
+        const auto location = uniqueClipLocation(timeline, clipId);
+        const auto& clip = timeline.tracks[location.trackIndex].clips[location.clipIndex];
+        Clip candidate = clip;
+        const bool isTextPartner = !directClipIds.contains(clipId) && clip.mediaType == "text";
+        if (command.durationFrames) candidate.durationFrames = *command.durationFrames;
+        if (!isTextPartner) {
+            if (command.trimStartFrame) candidate.trimStartFrame = *command.trimStartFrame;
+            if (command.trimEndFrame) candidate.trimEndFrame = *command.trimEndFrame;
+            if (command.speed) {
+                if (candidate.sourceClipType == "sequence") {
+                    skippedSequenceSpeed.insert(clipId);
+                } else {
+                    if (!command.durationFrames) {
+                        const auto sourceFrames = static_cast<double>(clip.durationFrames) * clip.speed;
+                        candidate.durationFrames = std::max<std::int64_t>(
+                            1,
+                            roundedFrame(sourceFrames / *command.speed, "retimed clip duration")
+                        );
+                    }
+                    candidate.speed = *command.speed;
+                }
+            }
+        }
+        static_cast<void>(checkedEnd(candidate));
+        const auto consumed = scaledFrameOffset(candidate.durationFrames, candidate.speed);
+        static_cast<void>(checkedFrameAdd(
+            checkedFrameAdd(candidate.trimStartFrame, consumed),
+            candidate.trimEndFrame
+        ));
+        if (
+            candidate.durationFrames == clip.durationFrames
+            && candidate.trimStartFrame == clip.trimStartFrame
+            && candidate.trimEndFrame == clip.trimEndFrame
+            && candidate.speed == clip.speed
+        ) {
+            continue;
+        }
+        if (
+            clip.id.origin != EntityIdOrigin::persisted
+            && !sessionGeneratedClipIds_.contains(clipId)
+        ) {
+            throw CommandError(
+                "unstableClipId",
+                "set_clip_properties requires a stable clip ID: " + clipId
+            );
+        }
+        if (timeline.tracks[location.trackIndex].id.origin != EntityIdOrigin::persisted) {
+            throw CommandError(
+                "unstableTrackId",
+                "set_clip_properties requires persisted affected track IDs"
+            );
+        }
+        affectedTrackIndices.insert(location.trackIndex);
+        candidates.emplace(clipId, std::move(candidate));
+    }
+
+    Array notes;
+    for (const auto& clipId : skippedSequenceSpeed) {
+        notes.emplace_back("speed skipped for nested timeline clip: " + clipId);
+    }
+    if (candidates.empty()) {
+        Array clips;
+        for (std::size_t trackIndex = 0; trackIndex < timeline.tracks.size(); ++trackIndex) {
+            for (const auto& clip : timeline.tracks[trackIndex].clips) {
+                if (resolvedClipIds.contains(clip.id.value)) {
+                    clips.push_back(clipValue(clip, trackIndex));
+                }
+            }
+        }
+        auto payload = receiptBase(false, revision_, revision_, "");
+        payload["notes"] = Value(std::move(notes));
+        payload.emplace("clips", Value(std::move(clips)));
+        auto publication = preparePublication({
+            ProjectDocument(*source_, rootKind_, project_, diagnostics_),
+            revision_,
+            stateId_,
+            persistedStateId_,
+            undoJournal_.size(),
+            redoJournal_.size(),
+        });
+        checkCancellation(cancellation);
+        return CommandResult{
+            false,
+            revision_,
+            revision_,
+            {},
+            std::make_unique<Value>(std::move(payload)),
+            std::move(publication),
+        };
+    }
+
+    if (revision_ >= maximumRevision) {
+        throw CommandError("revisionOverflow", "project revision cannot advance");
+    }
+    if (nextStateId_ == (std::numeric_limits<std::uint64_t>::max)()) {
+        throw CommandError("stateIdentityOverflow", "project state identity cannot advance");
+    }
+    const auto timelineIndex = static_cast<std::size_t>(
+        std::distance(project_.timelines.begin(), std::find_if(
+            project_.timelines.begin(),
+            project_.timelines.end(),
+            [&](const Timeline& entry) { return entry.id.value == project_.activeTimelineId; }
+        ))
+    );
+    auto sourceIndex = indexTimelineSource(*source_, rootKind_, timeline.id.value);
+    const Value sourceTimelineSnapshot = sourceIndex.timeline;
+    std::set<std::string, std::less<>> affectedTrackIds;
+    for (const auto trackIndex : affectedTrackIndices) {
+        affectedTrackIds.insert(timeline.tracks[trackIndex].id.value);
+    }
+    requireSourceTracksMatch(timeline, affectedTrackIds, sourceIndex);
+
+    Project planned = project_;
+    auto& plannedTimeline = activeTimeline(planned);
+    auto plannedSource = std::make_unique<Value>(*source_);
+    for (const auto& [clipId, candidate] : candidates) {
+        checkCancellation(cancellation);
+        const auto location = uniqueClipLocation(plannedTimeline, clipId);
+        const auto original = plannedTimeline.tracks[location.trackIndex].clips[location.clipIndex];
+        plannedTimeline.tracks[location.trackIndex].clips[location.clipIndex] = candidate;
+        auto& sourceClips = sourceClipsForTrack(
+            *plannedSource,
+            rootKind_,
+            plannedTimeline.id.value,
+            plannedTimeline.tracks[location.trackIndex].id.value
+        );
+        auto& sourceObject = requireSourceObject(
+            uniqueSourceEntity(sourceClips, clipId, "clip"),
+            "clip"
+        );
+        if (candidate.durationFrames != original.durationFrames) {
+            applyDurationSourceSemantics(sourceObject, original, candidate.durationFrames);
+            sourceObject["durationFrames"] = Value(integerNumber(candidate.durationFrames));
+        }
+        if (candidate.trimStartFrame != original.trimStartFrame) {
+            sourceObject["trimStartFrame"] = Value(integerNumber(candidate.trimStartFrame));
+        }
+        if (candidate.trimEndFrame != original.trimEndFrame) {
+            sourceObject["trimEndFrame"] = Value(integerNumber(candidate.trimEndFrame));
+        }
+        if (candidate.speed != original.speed) {
+            sourceObject["speed"] = Value(floatingNumber(candidate.speed));
+        }
+    }
+    checkCancellation(cancellation);
+
+    std::set<std::string, std::less<>> usedIds;
+    for (const auto& projectTimeline : project_.timelines) {
+        usedIds.insert(projectTimeline.id.value);
+        for (const auto& track : projectTimeline.tracks) {
+            usedIds.insert(track.id.value);
+            for (const auto& clip : track.clips) {
+                usedIds.insert(clip.id.value);
+                if (clip.linkGroupId) usedIds.insert(*clip.linkGroupId);
+            }
+        }
+    }
+    const auto actionId = idGenerator_();
+    if (actionId.empty() || !usedIds.insert(actionId).second) {
+        throw CommandError("invalidGeneratedId", "ID generator returned an empty or duplicate value");
+    }
+
+    Array changedClips;
+    for (std::size_t trackIndex = 0; trackIndex < plannedTimeline.tracks.size(); ++trackIndex) {
+        for (const auto& clip : plannedTimeline.tracks[trackIndex].clips) {
+            if (candidates.contains(clip.id.value)) {
+                changedClips.push_back(clipValue(clip, trackIndex));
+            }
+        }
+    }
+    const auto revisionBefore = revision_;
+    const auto revisionAfter = revisionBefore + 1;
+    const auto stateAfter = nextStateId_;
+    undoJournal_.reserve(undoJournal_.size() + 1);
+    UndoEntry undoEntry{
+        actionId,
+        {},
+        std::make_unique<TimelineSnapshot>(TimelineSnapshot{
+            timelineIndex,
+            timeline,
+            sourceTimelineSnapshot,
+        }),
+        {},
+        stateId_,
+    };
+    auto payload = receiptBase(true, revisionBefore, revisionAfter, actionId);
+    payload["notes"] = Value(std::move(notes));
+    payload.emplace("clips", Value(std::move(changedClips)));
     auto publication = preparePublication({
         ProjectDocument(*plannedSource, rootKind_, planned, diagnostics_),
         revisionAfter,

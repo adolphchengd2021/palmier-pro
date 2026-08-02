@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <new>
 #include <stdexcept>
@@ -19,6 +20,7 @@ using palmier::project::ClipMove;
 using palmier::project::MoveClipsCommand;
 using palmier::project::ProjectSession;
 using palmier::project::RemoveClipsCommand;
+using palmier::project::SetClipPropertiesCommand;
 using palmier::project::SplitClipsCommand;
 using palmier::project::SplitPoint;
 
@@ -75,6 +77,18 @@ const Value& sourceClipAt(
     std::size_t index
 ) {
     return at(firstSourceTrack(document), "clips").array().at(index);
+}
+
+const Value& sourceClip(const palmier::project::ProjectDocument& document, const std::string& id) {
+    for (const auto& track : at(at(document.source(), "timelines").array().front(), "tracks").array()) {
+        const auto* clips = track.find("clips");
+        if (!clips) continue;
+        for (const auto& clip : clips->array()) {
+            const auto* clipId = clip.find("id");
+            if (clipId && clipId->string() == id) return clip;
+        }
+    }
+    throw std::runtime_error("missing source clip " + id);
 }
 
 std::int64_t integer(const Value& value) {
@@ -653,6 +667,20 @@ void publicationPreparationFailureDoesNotCommit() {
         && !session.dirty()
         && palmier::json::canonical(session.snapshot().document.source()) == baseline,
         "move publication failure must preserve the exact session"
+    );
+    try {
+        static_cast<void>(session.setClipProperties(SetClipPropertiesCommand{
+            {"target"}, std::nullopt, 5, std::nullopt, std::nullopt,
+        }));
+        throw std::runtime_error("expected property publication preparation failure");
+    } catch (const std::bad_alloc&) {
+    }
+    require(
+        session.revision() == 0
+        && session.stateId() == 0
+        && !session.dirty()
+        && palmier::json::canonical(session.snapshot().document.source()) == baseline,
+        "property publication failure must preserve the exact session"
     );
     try {
         static_cast<void>(session.splitClips(SplitClipsCommand{
@@ -1297,6 +1325,237 @@ void redoCancellationAfterPublicationDoesNotCommit() {
     );
 }
 
+void timingPropertiesPropagateAndRestoreSourceSemantics() {
+    const std::string source = R"({
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[
+            {"id":"video-track","type":"video","clips":[{
+                "id":"video","mediaRef":"media","mediaType":"video","sourceClipType":"video",
+                "startFrame":0,"durationFrames":120,"trimStartFrame":0,"trimEndFrame":0,
+                "speed":1,"linkGroupId":"linked","fadeInFrames":50,"fadeOutFrames":40,
+                "opacityTrack":{"keyframes":[
+                    {"frame":-5,"value":0.1},{"frame":30,"value":0.5,"x-key":"keep"},
+                    {"frame":90,"value":1}
+                ]},
+                "rotationTrack":{"keyframes":[{"frame":100,"value":10}]},
+                "x-video":{"keep":true}
+            }]},
+            {"id":"audio-track","type":"audio","clips":[{
+                "id":"audio","mediaRef":"media","mediaType":"audio","sourceClipType":"video",
+                "startFrame":0,"durationFrames":120,"trimStartFrame":0,"trimEndFrame":0,
+                "speed":1,"linkGroupId":"linked","x-audio":"keep"
+            }]},
+            {"id":"text-track","type":"text","clips":[{
+                "id":"text","mediaRef":"text-media","mediaType":"text","sourceClipType":"text",
+                "startFrame":0,"durationFrames":120,"trimStartFrame":3,"trimEndFrame":4,
+                "speed":1,"linkGroupId":"linked","wordTimings":[
+                    {"text":"one","startFrame":20,"endFrame":40,"x-word":"keep"}
+                ]
+            }]}
+        ]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"],"x-root":"keep"
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    int nextId{};
+    ProjectSession session(document, [&] { return "properties-id-" + std::to_string(++nextId); });
+    const auto baseline = palmier::json::canonical(session.snapshot().document.source());
+
+    const auto result = session.setClipProperties(SetClipPropertiesCommand{
+        {"video"}, 60, 10, 20, 2.0,
+    });
+    require(result.changed && result.actionId == "properties-id-1", "timing action receipt");
+    require(result.publication->undoDepth == 1 && result.publication->redoDepth == 0, "timing history");
+    require(at(*result.payload, "clips").array().size() == 3, "linked timing receipt clips");
+
+    const auto changed = session.snapshot();
+    const auto& video = sourceClip(changed.document, "video");
+    const auto& audio = sourceClip(changed.document, "audio");
+    const auto& text = sourceClip(changed.document, "text");
+    require(integer(at(video, "durationFrames")) == 60, "video duration");
+    require(integer(at(video, "trimStartFrame")) == 10, "video trim start");
+    require(integer(at(video, "trimEndFrame")) == 20, "video trim end");
+    require(integer(at(video, "fadeInFrames")) == 50, "video fade in clamp");
+    require(integer(at(video, "fadeOutFrames")) == 10, "video fade out clamp");
+    require(at(video, "opacityTrack").find("keyframes")->array().size() == 1, "keyframes clamp");
+    require(
+        at(at(video, "opacityTrack").find("keyframes")->array().front(), "x-key").string() == "keep",
+        "keyframe unknown field"
+    );
+    require(video.find("rotationTrack") == nullptr, "empty keyframe track should clear");
+    require(at(video, "x-video").find("keep")->boolean(), "video unknown field");
+    require(integer(at(audio, "durationFrames")) == 60, "audio linked duration");
+    require(integer(at(audio, "trimStartFrame")) == 10, "audio linked trim start");
+    require(integer(at(audio, "trimEndFrame")) == 20, "audio linked trim end");
+    require(at(audio, "x-audio").string() == "keep", "audio unknown field");
+    require(integer(at(text, "durationFrames")) == 60, "text linked duration");
+    require(integer(at(text, "trimStartFrame")) == 3, "text partner trim must stay unchanged");
+    require(integer(at(text, "trimEndFrame")) == 4, "text partner tail trim must stay unchanged");
+    const auto& word = at(text, "wordTimings").array().front();
+    require(integer(at(word, "startFrame")) == 10, "word timing start rescale");
+    require(integer(at(word, "endFrame")) == 20, "word timing end rescale");
+    require(at(word, "x-word").string() == "keep", "word timing unknown field");
+    const auto changedSource = palmier::json::canonical(changed.document.source());
+
+    require(session.undo().actionId == result.actionId, "timing undo action identity");
+    require(
+        palmier::json::canonical(session.snapshot().document.source()) == baseline,
+        "timing undo exact source"
+    );
+    require(session.redo().actionId == result.actionId, "timing redo action identity");
+    require(
+        palmier::json::canonical(session.snapshot().document.source()) == changedSource,
+        "timing redo exact source"
+    );
+}
+
+void timingValidationNoOpAndBranchingPreserveHistory() {
+    const std::string source = R"({
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{
+            "id":"track","type":"video","clips":[{
+                "id":"clip","mediaRef":"media","mediaType":"video","sourceClipType":"video",
+                "startFrame":0,"durationFrames":120,"trimStartFrame":5,"trimEndFrame":0,"speed":1
+            }]
+        }]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    int nextId{};
+    ProjectSession session(document, [&] { return "branch-properties-" + std::to_string(++nextId); });
+    const auto noOp = session.setClipProperties(SetClipPropertiesCommand{
+        {"clip", "clip"}, std::nullopt, 5, std::nullopt, std::nullopt,
+    });
+    require(!noOp.changed && nextId == 0 && noOp.publication->undoDepth == 0, "timing no-op history");
+
+    const auto retimed = session.setClipProperties(SetClipPropertiesCommand{
+        {"clip"}, std::nullopt, std::nullopt, std::nullopt, 2.0,
+    });
+    require(retimed.changed, "speed should change timing");
+    require(integer(at(clipAt(session.getTimeline(), 0), "durationFrames")) == 60, "speed rescales duration");
+    static_cast<void>(session.undo());
+    require(session.snapshot().redoDepth == 1, "timing undo creates redo");
+
+    requireCommandError(
+        [&] {
+            static_cast<void>(session.setClipProperties(SetClipPropertiesCommand{
+                {"clip"}, 0, std::nullopt, std::nullopt, std::nullopt,
+            }));
+        },
+        "invalidDurationFrames"
+    );
+    requireCommandError(
+        [&] {
+            static_cast<void>(session.setClipProperties(SetClipPropertiesCommand{
+                {"clip"}, std::nullopt, std::nullopt, std::nullopt,
+                std::numeric_limits<double>::infinity(),
+            }));
+        },
+        "invalidSpeed"
+    );
+    const auto repeatedNoOp = session.setClipProperties(SetClipPropertiesCommand{
+        {"clip"}, std::nullopt, 5, std::nullopt, std::nullopt,
+    });
+    require(!repeatedNoOp.changed && repeatedNoOp.publication->redoDepth == 1, "timing no-op cleared redo");
+    static_cast<void>(session.setClipProperties(SetClipPropertiesCommand{
+        {"clip"}, std::nullopt, 6, std::nullopt, std::nullopt,
+    }));
+    require(session.snapshot().redoDepth == 0, "changed timing retained stale redo");
+}
+
+void timingRefusesMulticamAndMalformedDependentState() {
+    const std::string source = R"({
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{
+            "id":"track","type":"video","clips":[
+                {"id":"multicam","mediaRef":"media","mediaType":"video","sourceClipType":"video",
+                 "startFrame":0,"durationFrames":120,"multicamGroupId":"group"},
+                {"id":"malformed","mediaRef":"media","mediaType":"video","sourceClipType":"video",
+                 "startFrame":200,"durationFrames":120,"opacityTrack":{"keyframes":"bad"}},
+                {"id":"sequence","mediaRef":"nested","mediaType":"sequence","sourceClipType":"sequence",
+                 "startFrame":400,"durationFrames":120,"speed":1}
+            ]
+        }]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    int nextId{};
+    ProjectSession session(document, [&] { return "refusal-id-" + std::to_string(++nextId); });
+    const auto baseline = palmier::json::canonical(session.snapshot().document.source());
+    requireCommandError(
+        [&] {
+            static_cast<void>(session.setClipProperties(SetClipPropertiesCommand{
+                {"multicam"}, std::nullopt, 1, std::nullopt, std::nullopt,
+            }));
+        },
+        "multicamTimingRefused"
+    );
+    requireCommandError(
+        [&] {
+            static_cast<void>(session.setClipProperties(SetClipPropertiesCommand{
+                {"malformed"}, 60, std::nullopt, std::nullopt, std::nullopt,
+            }));
+        },
+        "unsafeDurationSemantics"
+    );
+    const auto skipped = session.setClipProperties(SetClipPropertiesCommand{
+        {"sequence"}, std::nullopt, std::nullopt, std::nullopt, 2.0,
+    });
+    require(!skipped.changed, "nested timeline speed should be skipped");
+    require(at(*skipped.payload, "notes").array().size() == 1, "nested speed skip note");
+    require(nextId == 0, "refused and skipped timing consumed IDs");
+    require(
+        palmier::json::canonical(session.snapshot().document.source()) == baseline,
+        "timing refusal mutated source"
+    );
+}
+
+void timingCancellationAfterPublicationDoesNotCommit() {
+    const std::string source = R"({
+        "timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{
+            "id":"track","type":"video","clips":[{
+                "id":"clip","mediaRef":"media","mediaType":"video","sourceClipType":"video",
+                "startFrame":0,"durationFrames":120
+            }]
+        }]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]
+    })";
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    std::stop_source cancellation;
+    bool cancelPublication{};
+    ProjectSession session(
+        document,
+        [] { return std::string("cancel-properties-id"); },
+        [&](palmier::project::ProjectSessionSnapshot snapshot) {
+            if (cancelPublication) cancellation.request_stop();
+            return std::make_shared<const palmier::project::ProjectSessionSnapshot>(
+                std::move(snapshot)
+            );
+        }
+    );
+    const auto baseline = palmier::json::canonical(session.snapshot().document.source());
+    cancelPublication = true;
+    requireCommandError(
+        [&] {
+            static_cast<void>(session.setClipProperties(
+                SetClipPropertiesCommand{
+                    {"clip"}, std::nullopt, 10, std::nullopt, std::nullopt,
+                },
+                cancellation.get_token()
+            ));
+        },
+        "cancelled"
+    );
+    const auto cancelled = session.snapshot();
+    require(
+        cancelled.revision == 0
+            && cancelled.undoDepth == 0
+            && cancelled.redoDepth == 0
+            && palmier::json::canonical(cancelled.document.source()) == baseline,
+        "property cancellation after publication committed state"
+    );
+}
+
 }
 
 int wmain(int argumentCount, wchar_t* arguments[]) {
@@ -1334,6 +1593,10 @@ int wmain(int argumentCount, wchar_t* arguments[]) {
         changedEditInvalidatesRedoButFailuresAndNoOpsPreserveIt();
         persistenceKeepsHistoryAndUsesRestoredStateIdentity();
         redoCancellationAfterPublicationDoesNotCommit();
+        timingPropertiesPropagateAndRestoreSourceSemantics();
+        timingValidationNoOpAndBranchingPreserveHistory();
+        timingRefusesMulticamAndMalformedDependentState();
+        timingCancellationAfterPublicationDoesNotCommit();
         std::cout << "PALMIER_PROJECT_SESSION_TESTS_OK\n";
         return 0;
     } catch (const std::exception& error) {

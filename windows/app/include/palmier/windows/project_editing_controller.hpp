@@ -45,6 +45,13 @@ public:
         const QString& frameText
     );
     Q_INVOKABLE void removeClip(const QString& clipId);
+    Q_INVOKABLE void setClipTiming(
+        const QString& clipId,
+        const QString& durationText,
+        const QString& trimStartText,
+        const QString& trimEndText,
+        const QString& speedText
+    );
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
     Q_INVOKABLE bool requestShutdown();
@@ -61,14 +68,18 @@ signals:
     void shutdownReady();
 
 private:
-    enum class Operation { split, move, remove, undo, redo };
+    enum class Operation { split, move, remove, properties, undo, redo };
 
     void start(
         Operation operation,
         QString clipId = {},
         std::int64_t atFrame = 0,
         std::optional<std::size_t> destinationTrack = {},
-        std::optional<std::int64_t> destinationFrame = {}
+        std::optional<std::int64_t> destinationFrame = {},
+        std::optional<std::int64_t> durationFrames = {},
+        std::optional<std::int64_t> trimStartFrame = {},
+        std::optional<std::int64_t> trimEndFrame = {},
+        std::optional<double> speed = {}
     );
     void refreshFromMailbox();
     void setBusy(bool value);

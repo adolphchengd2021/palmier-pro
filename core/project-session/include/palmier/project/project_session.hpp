@@ -46,6 +46,14 @@ struct RemoveClipsCommand final {
     std::vector<std::string> clipIds;
 };
 
+struct SetClipPropertiesCommand final {
+    std::vector<std::string> clipIds;
+    std::optional<std::int64_t> durationFrames;
+    std::optional<std::int64_t> trimStartFrame;
+    std::optional<std::int64_t> trimEndFrame;
+    std::optional<double> speed;
+};
+
 struct ProjectSessionSnapshot final {
     ProjectDocument document;
     std::uint64_t revision;
@@ -108,6 +116,10 @@ public:
     );
     CommandResult removeClips(
         const RemoveClipsCommand& command,
+        std::stop_token cancellation = {}
+    );
+    CommandResult setClipProperties(
+        const SetClipPropertiesCommand& command,
         std::stop_token cancellation = {}
     );
     CommandResult undo(std::stop_token cancellation = {});
