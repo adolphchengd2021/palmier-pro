@@ -27,6 +27,13 @@ void require(bool condition, const std::string& message) {
 
 class RuntimeObserver final : public ProjectRuntimeObserver {
 public:
+    struct Publication final {
+        std::uint64_t projectGeneration;
+        std::uint64_t revision;
+        std::uint64_t stateId;
+        std::uint64_t persistedStateId;
+    };
+
     void operationAdmitted() noexcept override {
         std::scoped_lock lock(mutex_);
         ++admissionCount_;
@@ -36,6 +43,17 @@ public:
     void operationCommitted() noexcept override {
         std::scoped_lock lock(mutex_);
         if (cancelAfterCommit_) cancelAfterCommit_->request_stop();
+        condition_.notify_all();
+    }
+
+    void statePublished(const palmier::project::ProjectRuntimeState& state) noexcept override {
+        std::scoped_lock lock(mutex_);
+        publications_.push_back({
+            state.projectGeneration,
+            state.session->revision,
+            state.session->stateId,
+            state.session->persistedStateId,
+        });
         condition_.notify_all();
     }
 
@@ -49,11 +67,17 @@ public:
         cancelAfterCommit_ = std::move(source);
     }
 
+    std::vector<Publication> publications() const {
+        std::scoped_lock lock(mutex_);
+        return publications_;
+    }
+
 private:
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::condition_variable condition_;
     std::size_t admissionCount_{};
     std::shared_ptr<std::stop_source> cancelAfterCommit_;
+    std::vector<Publication> publications_;
 };
 
 palmier::project::ProjectDocument projectDocument(std::string projectName = "Project") {
@@ -86,7 +110,8 @@ void requireRuntimeError(Operation operation, const std::string& code) {
 }
 
 void mutationPublishesOneSessionState() {
-    ProjectRuntime runtime;
+    auto observer = std::make_shared<RuntimeObserver>();
+    ProjectRuntime runtime(observer);
     int nextId = 0;
     const auto installed = runtime.install(projectDocument(), 1, [&] {
         return "runtime-id-" + std::to_string(++nextId);
@@ -114,6 +139,21 @@ void mutationPublishesOneSessionState() {
         runtime.getTimeline().timeline.find("tracks")->array().front()
             .find("clips")->array().size() == 1,
         "undo restores runtime state"
+    );
+    const auto publications = observer->publications();
+    require(publications.size() == 3, "install, split, and undo each publish once");
+    require(
+        publications[0].projectGeneration == 1
+        && publications[0].revision == 0
+        && publications[0].stateId == 0,
+        "install publication identity"
+    );
+    require(
+        publications[1].revision == 1
+        && publications[1].stateId == 1
+        && publications[2].revision == 2
+        && publications[2].stateId == 0,
+        "mutation publications preserve exact session identity"
     );
 }
 
@@ -179,6 +219,33 @@ void dirtyAndGenerationGatesProtectReplacement() {
         "staleProjectGeneration"
     );
     require(runtime.snapshot(2).session->revision == 0, "stale command cannot mutate replacement");
+}
+
+void persistenceAcknowledgementPublishesOnlyOnChange() {
+    auto observer = std::make_shared<RuntimeObserver>();
+    ProjectRuntime runtime(observer);
+    int nextId = 0;
+    runtime.install(projectDocument(), 1, [&] {
+        return "persist-id-" + std::to_string(++nextId);
+    });
+    static_cast<void>(runtime.markPersisted(0));
+    require(
+        observer->publications().size() == 1,
+        "unchanged persistence acknowledgement must not republish state"
+    );
+    const auto split = runtime.splitClips(SplitClipsCommand{
+        std::vector<SplitPoint>{{"target", 40}}, std::nullopt, std::nullopt,
+    });
+    const auto persisted = runtime.markPersisted(split.session->stateId);
+    require(!persisted.session->dirty(), "persistence acknowledgement clears dirty state");
+    static_cast<void>(runtime.markPersisted(split.session->stateId));
+    const auto publications = observer->publications();
+    require(publications.size() == 3, "changed persistence acknowledgement publishes once");
+    require(
+        publications.back().stateId == split.session->stateId
+        && publications.back().persistedStateId == split.session->stateId,
+        "persistence publication carries exact content identity"
+    );
 }
 
 void operationsAreSerializedAndQueuedCancellationDoesNotCommit() {
@@ -257,6 +324,11 @@ void cancellationAfterCommitStillPublishesSuccess() {
     );
     require(cancellation->stop_requested(), "commit checkpoint must request cancellation");
     require(result.command.changed && result.session->revision == 1, "committed operation must publish success");
+    const auto publications = observer->publications();
+    require(
+        publications.size() == 2 && publications.back().revision == 1,
+        "late cancellation cannot suppress committed state publication"
+    );
 }
 
 void reentrancyAndCloseAreTerminal() {
@@ -299,6 +371,7 @@ int main() {
     try {
         mutationPublishesOneSessionState();
         dirtyAndGenerationGatesProtectReplacement();
+        persistenceAcknowledgementPublishesOnlyOnChange();
         operationsAreSerializedAndQueuedCancellationDoesNotCommit();
         cancellationAfterCommitStillPublishesSuccess();
         reentrancyAndCloseAreTerminal();

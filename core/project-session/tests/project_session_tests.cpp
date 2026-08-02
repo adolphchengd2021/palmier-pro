@@ -4,8 +4,12 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <memory>
+#include <new>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -98,6 +102,12 @@ void explicitSplitAndUndo(const std::filesystem::path& root) {
     });
     require(result.changed, "split should change the project");
     require(result.revisionBefore == 0 && result.revisionAfter == 1, "split revision");
+    require(
+        result.publication
+        && result.publication->revision == 1
+        && result.publication->stateId == 1,
+        "split prepares its committed publication"
+    );
     require(session.dirty(), "split should make the session dirty");
 
     const auto timeline = session.getTimeline();
@@ -121,6 +131,12 @@ void explicitSplitAndUndo(const std::filesystem::path& root) {
 
     const auto undo = session.undo();
     require(undo.changed && undo.revisionAfter == 2, "undo revision");
+    require(
+        undo.publication
+        && undo.publication->revision == 2
+        && undo.publication->stateId == 0,
+        "undo prepares its committed publication"
+    );
     require(!session.dirty(), "undo to baseline should clear dirty");
     require(palmier::json::canonical(session.getTimeline()) == baseline, "undo exact restore");
     require(
@@ -128,6 +144,86 @@ void explicitSplitAndUndo(const std::filesystem::path& root) {
         "undo exact source restore"
     );
     requireCommandError([&] { static_cast<void>(session.undo()); }, "nothingToUndo");
+}
+
+void publicationPreparationFailureDoesNotCommit() {
+    const auto source = std::string(R"({
+        "timelines":[{
+            "id":"timeline","name":"Project","fps":30,"width":1920,"height":1080,
+            "tracks":[{"id":"track","type":"video","clips":[{
+                "id":"target","mediaRef":"media","mediaType":"video",
+                "sourceClipType":"video","startFrame":0,"durationFrames":120,
+                "speed":1,"opacity":1,"blendMode":"normal"
+            }]}]
+        }],
+        "activeTimelineId":"timeline","openTimelineIds":["timeline"]
+    })");
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    bool failPublication{};
+    int nextId{};
+    ProjectSession session(
+        document,
+        [&] { return "publication-id-" + std::to_string(++nextId); },
+        [&failPublication](palmier::project::ProjectSessionSnapshot snapshot) {
+            if (failPublication) throw std::bad_alloc();
+            return std::make_shared<const palmier::project::ProjectSessionSnapshot>(
+                std::move(snapshot)
+            );
+        }
+    );
+    const auto baseline = palmier::json::canonical(session.snapshot().document.source());
+    failPublication = true;
+    try {
+        static_cast<void>(session.splitClips(SplitClipsCommand{
+            std::vector<SplitPoint>{{"target", 40}}, std::nullopt, std::nullopt,
+        }));
+        throw std::runtime_error("expected split publication preparation failure");
+    } catch (const std::bad_alloc&) {
+    }
+    require(
+        session.revision() == 0
+        && session.stateId() == 0
+        && !session.dirty()
+        && palmier::json::canonical(session.snapshot().document.source()) == baseline,
+        "split publication failure must preserve the exact session"
+    );
+
+    failPublication = false;
+    const auto split = session.splitClips(SplitClipsCommand{
+        std::vector<SplitPoint>{{"target", 40}}, std::nullopt, std::nullopt,
+    });
+    const auto splitSource = palmier::json::canonical(split.publication->document.source());
+    failPublication = true;
+    try {
+        static_cast<void>(session.undo());
+        throw std::runtime_error("expected undo publication preparation failure");
+    } catch (const std::bad_alloc&) {
+    }
+    require(
+        session.revision() == 1
+        && session.stateId() == split.publication->stateId
+        && palmier::json::canonical(session.snapshot().document.source()) == splitSource,
+        "undo publication failure must retain the committed split and undo entry"
+    );
+    failPublication = false;
+    static_cast<void>(session.undo());
+    require(session.stateId() == 0, "undo remains available after publication failure");
+
+    const auto secondSplit = session.splitClips(SplitClipsCommand{
+        std::vector<SplitPoint>{{"target", 60}}, std::nullopt, std::nullopt,
+    });
+    failPublication = true;
+    try {
+        static_cast<void>(session.markPersisted(secondSplit.publication->stateId));
+        throw std::runtime_error("expected persistence publication preparation failure");
+    } catch (const std::bad_alloc&) {
+    }
+    require(
+        session.dirty() && session.persistedStateId() == 0,
+        "persistence publication failure must not acknowledge the state"
+    );
 }
 
 void sourceCanariesAndPersistedIdentity() {
@@ -528,6 +624,7 @@ int wmain(int argumentCount, wchar_t* arguments[]) {
         }
         const std::filesystem::path root(arguments[1]);
         explicitSplitAndUndo(root);
+        publicationPreparationFailureDoesNotCommit();
         sourceCanariesAndPersistedIdentity();
         unstableWriteParentsAreRefused();
         invalidBatchDoesNotMutate(root);

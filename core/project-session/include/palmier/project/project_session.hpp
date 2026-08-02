@@ -32,14 +32,6 @@ struct SplitClipsCommand final {
     std::optional<std::vector<std::int64_t>> frames;
 };
 
-struct CommandResult final {
-    bool changed;
-    std::uint64_t revisionBefore;
-    std::uint64_t revisionAfter;
-    std::string actionId;
-    std::unique_ptr<palmier::json::Value> payload;
-};
-
 struct ProjectSessionSnapshot final {
     ProjectDocument document;
     std::uint64_t revision;
@@ -47,6 +39,19 @@ struct ProjectSessionSnapshot final {
     std::uint64_t persistedStateId;
 
     bool dirty() const noexcept { return stateId != persistedStateId; }
+};
+
+using ProjectSessionPublicationFactory = std::function<
+    std::shared_ptr<const ProjectSessionSnapshot>(ProjectSessionSnapshot)
+>;
+
+struct CommandResult final {
+    bool changed;
+    std::uint64_t revisionBefore;
+    std::uint64_t revisionAfter;
+    std::string actionId;
+    std::unique_ptr<palmier::json::Value> payload;
+    std::shared_ptr<const ProjectSessionSnapshot> publication;
 };
 
 struct ProjectSaveSnapshot final {
@@ -64,7 +69,11 @@ public:
 
 class ProjectSession final {
 public:
-    ProjectSession(const ProjectDocument& document, IdGenerator idGenerator);
+    ProjectSession(
+        const ProjectDocument& document,
+        IdGenerator idGenerator,
+        ProjectSessionPublicationFactory publicationFactory = {}
+    );
 
     ProjectSession(const ProjectSession&) = delete;
     ProjectSession& operator=(const ProjectSession&) = delete;
@@ -81,7 +90,7 @@ public:
 
     ProjectSessionSnapshot snapshot(std::stop_token cancellation = {}) const;
     ProjectSaveSnapshot saveSnapshot(std::stop_token cancellation = {}) const;
-    void markPersisted(std::uint64_t stateId);
+    std::shared_ptr<const ProjectSessionSnapshot> markPersisted(std::uint64_t stateId);
 
     std::uint64_t revision() const;
     std::uint64_t stateId() const;
@@ -103,11 +112,16 @@ private:
         std::uint64_t beforeStateId;
     };
 
+    std::shared_ptr<const ProjectSessionSnapshot> preparePublication(
+        ProjectSessionSnapshot snapshot
+    ) const;
+
     std::unique_ptr<palmier::json::Value> source_;
     RootKind rootKind_;
     Project project_;
     std::vector<Diagnostic> diagnostics_;
     IdGenerator idGenerator_;
+    ProjectSessionPublicationFactory publicationFactory_;
     std::vector<std::string> unsafeClipIds_;
     std::set<std::string, std::less<>> sessionGeneratedClipIds_;
     std::vector<UndoEntry> undoJournal_;

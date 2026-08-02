@@ -40,6 +40,7 @@ public:
     virtual ~ProjectRuntimeObserver() = default;
     virtual void operationAdmitted() noexcept = 0;
     virtual void operationCommitted() noexcept {}
+    virtual void statePublished(const ProjectRuntimeState&) noexcept {}
 };
 
 class ProjectRuntime final {

@@ -4569,6 +4569,8 @@ def windows_mcp_project_session_contract() -> None:
         "TimelineQuery",
         "SplitClipsCommand",
         "CommandResult",
+        "ProjectSessionPublicationFactory",
+        "std::shared_ptr<const ProjectSessionSnapshot> publication",
         "saveSnapshot(",
         "markPersisted(",
         "revision() const",
@@ -4588,6 +4590,9 @@ def windows_mcp_project_session_contract() -> None:
         "return stateId_ != persistedStateId_",
         "Re-read get_timeline after undo.",
         "checkCancellation(cancellation)",
+        "preparePublication({",
+        "ProjectDocument(*plannedSource, rootKind_, planned, diagnostics_)",
+        "project session publication factory returned no snapshot",
     ]:
         if token not in session_source:
             raise ContractError(f"ProjectSession invariant missing token {token!r}")
@@ -4606,6 +4611,10 @@ def windows_mcp_project_session_contract() -> None:
         "cancellationDuringPlanningDoesNotCommit",
         "extremeTimingIsRefusedBeforeCommit",
         "cancelledUndoPreservesHistory",
+        "publicationPreparationFailureDoesNotCommit",
+        "split publication failure must preserve the exact session",
+        "undo publication failure must retain the committed split and undo entry",
+        "persistence publication failure must not acknowledge the state",
     ]:
         if token not in session_tests:
             raise ContractError(f"ProjectSession test missing token {token!r}")
@@ -4617,6 +4626,7 @@ def windows_mcp_project_session_contract() -> None:
         "projectGeneration(",
         "ProjectRuntimeObserver",
         "operationCommitted() noexcept",
+        "statePublished(const ProjectRuntimeState&)",
         "markPersisted(",
         "void close() noexcept",
     ]:
@@ -4630,7 +4640,8 @@ def windows_mcp_project_session_contract() -> None:
         "runtime.session.swap(candidate)",
         "runtime.requireProjectGeneration(expectedProjectGeneration)",
         "runtime.observer->operationCommitted()",
-        "runtime.publishedSnapshot({})",
+        "observer->statePublished(state)",
+        "auto state = result.publication",
         "if (admissionObserver) admissionObserver->operationAdmitted()",
         "condition.wait",
     ]:
@@ -4641,6 +4652,10 @@ def windows_mcp_project_session_contract() -> None:
         "dirtyAndGenerationGatesProtectReplacement",
         "operationsAreSerializedAndQueuedCancellationDoesNotCommit",
         "cancellationAfterCommitStillPublishesSuccess",
+        "install, split, and undo each publish once",
+        "late cancellation cannot suppress committed state publication",
+        "persistenceAcknowledgementPublishesOnlyOnChange",
+        "unchanged persistence acknowledgement must not republish state",
         "reentrancyAndCloseAreTerminal",
         "emptyRuntimeRefusesQueries",
     ]:
@@ -4654,6 +4669,7 @@ def windows_mcp_project_session_contract() -> None:
         "positive, monotonically increasing generation",
         "refuses a dirty active project",
         "project replacement invalidates\nthe old protocol session",
+        "same immutable state after install, mutation,\nundo, and persistence acknowledgement",
     ]:
         if token not in runtime_adr:
             raise ContractError(f"ProjectRuntime ADR missing token {token!r}")

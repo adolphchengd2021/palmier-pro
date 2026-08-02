@@ -22,6 +22,15 @@ Callers that already hold a project identity pass its expected generation into
 the typed operation; the runtime checks it inside the same serialized queue item
 that performs the query or mutation. A cancellation observed after a domain
 commit cannot turn that committed operation into a failure-shaped response.
+The runtime observer receives the same immutable state after install, mutation,
+undo, and persistence acknowledgement on the serial owner after commit. A UI
+bridge may enqueue that value but may not call the runtime recursively or do
+projection work in the callback. Repeating an already-current persistence
+acknowledgement returns the current state without publishing a duplicate.
+ProjectSession prepares the immutable publication, including its shared
+allocation, before the no-throw domain commit. Split, undo, and persistence
+acknowledgement therefore cannot mutate successfully and then fail while
+preparing the state observed by callers and UI bridges.
 
 The runtime bounds pending operations, rejects recursive calls from its owner
 thread, observes cancellation before work and at the domain boundary, drains
@@ -39,6 +48,10 @@ the old protocol session instead of silently retargeting its subsequent tools.
 The runtime test covers mutation and undo publication from one session, dirty
 replacement refusal, explicit discard, monotonic generations, queued
 cancellation, recursive-call refusal, concurrent close, and late admission.
+It also verifies one ordered immutable publication for install, mutation, and
+undo, including publication after cancellation is requested at the commit seam.
+Injected publication-preparation failures verify that split, undo, and
+persistence acknowledgement preserve the exact pre-operation state and history.
 The existing real-process MCP test continues to prove cross-session timeline
 readback and shared undo through the runtime boundary.
 
@@ -46,5 +59,5 @@ readback and shared undo through the runtime boundary.
 
 This decision establishes the unique runtime owner and moves the standalone MCP
 path onto it. It does not yet prove Qt and MCP sharing the same live runtime,
-stoppable embedded HTTP lifecycle, project-package persistence, dirty UI
-confirmation, or Windows 10 manual behavior. Those are later integration gates.
+project-package persistence, dirty UI confirmation, or Windows 10 manual
+behavior. Those are later integration gates.

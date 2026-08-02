@@ -382,16 +382,36 @@ Object receiptBase(
 CommandError::CommandError(std::string codeValue, std::string detail)
     : std::runtime_error(std::move(detail)), code(std::move(codeValue)) {}
 
-ProjectSession::ProjectSession(const ProjectDocument& document, IdGenerator idGenerator)
+ProjectSession::ProjectSession(
+    const ProjectDocument& document,
+    IdGenerator idGenerator,
+    ProjectSessionPublicationFactory publicationFactory
+)
     : source_(std::make_unique<Value>(document.source())),
       rootKind_(document.rootKind()),
       project_(document.project()),
       diagnostics_(document.diagnostics()),
       idGenerator_(std::move(idGenerator)),
+      publicationFactory_(std::move(publicationFactory)),
       unsafeClipIds_(unsafeClipIds(document)) {
     if (!idGenerator_) {
         throw CommandError("invalidIdGenerator", "project session requires an ID generator");
     }
+}
+
+std::shared_ptr<const ProjectSessionSnapshot> ProjectSession::preparePublication(
+    ProjectSessionSnapshot snapshot
+) const {
+    auto publication = publicationFactory_
+        ? publicationFactory_(std::move(snapshot))
+        : std::make_shared<const ProjectSessionSnapshot>(std::move(snapshot));
+    if (!publication) {
+        throw CommandError(
+            "invalidPublicationFactory",
+            "project session publication factory returned no snapshot"
+        );
+    }
+    return publication;
 }
 
 Value ProjectSession::getTimeline(
@@ -746,12 +766,19 @@ CommandResult ProjectSession::splitClips(
     };
     auto payload = receiptBase(true, revisionBefore, revisionAfter, actionId);
     payload.emplace("clips", Value(std::move(changedClips)));
+    auto publication = preparePublication({
+        ProjectDocument(*plannedSource, rootKind_, planned, diagnostics_),
+        revisionAfter,
+        stateAfter,
+        persistedStateId_,
+    });
     CommandResult result{
         true,
         revisionBefore,
         revisionAfter,
         actionId,
         std::make_unique<Value>(std::move(payload)),
+        std::move(publication),
     };
     checkCancellation(cancellation);
 
@@ -815,12 +842,19 @@ CommandResult ProjectSession::undo(std::stop_token cancellation) {
     auto payload = receiptBase(true, revisionBefore, revisionAfter, pending.actionId);
     payload.emplace("clips", Value(Array{}));
     payload["notes"] = Value(Array{Value("Re-read get_timeline after undo.")});
+    auto publication = preparePublication({
+        ProjectDocument(*plannedSource, rootKind_, planned, diagnostics_),
+        revisionAfter,
+        pending.beforeStateId,
+        persistedStateId_,
+    });
     CommandResult result{
         true,
         revisionBefore,
         revisionAfter,
         pending.actionId,
         std::make_unique<Value>(std::move(payload)),
+        std::move(publication),
     };
     checkCancellation(cancellation);
 
@@ -852,7 +886,9 @@ ProjectSaveSnapshot ProjectSession::saveSnapshot(std::stop_token cancellation) c
     return {*source_, revision_, stateId_};
 }
 
-void ProjectSession::markPersisted(std::uint64_t stateId) {
+std::shared_ptr<const ProjectSessionSnapshot> ProjectSession::markPersisted(
+    std::uint64_t stateId
+) {
     std::scoped_lock lock(mutex_);
     if (stateId >= nextStateId_) {
         throw CommandError(
@@ -860,7 +896,14 @@ void ProjectSession::markPersisted(std::uint64_t stateId) {
             "persisted state identity was not produced by this project session"
         );
     }
+    auto publication = preparePublication({
+        ProjectDocument(*source_, rootKind_, project_, diagnostics_),
+        revision_,
+        stateId_,
+        stateId,
+    });
     persistedStateId_ = stateId;
+    return publication;
 }
 
 std::uint64_t ProjectSession::revision() const {

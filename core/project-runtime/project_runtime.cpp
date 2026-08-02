@@ -107,6 +107,10 @@ struct ProjectRuntime::Implementation final {
         );
     }
 
+    void publishState(const ProjectRuntimeState& state) noexcept {
+        if (observer) observer->statePublished(state);
+    }
+
     void close() noexcept {
         bool calledFromWorker{};
         {
@@ -201,7 +205,9 @@ ProjectRuntimeState ProjectRuntime::install(
         checkCancellation(cancellation);
         runtime.session.swap(candidate);
         runtime.projectGeneration = projectGeneration;
-        return ProjectRuntimeState{projectGeneration, std::move(state)};
+        ProjectRuntimeState result{projectGeneration, std::move(state)};
+        runtime.publishState(result);
+        return result;
     });
 }
 
@@ -262,12 +268,14 @@ ProjectRuntimeCommandResult ProjectRuntime::splitClips(
         runtime.requireProjectGeneration(expectedProjectGeneration);
         auto result = runtime.requireSession().splitClips(command, cancellation);
         if (runtime.observer) runtime.observer->operationCommitted();
-        auto state = runtime.publishedSnapshot({});
-        return ProjectRuntimeCommandResult{
+        auto state = result.publication;
+        ProjectRuntimeCommandResult published{
             runtime.projectGeneration,
             std::move(result),
             std::move(state),
         };
+        runtime.publishState({published.projectGeneration, published.session});
+        return published;
     });
 }
 
@@ -283,12 +291,14 @@ ProjectRuntimeCommandResult ProjectRuntime::undo(
         runtime.requireProjectGeneration(expectedProjectGeneration);
         auto result = runtime.requireSession().undo(cancellation);
         if (runtime.observer) runtime.observer->operationCommitted();
-        auto state = runtime.publishedSnapshot({});
-        return ProjectRuntimeCommandResult{
+        auto state = result.publication;
+        ProjectRuntimeCommandResult published{
             runtime.projectGeneration,
             std::move(result),
             std::move(state),
         };
+        runtime.publishState({published.projectGeneration, published.session});
+        return published;
     });
 }
 
@@ -304,10 +314,14 @@ ProjectRuntimeState ProjectRuntime::markPersisted(
     ](Implementation& runtime) {
         checkCancellation(cancellation);
         runtime.requireProjectGeneration(expectedProjectGeneration);
-        runtime.requireSession().markPersisted(stateId);
-        if (runtime.observer) runtime.observer->operationCommitted();
-        auto state = runtime.publishedSnapshot({});
-        return ProjectRuntimeState{runtime.projectGeneration, std::move(state)};
+        auto& session = runtime.requireSession();
+        const auto previousPersistedStateId = session.persistedStateId();
+        auto state = session.markPersisted(stateId);
+        const bool changed = session.persistedStateId() != previousPersistedStateId;
+        if (changed && runtime.observer) runtime.observer->operationCommitted();
+        ProjectRuntimeState published{runtime.projectGeneration, std::move(state)};
+        if (changed) runtime.publishState(published);
+        return published;
     });
 }
 
