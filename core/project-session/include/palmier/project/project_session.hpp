@@ -129,7 +129,7 @@ private:
     struct UndoEntry final {
         std::string actionId;
         std::vector<TrackSnapshot> tracks;
-        std::optional<TimelineSnapshot> timeline;
+        std::unique_ptr<TimelineSnapshot> timeline;
         std::vector<std::string> createdClipIds;
         std::uint64_t beforeStateId;
     };

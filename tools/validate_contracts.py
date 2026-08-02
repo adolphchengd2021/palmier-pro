@@ -5033,7 +5033,7 @@ def windows_mcp_project_session_contract() -> None:
         "linked clips must preserve their frame offsets",
         "moved clips overlap on a destination track",
         "destination overlap would change a linked clip",
-        "TimelineSnapshot{timelineIndex, timeline, sourceTimelineSnapshot}",
+        "std::make_unique<TimelineSnapshot>(TimelineSnapshot{",
         "pass exactly one of splits or trackIndex with frames",
         "linkedSplitMismatch",
         "unsupportedClipSemantics",

@@ -237,6 +237,13 @@ Object& requireSourceObject(Value& value, std::string_view label) {
     return value.object();
 }
 
+const Object& requireSourceObject(const Value& value, std::string_view label) {
+    if (value.kind() != Value::Kind::object) {
+        throw CommandError("sourceModelMismatch", std::string(label) + " is not an object");
+    }
+    return value.object();
+}
+
 Array& requireSourceArray(Object& object, std::string_view key) {
     const auto field = object.find(std::string(key));
     if (field == object.end() || field->second.kind() != Value::Kind::array) {
@@ -812,7 +819,7 @@ CommandResult ProjectSession::splitClips(
     UndoEntry undoEntry{
         actionId,
         std::move(snapshots),
-        std::nullopt,
+        nullptr,
         std::move(createdClipIds),
         stateId_,
     };
@@ -1344,7 +1351,11 @@ CommandResult ProjectSession::moveClips(
     UndoEntry undoEntry{
         actionId,
         {},
-        TimelineSnapshot{timelineIndex, timeline, sourceTimelineSnapshot},
+        std::make_unique<TimelineSnapshot>(TimelineSnapshot{
+            timelineIndex,
+            timeline,
+            sourceTimelineSnapshot,
+        }),
         std::move(createdClipIds),
         stateId_,
     };
