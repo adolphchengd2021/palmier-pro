@@ -5035,6 +5035,7 @@ def windows_prototype_packaging_contract() -> None:
         "cmake --install $build --config Release --prefix $stage --component prototype",
         "windeployqt.exe",
         "--no-compiler-runtime",
+        "--skip-plugin-types qmltooling,generic",
         "Qt6Core.dll",
         "platforms\\qwindows.dll",
         "avcodec-*.dll",

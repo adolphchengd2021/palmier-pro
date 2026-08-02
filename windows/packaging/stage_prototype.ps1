@@ -68,7 +68,7 @@ Get-ChildItem -LiteralPath $applicationDirectory -File -Filter '*.dll' | ForEach
 }
 
 $deployTool = Resolve-RequiredPath (Join-Path $qt 'bin\windeployqt.exe') 'windeployqt'
-& $deployTool --release --no-compiler-runtime --no-translations --qmldir (Join-Path $repository 'windows\app\qml') --dir $stage (Join-Path $stage 'PalmierPro.exe')
+& $deployTool --release --no-compiler-runtime --no-translations --skip-plugin-types qmltooling,generic --qmldir (Join-Path $repository 'windows\app\qml') --dir $stage (Join-Path $stage 'PalmierPro.exe')
 if ($LASTEXITCODE -ne 0) { throw "windeployqt failed with exit code $LASTEXITCODE" }
 
 $requiredRuntime = @(
