@@ -788,6 +788,7 @@ void sourceCanariesAndPersistedIdentity() {
     }));
     const auto saved = session.saveSnapshot();
     require(saved.revision == 1 && saved.stateId == 1, "save snapshot identity");
+    require(saved.persistedStateId == 0 && saved.dirty(), "save snapshot dirty identity");
     const auto split = session.snapshot();
     require(
         palmier::json::canonical(sourceClipAt(split.document, 2)) == baselineCanary,

@@ -82,6 +82,9 @@ struct ProjectSaveSnapshot final {
     palmier::json::Value source;
     std::uint64_t revision;
     std::uint64_t stateId;
+    std::uint64_t persistedStateId;
+
+    bool dirty() const noexcept { return stateId != persistedStateId; }
 };
 
 class CommandError final : public std::runtime_error {

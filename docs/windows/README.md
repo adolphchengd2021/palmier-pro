@@ -17,9 +17,11 @@ distribution evidence, then tests isolated staging, install, launch, uninstall,
    and external user-data preservation. It now also owns the active package
    identity, holds a process-visible write lease, provides crash-safe Save As,
    and debounces automatic saves without discarding unknown package files or
-   retrying an unchanged failure. It does not yet provide general timeline
-   editing, audio export, H.265 export, a signed release installer, or clean
-   Windows 10 19045 acceptance.
+   retrying an unchanged failure. A bounded project recovery primitive can now
+   persist one complete dirty DOM outside the live package and reject a stale
+   disk baseline. It does not yet provide recovery scheduling or choice UI,
+   general timeline editing, audio export, H.265 export, a signed release
+   installer, or clean Windows 10 19045 acceptance.
 
 - Requirements: `docs/WINDOWS_10_PORT_REQUIREMENTS.zh-CN.md`
 - Decisions: `docs/windows/adr/`
@@ -107,6 +109,16 @@ pool, blocks dirty project replacement, waits for an admitted save during close,
    and re-arms only when the runtime publication token advances. Recovery and
    broader concurrent media mutation coordination remain open; see ADR 0028
    through ADR 0031, ADR 0035, and ADR 0046.
+
+The project-package layer also provides one versioned recovery journal outside
+the live `.palmier` directory. Its SHA-256 path key hides the project name, its
+payload retains the complete source DOM, and its baseline SHA-256 prevents a
+candidate from silently targeting an externally changed project. Writes use a
+verified sibling staging file and handle-based atomic replacement. Retirement
+requires the same runtime generation and a journal revision no newer than the
+committed Save. Qt scheduling, startup discovery, recovery choice UI, and media
+transactions remain open; see ADR 0047 and
+`contracts/project/v1/windows-recovery-journal.json`.
 
 The shared session also keeps a process-local Redo branch for Split, Move, and
 Remove. Undo captures the exact post-action source DOM; Redo restores that state

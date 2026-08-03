@@ -1,0 +1,57 @@
+{
+  "contractVersion": 1,
+  "owner": "ProjectRecoveryJournal is the synchronous off-main filesystem boundary; ProjectPersistenceController will own scheduling and user-visible state",
+  "storage": {
+    "defaultRoot": "FOLDERID_LocalAppData/Palmier Pro/Recovery/v1",
+    "fileName": "sha256(case-folded canonical package path).palmier-recovery.json",
+    "pathDisclosure": "the file name never contains the project name or path",
+    "staging": "unique sibling .partial file",
+    "commit": "durable flush, full readback verification, then one handle-based atomic replacement"
+  },
+  "schema": {
+    "contractVersion": "unsigned integer 1",
+    "packageKey": "64 lowercase SHA-256 hex characters",
+    "packagePath": "canonical package path encoded as UTF-8 for future recovery UI",
+    "projectGeneration": "exact runtime generation that produced the snapshot",
+    "revision": "exact runtime revision that produced the snapshot",
+    "stateId": "exact runtime state identity",
+    "persistedStateId": "persisted state identity; must differ from stateId",
+    "createdUnixMilliseconds": "non-negative wall-clock timestamp",
+    "baselineProjectJsonSha256": "SHA-256 of the exact live project.json bytes read before journal commit",
+    "projectJsonSha256": "SHA-256 of the canonical recovery project payload",
+    "project": "complete project source DOM including unknown fields"
+  },
+  "bounds": {
+    "projectJsonBytes": 67108864,
+    "journalOverheadBytes": 1048576,
+    "stagingAttempts": 64,
+    "ioChunkBytes": 1048576
+  },
+  "write": {
+    "serialization": "one process-wide cancellable mutation gate prevents concurrent journal replacement or retirement",
+    "cleanState": "refused with projectClean",
+    "cancellation": "checked before and between snapshot, baseline read, serialization, staging, write, flush, verification, and commit",
+    "failure": "the previous complete journal remains installed and every admitted staging file is removed",
+    "livePackage": "never mutated"
+  },
+  "inspection": {
+    "missing": "returns missing without a candidate",
+    "recoverable": "journal baseline SHA-256 exactly equals the current live project.json SHA-256",
+    "redundant": "the current live project.json also equals the recovery payload and no recovery choice is needed",
+    "staleBaseline": "candidate metadata is returned but the payload must not be applied automatically",
+    "corrupt": "malformed structure, identity, hash, dirty state, or payload fails explicitly"
+  },
+  "retirement": {
+    "identity": "projectGeneration must match exactly",
+    "ordering": "journal revision must not be newer than the committed revision",
+    "deletion": "deletes the validated open file handle, never an unchecked path target"
+  },
+  "excluded": [
+    "Qt scheduling",
+    "automatic recovery application",
+    "recovery choice UI",
+    "media payload journaling",
+    "package transaction recovery",
+    "cross-process recovery cleanup"
+  ]
+}

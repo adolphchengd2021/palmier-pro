@@ -1738,6 +1738,91 @@ def windows_project_reader_contract() -> None:
         if token not in package_service_adr:
             raise ContractError(f"project package service ADR missing token {token!r}")
 
+    recovery_contract = load_json(
+        "contracts/project/v1/windows-recovery-journal.json"
+    )
+    require_equal(
+        "project recovery contract version",
+        recovery_contract["contractVersion"],
+        CONTRACT_VERSION,
+    )
+    require_equal(
+        "project recovery maximum payload",
+        recovery_contract["bounds"]["projectJsonBytes"],
+        64 * 1024 * 1024,
+    )
+    require_equal(
+        "project recovery atomic commit",
+        recovery_contract["storage"]["commit"],
+        "durable flush, full readback verification, then one handle-based atomic replacement",
+    )
+    require_equal(
+        "project recovery stale policy",
+        recovery_contract["inspection"]["staleBaseline"],
+        "candidate metadata is returned but the payload must not be applied automatically",
+    )
+    recovery_header = read_text(
+        "windows/project-package/include/palmier/project/project_recovery_journal.hpp"
+    )
+    recovery_source = read_text(
+        "windows/project-package/project_recovery_journal.cpp"
+    )
+    recovery_tests = read_text(
+        "windows/project-package/tests/project_recovery_journal_tests.cpp"
+    )
+    recovery_adr = read_text(
+        "docs/windows/adr/0047-bounded-project-recovery-journal.md"
+    )
+    for token in [
+        "ProjectRecoveryJournalStatus",
+        "staleBaseline",
+        "ProjectRecoveryJournalCandidate",
+        "ProjectRecoveryJournalWriteReceipt",
+        "inspect(",
+        "retire(",
+    ]:
+        if token not in recovery_header:
+            raise ContractError(f"project recovery header missing token {token!r}")
+    for token in [
+        "FOLDERID_LocalAppData",
+        "BCRYPT_SHA256_ALGORITHM",
+        "saved.snapshot.dirty()",
+        "defaultMaximumProjectJsonBytes",
+        "baselineProjectJsonSha256",
+        "FILE_RENAME_FLAG_REPLACE_IF_EXISTS",
+        "FlushFileBuffers",
+        "candidate.revision > committedRevision",
+        "FileDispositionInfo",
+    ]:
+        if token not in recovery_source:
+            raise ContractError(f"project recovery source missing token {token!r}")
+    for token in [
+        "dirtySnapshotRoundTripsWithoutTouchingPackage",
+        "changedBaselineIsStaleAndNeverApplied",
+        "diskEquivalentCandidateIsRedundant",
+        "retirementRequiresMatchingGenerationAndCommittedRevision",
+        "interruptedReplacementPreservesPreviousJournal",
+        "cleanAndCorruptJournalsFailExplicitly",
+        "tamperedIdentityAndPayloadFailExplicitly",
+        "concurrentWriterWaitIsCancellable",
+        "cancellationAfterCommitKeepsInstalledJournal",
+        "x-recovery-root",
+        "requireNoPartialFiles",
+    ]:
+        if token not in recovery_tests:
+            raise ContractError(f"project recovery tests missing token {token!r}")
+    if "project_package.recovery_journal" not in writer_cmake:
+        raise ContractError("project recovery CMake test is missing")
+    for token in [
+        "outside the live package",
+        "staleBaseline",
+        "must never be applied automatically",
+        "journal revision must not be newer",
+        "durable journal primitive only",
+    ]:
+        if token not in recovery_adr:
+            raise ContractError(f"project recovery ADR missing token {token!r}")
+
     qt_persistence_header = read_text(
         "windows/app/include/palmier/windows/project_persistence_controller.hpp"
     )

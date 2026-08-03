@@ -2356,7 +2356,7 @@ ProjectSessionSnapshot ProjectSession::snapshot(std::stop_token cancellation) co
 ProjectSaveSnapshot ProjectSession::saveSnapshot(std::stop_token cancellation) const {
     std::scoped_lock lock(mutex_);
     checkCancellation(cancellation);
-    return {*source_, revision_, stateId_};
+    return {*source_, revision_, stateId_, persistedStateId_};
 }
 
 std::shared_ptr<const ProjectSessionSnapshot> ProjectSession::markPersisted(

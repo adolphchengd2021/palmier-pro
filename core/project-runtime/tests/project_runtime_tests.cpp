@@ -359,6 +359,11 @@ void saveSnapshotCarriesExactRuntimeIdentity() {
     require(saved.snapshot.revision == split.session->revision, "save snapshot revision");
     require(saved.snapshot.stateId == split.session->stateId, "save snapshot state identity");
     require(
+        saved.snapshot.persistedStateId == split.session->persistedStateId
+            && saved.snapshot.dirty(),
+        "save snapshot persisted identity"
+    );
+    require(
         saved.snapshot.source.find("timelines") != nullptr,
         "save snapshot retains the full source document"
     );
