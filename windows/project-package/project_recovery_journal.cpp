@@ -93,12 +93,15 @@ class RecoveryMutationLease final {
 public:
     explicit RecoveryMutationLease(std::stop_token cancellation) {
         std::unique_lock lock(recoveryGateMutex);
+        if (cancellation.stop_requested()) {
+            fail("cancelled", "waitForRecoveryWriter", "recovery mutation was cancelled before admission");
+        }
         const auto acquired = recoveryGateCondition.wait(
             lock,
             cancellation,
             [] { return !recoveryMutationActive; }
         );
-        if (!acquired) {
+        if (!acquired || cancellation.stop_requested()) {
             fail("cancelled", "waitForRecoveryWriter", "recovery mutation was cancelled while waiting");
         }
         recoveryMutationActive = true;

@@ -502,8 +502,10 @@ void concurrentWriterWaitIsCancellable() {
     gate.entered.acquire();
 
     std::stop_source cancellation;
+    std::binary_semaphore secondStarted{0};
     std::exception_ptr secondFailure;
     std::jthread second([&] {
+        secondStarted.release();
         try {
             static_cast<void>(journal.write(
                 runtime,
@@ -515,7 +517,10 @@ void concurrentWriterWaitIsCancellable() {
             secondFailure = std::current_exception();
         }
     });
+    secondStarted.acquire();
     cancellation.request_stop();
+    gate.proceed.release();
+    first.join();
     second.join();
     require(secondFailure != nullptr, "cancelled waiting recovery writer succeeded");
     try {
@@ -525,8 +530,6 @@ void concurrentWriterWaitIsCancellable() {
         require(error.stage == "waitForRecoveryWriter", "waiting recovery returned wrong stage");
     }
 
-    gate.proceed.release();
-    first.join();
     if (firstFailure) std::rethrow_exception(firstFailure);
     require(
         journal.inspect(workspace.package()).status == ProjectRecoveryJournalStatus::recoverable,

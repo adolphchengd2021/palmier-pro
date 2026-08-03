@@ -71,4 +71,5 @@ if(BUILD_TESTING)
         NAME project_package.recovery_journal
         COMMAND palmier_project_recovery_journal_tests
     )
+    set_tests_properties(project_package.recovery_journal PROPERTIES TIMEOUT 60)
 endif()
