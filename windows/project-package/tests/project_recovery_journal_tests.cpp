@@ -476,6 +476,79 @@ void tamperedIdentityAndPayloadFailExplicitly() {
     );
 }
 
+void discardRequiresExactPresentedFingerprint() {
+    TemporaryWorkspace workspace;
+    ProjectRuntime runtime;
+    constexpr std::uint64_t generation = 50;
+    installRuntime(runtime, workspace, generation);
+    split(runtime, generation);
+    ProjectRecoveryJournal journal(workspace.recovery());
+    static_cast<void>(journal.write(runtime, workspace.package(), generation));
+    const auto presented = journal.fingerprint(workspace.package());
+    require(presented.has_value(), "recovery fingerprint was not returned");
+    require(
+        presented->journalSha256.size() == 64 && presented->journalBytes > 0,
+        "recovery fingerprint is malformed"
+    );
+
+    shortenFirstClip(runtime, generation);
+    static_cast<void>(journal.write(runtime, workspace.package(), generation));
+    requireRecoveryError(
+        [&] {
+            static_cast<void>(journal.discard(
+                workspace.package(),
+                presented->journalSha256
+            ));
+        },
+        "recoveryCandidateChanged"
+    );
+    const auto current = journal.inspect(workspace.package());
+    require(
+        current.candidate.has_value() && current.candidate->revision == 2,
+        "stale discard changed the replacement journal"
+    );
+}
+
+void corruptJournalCanBeDiscardedWithoutParsing() {
+    TemporaryWorkspace workspace;
+    ProjectRuntime runtime;
+    constexpr std::uint64_t generation = 51;
+    installRuntime(runtime, workspace, generation);
+    split(runtime, generation);
+    ProjectRecoveryJournal journal(workspace.recovery());
+    const auto receipt = journal.write(runtime, workspace.package(), generation);
+    writeText(receipt.journalPath, R"({"contractVersion":1,"project":{}})");
+    const auto fingerprint = journal.fingerprint(workspace.package());
+    require(fingerprint.has_value(), "corrupt recovery fingerprint was not returned");
+    requireRecoveryError(
+        [&] { static_cast<void>(journal.inspect(workspace.package())); },
+        "invalidRecoveryJournal"
+    );
+
+    std::stop_source cancellation;
+    cancellation.request_stop();
+    requireRecoveryError(
+        [&] {
+            static_cast<void>(journal.discard(
+                workspace.package(),
+                fingerprint->journalSha256,
+                cancellation.get_token()
+            ));
+        },
+        "cancelled"
+    );
+    require(journal.fingerprint(workspace.package()).has_value(), "cancelled discard deleted recovery");
+    require(
+        journal.discard(workspace.package(), fingerprint->journalSha256),
+        "matching corrupt recovery was not discarded"
+    );
+    require(!journal.fingerprint(workspace.package()).has_value(), "discarded recovery remained present");
+    require(
+        !journal.discard(workspace.package(), fingerprint->journalSha256),
+        "missing recovery reported a discard"
+    );
+}
+
 void concurrentWriterWaitIsCancellable() {
     TemporaryWorkspace workspace;
     ProjectRuntime runtime;
@@ -575,6 +648,8 @@ void runTests() {
     interruptedReplacementPreservesPreviousJournal();
     cleanAndCorruptJournalsFailExplicitly();
     tamperedIdentityAndPayloadFailExplicitly();
+    discardRequiresExactPresentedFingerprint();
+    corruptJournalCanBeDiscardedWithoutParsing();
     concurrentWriterWaitIsCancellable();
     cancellationAfterCommitKeepsInstalledJournal();
 }

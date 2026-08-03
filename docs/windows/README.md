@@ -133,6 +133,13 @@ edit and Undo use the same session rules as a disk-loaded project. Startup
 inspection, cross-process journal rekey, and recovery choice UI remain open;
 see ADR 0049.
 
+Recovery choices are bound to the SHA-256 of the complete journal object. A
+stale button cannot delete or replace a newer snapshot, and an explicitly
+discarded corrupt journal can be removed without trusting or parsing its
+payload. Keep Saved preserves the journal; Recover Edits replaces it from the
+committed dirty runtime using the current process generation. The Qt choice
+state machine remains open; see ADR 0050.
+
 The shared session also keeps a process-local Redo branch for Split, Move, and
 Remove. Undo captures the exact post-action source DOM; Redo restores that state
 without replaying command arguments, including stable generated IDs. A changed

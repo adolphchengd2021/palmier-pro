@@ -67,6 +67,15 @@
     "mutation": "the next edit advances revision and allocates max(stateId, persistedStateId) plus one",
     "failure": "invalid identity, cancellation, stale generation, or dirty replacement refusal cannot replace the active runtime"
   },
+  "choiceResolution": {
+    "fingerprint": "bind every presented choice to the SHA-256 and byte length of the complete journal object",
+    "keepSaved": "open the current disk project without changing or deleting the presented journal",
+    "recoverEdits": "explicitly install the exact candidate, then atomically replace the journal from the committed dirty runtime using the current process generation",
+    "discardRecovery": "delete only a journal whose complete SHA-256 still matches the presented choice; parsing is not required so a corrupt journal can be discarded",
+    "candidateChanged": "refuse a stale choice without deleting, replacing, or installing the newer journal object",
+    "postCommitFailure": "if current-generation journal replacement fails after recovered runtime installation, keep the prior complete journal and surface a warning",
+    "staleBaseline": "may be recovered only through an explicit user action with a visible external-change warning"
+  },
   "excluded": [
     "automatic recovery application",
     "recovery choice UI",

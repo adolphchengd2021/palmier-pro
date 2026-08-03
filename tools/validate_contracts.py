@@ -1794,6 +1794,9 @@ def windows_project_reader_contract() -> None:
     recovery_session_adr = read_text(
         "docs/windows/adr/0049-install-recovered-project-session.md"
     )
+    recovery_choice_adr = read_text(
+        "docs/windows/adr/0050-bind-recovery-choices-to-journal-state.md"
+    )
     for token in [
         "ProjectRecoveryJournalStatus",
         "staleBaseline",
@@ -1957,6 +1960,45 @@ def windows_project_reader_contract() -> None:
     for token in ["dedicated recovered-session install", "ADR 0049"]:
         if token not in recovery_readme:
             raise ContractError(f"Windows README missing recovered session token {token!r}")
+    require_equal(
+        "project recovery discard binding",
+        recovery_contract["choiceResolution"]["candidateChanged"],
+        "refuse a stale choice without deleting, replacing, or installing the newer journal object",
+    )
+    for token in [
+        "ProjectRecoveryJournalFingerprint",
+        "fingerprint(",
+        "discard(",
+    ]:
+        if token not in recovery_header:
+            raise ContractError(f"recovery choice API missing token {token!r}")
+    for token in [
+        "invalidRecoveryFingerprint",
+        "recoveryCandidateChanged",
+        "sha256(content) != expectedJournalSha256",
+    ]:
+        if token not in recovery_source:
+            raise ContractError(f"recovery choice invariant missing token {token!r}")
+    for token in [
+        "discardRequiresExactPresentedFingerprint",
+        "corruptJournalCanBeDiscardedWithoutParsing",
+        "stale discard changed the replacement journal",
+        "cancelled discard deleted recovery",
+    ]:
+        if token not in recovery_tests:
+            raise ContractError(f"recovery choice test missing token {token!r}")
+    for token in [
+        "Keep Saved opens the current disk project",
+        "ProjectRecoveryJournal::write",
+        "recoveryCandidateChanged",
+        "does not parse the payload",
+        "`ProjectRuntime` executor",
+    ]:
+        if token not in recovery_choice_adr:
+            raise ContractError(f"recovery choice ADR missing token {token!r}")
+    for token in ["complete journal object", "ADR 0050"]:
+        if token not in recovery_readme:
+            raise ContractError(f"Windows README missing recovery choice token {token!r}")
 
     qt_persistence_header = read_text(
         "windows/app/include/palmier/windows/project_persistence_controller.hpp"

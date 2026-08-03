@@ -9,6 +9,7 @@
 #include <stop_token>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace palmier::project {
 
@@ -46,6 +47,12 @@ struct ProjectRecoveryJournalWriteReceipt final {
     std::size_t journalBytes;
 };
 
+struct ProjectRecoveryJournalFingerprint final {
+    std::filesystem::path journalPath;
+    std::string journalSha256;
+    std::size_t journalBytes;
+};
+
 class ProjectRecoveryJournalError final : public std::runtime_error {
 public:
     ProjectRecoveryJournalError(
@@ -76,6 +83,15 @@ public:
     ) const;
     ProjectRecoveryJournalInspection inspect(
         const std::filesystem::path& packagePath,
+        std::stop_token cancellation = {}
+    ) const;
+    std::optional<ProjectRecoveryJournalFingerprint> fingerprint(
+        const std::filesystem::path& packagePath,
+        std::stop_token cancellation = {}
+    ) const;
+    bool discard(
+        const std::filesystem::path& packagePath,
+        std::string_view expectedJournalSha256,
         std::stop_token cancellation = {}
     ) const;
     bool retire(

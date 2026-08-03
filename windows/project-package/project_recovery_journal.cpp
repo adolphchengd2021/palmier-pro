@@ -958,6 +958,97 @@ ProjectRecoveryJournalInspection ProjectRecoveryJournal::inspect(
     return {status, std::move(candidate)};
 }
 
+std::optional<ProjectRecoveryJournalFingerprint> ProjectRecoveryJournal::fingerprint(
+    const std::filesystem::path& packagePath,
+    std::stop_token cancellation
+) const {
+    RecoveryMutationLease lease(cancellation);
+    const auto normalizedPackage = normalizePackage(packagePath);
+    const auto root = ensureRecoveryRoot(recoveryRoot_);
+    const auto path = journalPath(root, normalizedPackage);
+    const auto content = readFile(
+        path,
+        maximumJournalBytes,
+        true,
+        cancellation,
+        "fingerprintJournal"
+    );
+    if (!content) return std::nullopt;
+    return ProjectRecoveryJournalFingerprint{
+        path,
+        sha256(*content),
+        content->size(),
+    };
+}
+
+bool ProjectRecoveryJournal::discard(
+    const std::filesystem::path& packagePath,
+    std::string_view expectedJournalSha256,
+    std::stop_token cancellation
+) const {
+    if (!isSha256(expectedJournalSha256)) {
+        fail(
+            "invalidRecoveryFingerprint",
+            "discardJournal",
+            "expected recovery journal SHA-256 is malformed"
+        );
+    }
+    RecoveryMutationLease lease(cancellation);
+    const auto normalizedPackage = normalizePackage(packagePath);
+    const auto root = ensureRecoveryRoot(recoveryRoot_);
+    const auto path = journalPath(root, normalizedPackage);
+    checkCancellation(cancellation, "discardJournal");
+    HandleOwner file(CreateFileW(
+        path.c_str(),
+        GENERIC_READ | FILE_READ_ATTRIBUTES | DELETE,
+        FILE_SHARE_READ,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
+        nullptr
+    ));
+    if (!file.valid()) {
+        const auto error = GetLastError();
+        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) return false;
+        fail(
+            "fileUnavailable",
+            "discardJournal",
+            "recovery journal cannot be opened",
+            static_cast<int>(error)
+        );
+    }
+    static_cast<void>(fileSnapshot(file.get(), "discardJournal"));
+    const auto content = readHandle(
+        file.get(),
+        maximumJournalBytes,
+        cancellation,
+        "discardJournal"
+    );
+    if (sha256(content) != expectedJournalSha256) {
+        fail(
+            "recoveryCandidateChanged",
+            "discardJournal",
+            "recovery journal changed after the choice was presented"
+        );
+    }
+    checkCancellation(cancellation, "discardJournal");
+    FILE_DISPOSITION_INFO disposition{static_cast<BOOLEAN>(TRUE)};
+    if (!SetFileInformationByHandle(
+            file.get(),
+            FileDispositionInfo,
+            &disposition,
+            static_cast<DWORD>(sizeof(disposition))
+        )) {
+        fail(
+            "discardFailed",
+            "discardJournal",
+            "recovery journal could not be discarded",
+            static_cast<int>(GetLastError())
+        );
+    }
+    return true;
+}
+
 bool ProjectRecoveryJournal::retire(
     const std::filesystem::path& packagePath,
     std::uint64_t expectedProjectGeneration,
