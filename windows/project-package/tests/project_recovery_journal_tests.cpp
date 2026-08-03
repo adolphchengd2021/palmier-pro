@@ -8,6 +8,7 @@
 #define NOMINMAX
 #include <Windows.h>
 
+#include <algorithm>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -40,6 +41,12 @@ constexpr std::string_view minimalProject = R"({
         "tracks":[{"id":"track","type":"video","clips":[{
             "id":"target","mediaRef":"media","mediaType":"video",
             "sourceClipType":"video","startFrame":0,"durationFrames":120,
+            "trimStartFrame":0,"trimEndFrame":0,"speed":1,"volume":1,
+            "opacity":1,"blendMode":"normal","linkGroupId":null,
+            "captionGroupId":null,"multicamGroupId":null
+        },{
+            "id":"canary","mediaRef":"media","mediaType":"video",
+            "sourceClipType":"video","startFrame":120,"durationFrames":30,
             "trimStartFrame":0,"trimEndFrame":0,"speed":1,"volume":1,
             "opacity":1,"blendMode":"normal","linkGroupId":null,
             "captionGroupId":null,"multicamGroupId":null,
@@ -255,9 +262,15 @@ void dirtySnapshotRoundTripsWithoutTouchingPackage() {
         "recovery candidate lost clips"
     );
     const auto& clips = clipValue->array();
-    require(clips.size() == 2, "recovery candidate did not retain the split");
+    require(clips.size() == 3, "recovery candidate did not retain the split");
+    const auto canary = std::ranges::find_if(clips, [](const auto& clip) {
+        const auto* id = clip.find("id");
+        return id != nullptr
+            && id->kind() == palmier::json::Value::Kind::string
+            && id->string() == "canary";
+    });
     require(
-        clips.front().find("x-recovery-clip") != nullptr,
+        canary != clips.end() && canary->find("x-recovery-clip") != nullptr,
         "recovery candidate discarded unknown clip data"
     );
     workspace.requireNoPartialFiles();
