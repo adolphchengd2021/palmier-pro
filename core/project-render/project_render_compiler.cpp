@@ -1,5 +1,6 @@
 #include "palmier/project_render/project_render_compiler.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <limits>
@@ -801,6 +802,148 @@ StaticVideoLayer compileExclusiveStaticVideoLayer(
     return result;
 }
 
+StaticVideoTimeline compileStaticVideoTimeline(
+    const project::ProjectDocument& document,
+    std::string_view timelineId,
+    std::stop_token cancellation
+) {
+    checkCancellation(cancellation);
+    const auto* timeline = uniquePersistedEntity(
+        document.project().timelines,
+        timelineId,
+        "/timelines",
+        cancellation
+    );
+    if (
+        timeline->fps > std::numeric_limits<std::int32_t>::max()
+        || timeline->width > std::numeric_limits<std::uint32_t>::max()
+        || timeline->height > std::numeric_limits<std::uint32_t>::max()
+    ) {
+        fail("unsupportedTimelineSettings", "/timelines", "timeline exceeds render domains");
+    }
+
+    std::size_t timelineIndex = 0;
+    for (; timelineIndex < document.project().timelines.size(); ++timelineIndex) {
+        checkCancellation(cancellation);
+        if (&document.project().timelines[timelineIndex] == timeline) break;
+    }
+
+    struct OrderedClip final {
+        const project::Track* track;
+        const project::Clip* clip;
+        std::size_t trackIndex;
+        std::size_t clipIndex;
+        std::string pointer;
+    };
+    std::vector<OrderedClip> ordered;
+    for (std::size_t trackIndex = 0; trackIndex < timeline->tracks.size(); ++trackIndex) {
+        checkCancellation(cancellation);
+        const auto& track = timeline->tracks[trackIndex];
+        if (track.hidden || track.type == "audio") continue;
+        for (std::size_t clipIndex = 0; clipIndex < track.clips.size(); ++clipIndex) {
+            checkCancellation(cancellation);
+            const auto& clip = track.clips[clipIndex];
+            if (clip.mediaType == "audio") continue;
+            const auto pointer = "/timelines/" + std::to_string(timelineIndex)
+                + "/tracks/" + std::to_string(trackIndex)
+                + "/clips/" + std::to_string(clipIndex);
+            if (
+                clip.startFrame < 0
+                || clip.durationFrames <= 0
+                || clip.startFrame > std::numeric_limits<std::int64_t>::max()
+                    - clip.durationFrames
+            ) {
+                fail("unsupportedClipTiming", pointer, "visible layer timing is invalid");
+            }
+            ordered.push_back({&track, &clip, trackIndex, clipIndex, pointer});
+            if (ordered.size() > maximumStaticVideoTimelineSegments) {
+                fail(
+                    "resourceLimitExceeded",
+                    "/timelines/" + std::to_string(timelineIndex) + "/tracks",
+                    "static video timeline exceeds 256 visible segments"
+                );
+            }
+        }
+    }
+    if (ordered.empty()) {
+        fail(
+            "noVisibleVideoSegments",
+            "/timelines/" + std::to_string(timelineIndex) + "/tracks",
+            "static video timeline requires one visible segment"
+        );
+    }
+    std::stable_sort(ordered.begin(), ordered.end(), [](const auto& lhs, const auto& rhs) {
+        if (lhs.clip->startFrame != rhs.clip->startFrame) {
+            return lhs.clip->startFrame < rhs.clip->startFrame;
+        }
+        if (lhs.trackIndex != rhs.trackIndex) return lhs.trackIndex < rhs.trackIndex;
+        return lhs.clipIndex < rhs.clipIndex;
+    });
+    std::int64_t previousEnd = 0;
+    bool hasPrevious = false;
+    for (const auto& candidate : ordered) {
+        checkCancellation(cancellation);
+        if (hasPrevious && candidate.clip->startFrame < previousEnd) {
+            fail(
+                "overlappingVisibleLayer",
+                candidate.pointer,
+                "static video timeline found overlapping visible layers"
+            );
+        }
+        previousEnd = candidate.clip->startFrame + candidate.clip->durationFrames;
+        hasPrevious = true;
+    }
+
+    StaticVideoTimeline result{
+        static_cast<std::uint32_t>(timeline->width),
+        static_cast<std::uint32_t>(timeline->height),
+        static_cast<std::int32_t>(timeline->fps),
+        timeline->id.value,
+        previousEnd,
+        {},
+    };
+    result.segments.reserve(ordered.size());
+    for (const auto& candidate : ordered) {
+        checkCancellation(cancellation);
+        result.segments.push_back(compileStaticVideoLayer(
+            document,
+            timelineId,
+            candidate.track->id.value,
+            candidate.clip->id.value,
+            cancellation
+        ));
+    }
+    return result;
+}
+
+const StaticVideoLayer* staticVideoLayerAt(
+    const StaticVideoTimeline& timeline,
+    std::int64_t timelineFrame
+) noexcept {
+    if (timelineFrame < 0 || timelineFrame >= timeline.durationFrames) return nullptr;
+    const auto found = std::upper_bound(
+        timeline.segments.begin(),
+        timeline.segments.end(),
+        timelineFrame,
+        [](std::int64_t frame, const StaticVideoLayer& layer) {
+            return frame < layer.timelineStartFrame;
+        }
+    );
+    if (found == timeline.segments.begin()) return nullptr;
+    const auto& candidate = *(found - 1);
+    if (
+        candidate.timelineStartFrame < 0
+        || candidate.durationFrames <= 0
+        || candidate.timelineStartFrame > std::numeric_limits<std::int64_t>::max()
+            - candidate.durationFrames
+        || timelineFrame < candidate.timelineStartFrame
+        || timelineFrame >= candidate.timelineStartFrame + candidate.durationFrames
+    ) {
+        return nullptr;
+    }
+    return &candidate;
+}
+
 render::RenderPlan makeRenderPlan(
     const StaticVideoLayer& layer,
     std::int64_t timelineFrame
@@ -832,6 +975,32 @@ render::RenderPlan makeRenderPlan(
             layer.exposureEv,
         }}
     );
+}
+
+render::RenderPlan makeRenderPlan(
+    const StaticVideoTimeline& timeline,
+    std::int64_t timelineFrame
+) {
+    if (timelineFrame < 0 || timelineFrame >= timeline.durationFrames) {
+        fail(
+            "inactiveTimelineFrame",
+            "/timelineFrame",
+            "timeline is inactive at the requested frame"
+        );
+    }
+    const auto* layer = staticVideoLayerAt(timeline, timelineFrame);
+    if (layer != nullptr) return makeRenderPlan(*layer, timelineFrame);
+    try {
+        return render::RenderPlan::create(
+            timeline.canvasWidth,
+            timeline.canvasHeight,
+            timeline.framesPerSecond,
+            timelineFrame,
+            {}
+        );
+    } catch (const render::RenderError& error) {
+        fail("unsupportedRenderPlan", error.pointer, error.what());
+    }
 }
 
 }

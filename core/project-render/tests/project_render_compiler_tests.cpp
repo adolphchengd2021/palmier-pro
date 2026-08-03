@@ -480,6 +480,156 @@ void exclusiveCompilerRefusesAnotherVisibleLayer() {
     ));
 }
 
+void staticVideoTimelineOrdersSegmentsAndRepresentsGaps() {
+    const auto project = rawDocument(R"({
+        "timelines":[{
+            "id":"timeline","fps":30,"width":4,"height":4,
+            "tracks":[
+                {"id":"late-track","type":"video","clips":[{
+                    "id":"late","mediaRef":"late-media","mediaType":"video",
+                    "sourceClipType":"video","startFrame":8,"durationFrames":2,
+                    "trimStartFrame":3,"trimEndFrame":0,"speed":1,
+                    "opacity":1,"blendMode":"normal"
+                }]},
+                {"id":"early-track","type":"video","clips":[{
+                    "id":"early","mediaRef":"early-media","mediaType":"video",
+                    "sourceClipType":"video","startFrame":2,"durationFrames":3,
+                    "trimStartFrame":1,"trimEndFrame":0,"speed":1,
+                    "opacity":1,"blendMode":"normal"
+                },{
+                    "id":"adjacent","mediaRef":"adjacent-media","mediaType":"video",
+                    "sourceClipType":"video","startFrame":5,"durationFrames":2,
+                    "trimStartFrame":0,"trimEndFrame":0,"speed":1,
+                    "opacity":1,"blendMode":"normal"
+                }]}
+            ]
+        }],
+        "activeTimelineId":"timeline"
+    })");
+    const auto timeline = palmier::project_render::compileStaticVideoTimeline(
+        project,
+        "timeline"
+    );
+    require(timeline.timelineId == "timeline", "timeline identity changed");
+    require(timeline.durationFrames == 10, "timeline duration changed");
+    require(timeline.segments.size() == 3, "timeline segment count changed");
+    require(timeline.segments[0].clipId == "early", "early segment was not sorted");
+    require(timeline.segments[1].clipId == "adjacent", "adjacent segment was not sorted");
+    require(timeline.segments[2].clipId == "late", "late segment was not sorted");
+
+    require(
+        palmier::project_render::staticVideoLayerAt(timeline, 0) == nullptr,
+        "leading gap became active"
+    );
+    require(
+        palmier::project_render::staticVideoLayerAt(timeline, 4)->clipId == "early",
+        "early end-inclusive frame changed"
+    );
+    require(
+        palmier::project_render::staticVideoLayerAt(timeline, 5)->clipId == "adjacent",
+        "adjacent boundary did not switch segments"
+    );
+    require(
+        palmier::project_render::staticVideoLayerAt(timeline, 7) == nullptr,
+        "inter-clip gap became active"
+    );
+
+    const auto leadingGap = palmier::project_render::makeRenderPlan(timeline, 0);
+    require(leadingGap.layers().empty(), "leading gap did not produce a black plan");
+    const auto early = palmier::project_render::makeRenderPlan(timeline, 2);
+    require(early.layers().size() == 1, "active segment did not produce one layer");
+    require(early.layers().front().id == "early", "active segment identity changed");
+    require(early.layers().front().sourceFrame == 1, "active source frame changed");
+    const auto gap = palmier::project_render::makeRenderPlan(timeline, 7);
+    require(gap.layers().empty(), "inter-clip gap did not produce a black plan");
+    const auto late = palmier::project_render::makeRenderPlan(timeline, 9);
+    require(late.layers().front().id == "late", "late segment identity changed");
+    require(late.layers().front().sourceFrame == 4, "late source frame changed");
+    requireCompileError(
+        [&] { static_cast<void>(palmier::project_render::makeRenderPlan(timeline, 10)); },
+        "inactiveTimelineFrame",
+        "/timelineFrame"
+    );
+
+    palmier::render::CpuRenderer renderer;
+    const auto black = palmier::render::renderPreviewFrame(
+        gap,
+        [](std::string_view, std::int64_t) -> const palmier::render::SourceFrame* {
+            return nullptr;
+        },
+        renderer
+    );
+    require(black.pixels.size() == 16, "gap render size changed");
+    for (const auto& pixel : black.pixels) {
+        require(pixel == palmier::render::Rgba32Float{0, 0, 0, 1}, "gap was not opaque black");
+    }
+}
+
+void staticVideoTimelineRefusesOverlapUnsupportedContentAndCapacity() {
+    const auto overlapping = rawDocument(R"({
+        "timelines":[{"id":"timeline","fps":30,"width":4,"height":4,
+            "tracks":[{"id":"track","type":"video","clips":[
+                {"id":"first","mediaRef":"first","mediaType":"video",
+                 "sourceClipType":"video","startFrame":0,"durationFrames":5},
+                {"id":"second","mediaRef":"second","mediaType":"video",
+                 "sourceClipType":"video","startFrame":4,"durationFrames":2}
+            ]}]}],"activeTimelineId":"timeline"
+    })");
+    requireCompileError(
+        [&] { static_cast<void>(palmier::project_render::compileStaticVideoTimeline(
+            overlapping, "timeline")); },
+        "overlappingVisibleLayer",
+        "/timelines/0/tracks/0/clips/1"
+    );
+
+    const auto unsupported = rawDocument(R"({
+        "timelines":[{"id":"timeline","fps":30,"width":4,"height":4,
+            "tracks":[
+                {"id":"video-track","type":"video","clips":[{
+                    "id":"video","mediaRef":"video","mediaType":"video",
+                    "sourceClipType":"video","startFrame":0,"durationFrames":2
+                }]},
+                {"id":"text-track","type":"text","clips":[{
+                    "id":"text","mediaRef":"text","mediaType":"text",
+                    "sourceClipType":"text","startFrame":3,"durationFrames":2
+                }]}
+            ]
+        }],"activeTimelineId":"timeline"
+    })");
+    requireCompileError(
+        [&] { static_cast<void>(palmier::project_render::compileStaticVideoTimeline(
+            unsupported, "timeline")); },
+        "unsupportedTrack"
+    );
+
+    std::string dense = R"({"timelines":[{"id":"timeline","fps":30,"width":4,"height":4,"tracks":[{"id":"track","type":"video","clips":[)";
+    for (std::size_t index = 0;
+         index <= palmier::project_render::maximumStaticVideoTimelineSegments;
+         ++index) {
+        if (index != 0) dense += ',';
+        dense += "{\"id\":\"clip-" + std::to_string(index)
+            + "\",\"mediaRef\":\"media-" + std::to_string(index)
+            + "\",\"mediaType\":\"video\",\"sourceClipType\":\"video\",\"startFrame\":"
+            + std::to_string(index) + ",\"durationFrames\":1}";
+    }
+    dense += R"(]}]}],"activeTimelineId":"timeline"})";
+    const auto denseProject = rawDocument(dense);
+    requireCompileError(
+        [&] { static_cast<void>(palmier::project_render::compileStaticVideoTimeline(
+            denseProject, "timeline")); },
+        "resourceLimitExceeded",
+        "/timelines/0/tracks"
+    );
+
+    std::stop_source cancellation;
+    cancellation.request_stop();
+    requireCompileError(
+        [&] { static_cast<void>(palmier::project_render::compileStaticVideoTimeline(
+            overlapping, "timeline", cancellation.get_token())); },
+        "cancelled"
+    );
+}
+
 }
 
 int wmain(int argumentCount, wchar_t*[]) {
@@ -492,6 +642,8 @@ int wmain(int argumentCount, wchar_t*[]) {
         identityTimingAndNumericRefusals();
         malformedVisualValuesAreRefusedInsteadOfDefaulted();
         exclusiveCompilerRefusesAnotherVisibleLayer();
+        staticVideoTimelineOrdersSegmentsAndRepresentsGaps();
+        staticVideoTimelineRefusesOverlapUnsupportedContentAndCapacity();
         std::cout << "PALMIER_PROJECT_RENDER_COMPILER_TESTS_OK\n";
         return 0;
     } catch (const std::exception& error) {

@@ -1818,8 +1818,16 @@ def windows_render_plan_contract() -> None:
         {
             "owner": "core/project-render",
             "input": "read-only ProjectDocument full DOM plus persisted timeline, track, and clip IDs",
-            "output": "immutable single static video layer template",
+            "output": "immutable single static video layer template or bounded ordered static video timeline",
             "sourceFrame": "trimStartFrame plus timelineFrame minus clip start at exact 1x speed",
+            "timelineSchedule": {
+                "maximumSegments": 256,
+                "ordering": "start frame, persisted track order, persisted clip order",
+                "frameDomain": "zero through last visible segment end, end-exclusive",
+                "gaps": "validated zero-layer RenderPlan rendered as opaque black",
+                "overlap": "any overlapping visible non-audio clips are refused",
+                "unsupportedVisibleContent": "refused instead of silently omitted",
+            },
             "supported": [
                 "static transform without flips",
                 "static opacity",
@@ -1837,6 +1845,8 @@ def windows_render_plan_contract() -> None:
                 "fades or active visual keyframes",
                 "non-normal blend",
                 "multiple, dynamic, out-of-range, or unsupported enabled effects",
+                "more than 256 visible static timeline segments",
+                "empty static video timeline",
             ],
         },
     )
@@ -1982,9 +1992,12 @@ def windows_render_plan_contract() -> None:
             raise ContractError(f"D3D11 WARP renderer missing token {token!r}")
     for token in [
         "struct StaticVideoLayer final",
+        "struct StaticVideoTimeline final",
         "class ProjectRenderCompileError final",
         "StaticVideoLayer compileStaticVideoLayer(",
         "StaticVideoLayer compileExclusiveStaticVideoLayer(",
+        "StaticVideoTimeline compileStaticVideoTimeline(",
+        "const StaticVideoLayer* staticVideoLayerAt(",
         "render::RenderPlan makeRenderPlan(",
     ]:
         if token not in compiler_header:
@@ -2000,6 +2013,10 @@ def windows_render_plan_contract() -> None:
         "clip->trimStartFrame > std::numeric_limits<std::int64_t>::max()",
         "layer.sourceStartFrame + offset",
         '"overlappingVisibleLayer"',
+        '"noVisibleVideoSegments"',
+        "maximumStaticVideoTimelineSegments",
+        "std::stable_sort(ordered.begin(), ordered.end()",
+        "staticVideoLayerAt(timeline, timelineFrame)",
         "render::RenderPlan::create(",
     ]:
         if token not in compiler_source:
@@ -2012,6 +2029,8 @@ def windows_render_plan_contract() -> None:
         "identityTimingAndNumericRefusals",
         "malformedVisualValuesAreRefusedInsteadOfDefaulted",
         "exclusiveCompilerRefusesAnotherVisibleLayer",
+        "staticVideoTimelineOrdersSegmentsAndRepresentsGaps",
+        "staticVideoTimelineRefusesOverlapUnsupportedContentAndCapacity",
         "source frame mapping changed",
         "project preview/export pixels differ",
     ]:
@@ -2069,6 +2088,20 @@ def windows_render_plan_contract() -> None:
     ]:
         if token not in compiler_adr:
             raise ContractError(f"project render compiler ADR missing token {token!r}")
+    timeline_adr = read_text(
+        "docs/windows/adr/0043-bounded-static-video-timeline-schedule.md"
+    )
+    for token in [
+        "sole owner of a bounded `StaticVideoTimeline`",
+        "256-segment bound",
+        "Adjacent segments are valid",
+        "zero layers",
+        "never silently omitted",
+        "do not prove A/V",
+        "Windows 10 build 19045",
+    ]:
+        if token not in timeline_adr:
+            raise ContractError(f"static video timeline ADR missing token {token!r}")
 
 
 def windows_media_render_adapter_contract() -> None:

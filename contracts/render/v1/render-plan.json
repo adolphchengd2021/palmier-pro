@@ -112,8 +112,16 @@
   "projectCompiler": {
     "owner": "core/project-render",
     "input": "read-only ProjectDocument full DOM plus persisted timeline, track, and clip IDs",
-    "output": "immutable single static video layer template",
+    "output": "immutable single static video layer template or bounded ordered static video timeline",
     "sourceFrame": "trimStartFrame plus timelineFrame minus clip start at exact 1x speed",
+    "timelineSchedule": {
+      "maximumSegments": 256,
+      "ordering": "start frame, persisted track order, persisted clip order",
+      "frameDomain": "zero through last visible segment end, end-exclusive",
+      "gaps": "validated zero-layer RenderPlan rendered as opaque black",
+      "overlap": "any overlapping visible non-audio clips are refused",
+      "unsupportedVisibleContent": "refused instead of silently omitted"
+    },
     "supported": [
       "static transform without flips",
       "static opacity",
@@ -130,7 +138,9 @@
       "flip",
       "fades or active visual keyframes",
       "non-normal blend",
-      "multiple, dynamic, out-of-range, or unsupported enabled effects"
+      "multiple, dynamic, out-of-range, or unsupported enabled effects",
+      "more than 256 visible static timeline segments",
+      "empty static video timeline"
     ]
   },
   "rendererConcurrency": "a stop-token-aware gate serializes the immediate context per backend instance",
