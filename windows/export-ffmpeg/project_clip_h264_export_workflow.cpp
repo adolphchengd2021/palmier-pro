@@ -2,6 +2,7 @@
 
 #include "palmier/project/media_manifest_reader.hpp"
 #include "palmier/project/project_media_resolver.hpp"
+#include "palmier/project_render/project_render_compiler.hpp"
 
 #include <optional>
 #include <string>
@@ -203,6 +204,103 @@ H264ProjectExportReceipt exportProjectClipH264(
             selected.track->id.value,
             selected.clip->id.value,
             std::move(media.path),
+            request.destination,
+            request.bitRate,
+            request.replaceExisting,
+        },
+        limits,
+        cancellation
+    );
+}
+
+H264ProjectExportReceipt exportProjectTimelineH264(
+    const project::ProjectDocument& document,
+    const ProjectTimelineH264ExportRequest& request,
+    const H264ExportLimits& limits,
+    std::stop_token cancellation
+) {
+    checkCancellation(cancellation, "resolveTimeline");
+    if (request.packagePath.empty() || request.destination.empty()
+        || document.project().activeTimelineId.empty()) {
+        fail(
+            H264ExportFailureCode::invalidRequest,
+            "resolveTimeline",
+            "package, active timeline, and destination are required"
+        );
+    }
+    project_render::StaticVideoTimeline timeline;
+    try {
+        timeline = project_render::compileStaticVideoTimeline(
+            document,
+            document.project().activeTimelineId,
+            cancellation
+        );
+    } catch (const project_render::ProjectRenderCompileError& error) {
+        fail(
+            error.code == "cancelled"
+                ? H264ExportFailureCode::cancelled
+                : error.code == "entityUnavailable"
+                    ? H264ExportFailureCode::invalidRequest
+                    : error.code == "resourceLimitExceeded"
+                        ? H264ExportFailureCode::resourceLimitExceeded
+                        : H264ExportFailureCode::unsupportedProject,
+            "compileTimeline",
+            error.code + " at " + error.jsonPointer
+        );
+    }
+
+    std::optional<project::MediaManifest> manifest;
+    try {
+        manifest = project::readMediaManifest(
+            request.packagePath,
+            {.cancellation = cancellation}
+        );
+    } catch (const project::MediaManifestReadError& error) {
+        fail(
+            error.code == "cancelled"
+                ? H264ExportFailureCode::cancelled
+                : H264ExportFailureCode::mediaUnavailable,
+            "loadMediaManifest",
+            error.what()
+        );
+    }
+    if (!manifest) {
+        fail(
+            H264ExportFailureCode::mediaUnavailable,
+            "loadMediaManifest",
+            "project media manifest is unavailable"
+        );
+    }
+
+    std::vector<H264ProjectExportSource> sources;
+    sources.reserve(timeline.segments.size());
+    for (const auto& segment : timeline.segments) {
+        checkCancellation(cancellation, "resolveMediaReferences");
+        try {
+            auto media = project::resolveProjectMediaReference(
+                *manifest,
+                segment.mediaId,
+                "video",
+                request.packagePath,
+                cancellation
+            );
+            sources.push_back({segment.clipId, std::move(media.path)});
+        } catch (const project::ProjectMediaResolveError& error) {
+            fail(
+                error.code == "cancelled"
+                    ? H264ExportFailureCode::cancelled
+                    : H264ExportFailureCode::mediaUnavailable,
+                "resolveMediaReferences",
+                error.what()
+            );
+        }
+    }
+
+    return exportStaticProjectTimelineH264(
+        document,
+        {
+            timeline.timelineId,
+            std::move(sources),
             request.destination,
             request.bitRate,
             request.replaceExisting,

@@ -40,4 +40,12 @@ H264ProjectExportReceipt exportStaticProjectH264ForTesting(
     const H264ExportTestHooks& hooks
 );
 
+H264ProjectExportReceipt exportStaticProjectTimelineH264ForTesting(
+    const project::ProjectDocument& document,
+    const H264ProjectTimelineExportRequest& request,
+    const H264ExportLimits& limits,
+    std::stop_token cancellation,
+    const H264ExportTestHooks& hooks
+);
+
 }

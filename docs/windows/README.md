@@ -170,8 +170,12 @@ job, captures an immutable live runtime snapshot, resolves the media reference
 through the shared package-safe resolver, supports cancellation and shutdown
 drain, and reports a committed result from an older revision as
 `completedOutdated`. The staging file is durably flushed before independent
-decode and atomic installation. This remains a selected static video-clip slice,
-not general timeline export; see ADR 0009, ADR 0024, ADR 0025, and ADR 0034.
+decode and atomic installation. The lower-level exporter now also consumes the
+complete bounded `StaticVideoTimeline`, resolves every source by stable clip ID,
+reopens an exact source cursor at each segment, and encodes leading and
+inter-clip gaps from the shared zero-layer black RenderPlan. The Qt action still
+invokes the selected-clip compatibility workflow until its controller migration
+is complete; see ADR 0009, ADR 0024, ADR 0025, ADR 0034, and ADR 0044.
 
 The optional FFmpeg prototype activates the first vcpkg manifest dependency:
 

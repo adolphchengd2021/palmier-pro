@@ -4934,20 +4934,29 @@ def windows_h264_project_export_contract() -> None:
     integrated_adr = read_text(
         "docs/windows/adr/0034-integrated-selected-clip-export.md"
     )
+    timeline_adr = read_text(
+        "docs/windows/adr/0044-bounded-static-timeline-h264-export.md"
+    )
     readme = read_text("docs/windows/README.md")
     for token in [
         "H264ExportFailureCode",
         "H264ProjectExportRequest",
+        "H264ProjectExportSource",
+        "H264ProjectTimelineExportRequest",
         "H264ProjectExportReceipt",
         "maximumFrames",
         "replaceExisting",
         "exportStaticProjectH264(",
+        "exportStaticProjectTimelineH264(",
     ]:
         if token not in header:
             raise ContractError(f"H.264 export API missing token {token!r}")
     for token in [
         "compileExclusiveStaticVideoLayer(",
-        "makeRenderPlan(layer, timelineFrame)",
+        "compileStaticVideoTimeline(",
+        "makeRenderPlan(timeline, timelineFrame)",
+        "staticVideoLayerAt(",
+        "segmentInputs",
         "renderExportFrame(",
         'avcodec_find_encoder_by_name("h264_mf")',
         "av_compare_ts(",
@@ -4955,7 +4964,7 @@ def windows_h264_project_export_contract() -> None:
         "packet->duration = av_rescale_q(",
         "stream->averageFrameRate",
         "FfmpegVideoFrameReader reader",
-        "verifyOutput(staging.path()",
+        "verifiedFrames = verifyOutput(",
         "GetFileInformationByHandleEx(",
         "FileIdInfo",
         "ReOpenFile(",
@@ -4975,7 +4984,9 @@ def windows_h264_project_export_contract() -> None:
             raise ContractError(f"H.264 export invariant missing token {token!r}")
     for token in [
         "ProjectClipH264ExportRequest",
+        "ProjectTimelineH264ExportRequest",
         "exportProjectClipH264(",
+        "exportProjectTimelineH264(",
         "Caller must run this synchronous media and filesystem workflow off the UI thread",
     ]:
         if token not in workflow_header:
@@ -4987,6 +4998,9 @@ def windows_h264_project_export_contract() -> None:
         "readMediaManifest(",
         "resolveProjectMediaReference(",
         "exportStaticProjectH264(",
+        "exportStaticProjectTimelineH264(",
+        "compileStaticVideoTimeline(",
+        "resolveMediaReferences",
         "H264ExportFailureCode::mediaUnavailable",
         "request.replaceExisting",
     ]:
@@ -5023,6 +5037,11 @@ def windows_h264_project_export_contract() -> None:
         "selectedClipWorkflowExportsAndIndependentlyDecodes",
         "selectedClipWorkflowRefusesInvalidSelection",
         "selectedClipWorkflowReportsBoundaryFailures",
+        "timelineExportRendersEveryClipAndBlackGap",
+        "timelineSourceMapIsCompleteBeforeStaging",
+        "timelineWorkflowResolvesEveryScheduledSource",
+        "timelineWorkflowRefusesMissingLaterSource",
+        "maximumGapChannel <= 16",
         "requireNoStagingFiles",
     ]:
         if token not in tests:
@@ -5063,6 +5082,17 @@ def windows_h264_project_export_contract() -> None:
     for token in ["selected-clip export", "completedOutdated", "ADR 0034"]:
         if token not in readme:
             raise ContractError(f"integrated export README missing token {token!r}")
+    for token in [
+        "exactly one",
+        "zero-layer plan as black",
+        "one-segment schedule",
+        "missing later source",
+    ]:
+        if token not in timeline_adr:
+            raise ContractError(f"timeline H.264 export ADR missing token {token!r}")
+    for token in ["StaticVideoTimeline", "ADR 0044"]:
+        if token not in readme:
+            raise ContractError(f"timeline H.264 export README missing token {token!r}")
 
 
 def windows_mcp_project_session_contract() -> None:

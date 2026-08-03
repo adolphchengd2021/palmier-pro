@@ -18,10 +18,25 @@ struct ProjectClipH264ExportRequest final {
     bool replaceExisting{};
 };
 
+struct ProjectTimelineH264ExportRequest final {
+    std::filesystem::path packagePath;
+    std::filesystem::path destination;
+    std::int64_t bitRate{8'000'000};
+    bool replaceExisting{};
+};
+
 // Caller must run this synchronous media and filesystem workflow off the UI thread.
 H264ProjectExportReceipt exportProjectClipH264(
     const project::ProjectDocument& document,
     const ProjectClipH264ExportRequest& request,
+    const H264ExportLimits& limits = {},
+    std::stop_token cancellation = {}
+);
+
+// Caller must run this synchronous media and filesystem workflow off the UI thread.
+H264ProjectExportReceipt exportProjectTimelineH264(
+    const project::ProjectDocument& document,
+    const ProjectTimelineH264ExportRequest& request,
     const H264ExportLimits& limits = {},
     std::stop_token cancellation = {}
 );

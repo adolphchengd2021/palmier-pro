@@ -8,6 +8,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace palmier::exporting {
 
@@ -58,6 +59,19 @@ struct H264ProjectExportRequest final {
     bool replaceExisting{};
 };
 
+struct H264ProjectExportSource final {
+    std::string clipId;
+    std::filesystem::path input;
+};
+
+struct H264ProjectTimelineExportRequest final {
+    std::string timelineId;
+    std::vector<H264ProjectExportSource> sources;
+    std::filesystem::path destination;
+    std::int64_t bitRate{8'000'000};
+    bool replaceExisting{};
+};
+
 struct H264ProjectExportReceipt final {
     std::filesystem::path destination;
     std::string encoderName;
@@ -71,6 +85,13 @@ struct H264ProjectExportReceipt final {
 H264ProjectExportReceipt exportStaticProjectH264(
     const project::ProjectDocument& document,
     const H264ProjectExportRequest& request,
+    const H264ExportLimits& limits = {},
+    std::stop_token cancellation = {}
+);
+
+H264ProjectExportReceipt exportStaticProjectTimelineH264(
+    const project::ProjectDocument& document,
+    const H264ProjectTimelineExportRequest& request,
     const H264ExportLimits& limits = {},
     std::stop_token cancellation = {}
 );

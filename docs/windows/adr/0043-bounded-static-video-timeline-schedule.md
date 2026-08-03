@@ -65,7 +65,9 @@ overlap, unsupported visible content, cancellation, and the segment bound.
 Qt projection tests cover all-source publication and refusal when a later
 scheduled source is unavailable. Presentation tests cover atomic cross-source
 mapping, while Qt controller tests cover acceptance of a newer transition
-generation and continued bounded cadence.
-These tests establish the shared schedule contract only. They do not prove A/V
-generation replacement, continuous gap timing, multi-source export, visible UI
+generation and continued bounded cadence. The H.264 exporter consumes the same
+schedule, resolves every source by stable clip ID, and renders gaps through its
+zero-layer plan; see ADR 0044.
+These tests do not prove A/V generation replacement on physical devices,
+continuous gap timing, visible UI
 pixels, physical audio/GPU synchronization, VFR, or Windows 10 build 19045.

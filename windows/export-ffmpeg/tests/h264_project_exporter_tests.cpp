@@ -26,6 +26,7 @@ using palmier::exporting::H264ExportError;
 using palmier::exporting::H264ExportFailureCode;
 using palmier::exporting::H264ExportLimits;
 using palmier::exporting::H264ProjectExportRequest;
+using palmier::exporting::H264ProjectTimelineExportRequest;
 using palmier::media::FfmpegMediaReader;
 using palmier::media::FfmpegVideoFrameReader;
 using palmier::media::StreamKind;
@@ -96,6 +97,32 @@ palmier::project::ProjectDocument overlappingDocument() {
     });
 }
 
+palmier::project::ProjectDocument timelineDocument() {
+    constexpr auto source = R"({
+        "timelines":[{
+            "id":"timeline","fps":10,"width":64,"height":64,
+            "tracks":[{"id":"track","type":"video","clips":[
+                {
+                    "id":"clip-a","mediaRef":"media-a","mediaType":"video",
+                    "sourceClipType":"video","startFrame":1,"durationFrames":2,
+                    "trimStartFrame":0,"trimEndFrame":0,"speed":1,
+                    "opacity":1,"blendMode":"normal"
+                },
+                {
+                    "id":"clip-b","mediaRef":"media-b","mediaType":"video",
+                    "sourceClipType":"video","startFrame":5,"durationFrames":2,
+                    "trimStartFrame":1,"trimEndFrame":0,"speed":1,
+                    "opacity":1,"blendMode":"normal"
+                }
+            ]}]
+        }],
+        "activeTimelineId":"timeline"
+    })";
+    return palmier::project::readProject(source, [] {
+        return std::string("unexpected-generated-id");
+    });
+}
+
 H264ProjectExportRequest request(
     const std::filesystem::path& input,
     const std::filesystem::path& destination,
@@ -106,6 +133,20 @@ H264ProjectExportRequest request(
         "track",
         "clip",
         input,
+        destination,
+        500'000,
+        replaceExisting,
+    };
+}
+
+H264ProjectTimelineExportRequest timelineRequest(
+    const std::filesystem::path& input,
+    const std::filesystem::path& destination,
+    bool replaceExisting = false
+) {
+    return {
+        "timeline",
+        {{"clip-a", input}, {"clip-b", input}},
         destination,
         500'000,
         replaceExisting,
@@ -239,6 +280,81 @@ void exportsFromTheCompiledSourceStart(
     require(decodedFrames == 4, "trimmed output did not contain four frames");
 }
 
+void timelineExportRendersEveryClipAndBlackGap(
+    const std::filesystem::path& input,
+    const std::filesystem::path& destination
+) {
+    const auto receipt = palmier::exporting::exportStaticProjectTimelineH264(
+        timelineDocument(),
+        timelineRequest(input, destination)
+    );
+    require(receipt.encodedFrames == 7, "timeline export frame count changed");
+    require(receipt.verifiedFrames == 7, "timeline export verification count changed");
+
+    FfmpegVideoFrameReader reader(destination);
+    std::uint64_t frameIndex{};
+    std::uint8_t maximumGapChannel{};
+    std::uint8_t maximumActiveChannel{};
+    while (const auto frame = reader.nextFrame()) {
+        std::uint8_t maximumChannel{};
+        for (std::size_t index = 0; index < frame->rgba8.size(); index += 4) {
+            maximumChannel = (std::max)(maximumChannel, frame->rgba8[index]);
+            maximumChannel = (std::max)(maximumChannel, frame->rgba8[index + 1]);
+            maximumChannel = (std::max)(maximumChannel, frame->rgba8[index + 2]);
+        }
+        const bool gap = frameIndex == 0 || frameIndex == 3 || frameIndex == 4;
+        if (gap) maximumGapChannel = (std::max)(maximumGapChannel, maximumChannel);
+        else maximumActiveChannel = (std::max)(maximumActiveChannel, maximumChannel);
+        ++frameIndex;
+    }
+    require(frameIndex == 7, "timeline output decode count changed");
+    require(maximumGapChannel <= 16, "timeline gap was not encoded as black");
+    require(
+        maximumActiveChannel > maximumGapChannel + 16,
+        "timeline clips lost visible source pixels"
+    );
+}
+
+void timelineSourceMapIsCompleteBeforeStaging(
+    const TemporaryDirectory& directory,
+    const std::filesystem::path& input
+) {
+    auto incomplete = timelineRequest(
+        input,
+        directory.path() / "incomplete-timeline.mp4"
+    );
+    incomplete.sources.pop_back();
+    requireExportError(
+        [&] {
+            static_cast<void>(palmier::exporting::exportStaticProjectTimelineH264(
+                timelineDocument(),
+                incomplete
+            ));
+        },
+        H264ExportFailureCode::invalidRequest,
+        "validateRequest"
+    );
+    require(!std::filesystem::exists(incomplete.destination), "partial source map installed output");
+
+    auto ambiguous = timelineRequest(
+        input,
+        directory.path() / "ambiguous-timeline.mp4"
+    );
+    ambiguous.sources[1].clipId = "clip-a";
+    requireExportError(
+        [&] {
+            static_cast<void>(palmier::exporting::exportStaticProjectTimelineH264(
+                timelineDocument(),
+                ambiguous
+            ));
+        },
+        H264ExportFailureCode::invalidRequest,
+        "resolveSources"
+    );
+    require(!std::filesystem::exists(ambiguous.destination), "ambiguous source map installed output");
+    requireNoStagingFiles(directory.path());
+}
+
 void selectedClipWorkflowExportsAndIndependentlyDecodes(
     const TemporaryDirectory& directory
 ) {
@@ -280,6 +396,48 @@ void selectedClipWorkflowExportsAndIndependentlyDecodes(
     std::uint64_t decodedFrames = 0;
     while (reader.nextFrame()) ++decodedFrames;
     require(decodedFrames == receipt.verifiedFrames, "workflow decode count changed");
+    requireNoStagingFiles(directory.path());
+}
+
+void timelineWorkflowResolvesEveryScheduledSource(
+    const TemporaryDirectory& directory
+) {
+    writeText(
+        directory.path() / "media.json",
+        R"({"entries":[
+            {"id":"media-a","name":"A","type":"video","source":{"project":{"relativePath":"source.mp4"}},"duration":0.5,"hasAudio":true},
+            {"id":"media-b","name":"B","type":"video","source":{"project":{"relativePath":"source.mp4"}},"duration":0.5,"hasAudio":true}
+        ]})"
+    );
+    const auto destination = directory.path() / "timeline-workflow.mp4";
+    const auto receipt = palmier::exporting::exportProjectTimelineH264(
+        timelineDocument(),
+        {directory.path(), destination, 500'000, false}
+    );
+    require(receipt.encodedFrames == 7, "timeline workflow frame count changed");
+    require(receipt.verifiedFrames == 7, "timeline workflow verification changed");
+    requireNoStagingFiles(directory.path());
+}
+
+void timelineWorkflowRefusesMissingLaterSource(
+    const TemporaryDirectory& directory
+) {
+    writeText(
+        directory.path() / "media.json",
+        R"({"entries":[{"id":"media-a","name":"A","type":"video","source":{"project":{"relativePath":"source.mp4"}},"duration":0.5,"hasAudio":true}]})"
+    );
+    const auto destination = directory.path() / "missing-later-source.mp4";
+    requireExportError(
+        [&] {
+            static_cast<void>(palmier::exporting::exportProjectTimelineH264(
+                timelineDocument(),
+                {directory.path(), destination, 500'000, false}
+            ));
+        },
+        H264ExportFailureCode::mediaUnavailable,
+        "resolveMediaReferences"
+    );
+    require(!std::filesystem::exists(destination), "missing later source installed output");
     requireNoStagingFiles(directory.path());
 }
 
@@ -700,9 +858,11 @@ int main(int argumentCount, char* arguments[]) {
             cancellationAfterStagingPreservesExistingDestination(directory, input);
             invalidDestinationIsRefusedBeforeStaging(directory, input);
             overlappingVisibleLayerIsRefusedBeforeStaging(directory, input);
+            timelineSourceMapIsCompleteBeforeStaging(directory, input);
             timingMismatchIsRefused(directory, input);
             selectedClipWorkflowRefusesInvalidSelection(directory);
             selectedClipWorkflowReportsBoundaryFailures(directory);
+            timelineWorkflowRefusesMissingLaterSource(directory);
             stagingFlushAndInstallAreHandleCompatible(directory);
             flushFailurePreservesExistingDestination(directory);
             std::cout << "h264 project exporter contract tests passed\n";
@@ -716,8 +876,13 @@ int main(int argumentCount, char* arguments[]) {
                 input,
                 directory.path() / "trimmed-export.mp4"
             );
+            timelineExportRendersEveryClipAndBlackGap(
+                input,
+                directory.path() / "timeline-export.mp4"
+            );
             requireNoStagingFiles(directory.path());
             selectedClipWorkflowExportsAndIndependentlyDecodes(directory);
+            timelineWorkflowResolvesEveryScheduledSource(directory);
             replacementInstallsOnlyVerifiedOutput(directory, input);
             failedInstallPreservesExistingDestination(directory, input);
             earlyEofCleansStaging(directory, input);

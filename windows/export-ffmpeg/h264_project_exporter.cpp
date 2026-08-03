@@ -69,6 +69,9 @@ H264ExportFailureCode compileFailureCode(std::string_view code) noexcept {
     if (code == "entityUnavailable") {
         return H264ExportFailureCode::invalidRequest;
     }
+    if (code == "resourceLimitExceeded") {
+        return H264ExportFailureCode::resourceLimitExceeded;
+    }
     return H264ExportFailureCode::unsupportedProject;
 }
 
@@ -755,7 +758,10 @@ void copyRgba8(
 
 std::uint64_t verifyOutput(
     const std::filesystem::path& staging,
-    const project_render::StaticVideoLayer& layer,
+    std::uint32_t canvasWidth,
+    std::uint32_t canvasHeight,
+    std::int32_t framesPerSecond,
+    std::int64_t frameCount,
     std::stop_token cancellation
 ) {
     checkCancellation(cancellation, "verifyOutput");
@@ -767,10 +773,10 @@ std::uint64_t verifyOutput(
     );
     if (stream == probe.streams.end()
         || stream->codecName != "h264"
-        || stream->width != static_cast<std::int32_t>(layer.canvasWidth)
-        || stream->height != static_cast<std::int32_t>(layer.canvasHeight)
-        || !isExactRate(stream->averageFrameRate, layer.framesPerSecond)
-        || !isExactRate(stream->realFrameRate, layer.framesPerSecond)
+        || stream->width != static_cast<std::int32_t>(canvasWidth)
+        || stream->height != static_cast<std::int32_t>(canvasHeight)
+        || !isExactRate(stream->averageFrameRate, framesPerSecond)
+        || !isExactRate(stream->realFrameRate, framesPerSecond)
         || stream->timeBase.numerator <= 0
         || stream->timeBase.denominator <= 0
         || !stream->duration.has_value()
@@ -778,8 +784,8 @@ std::uint64_t verifyOutput(
         || av_compare_ts(
             *stream->duration,
             {stream->timeBase.numerator, stream->timeBase.denominator},
-            layer.durationFrames,
-            {1, layer.framesPerSecond}
+            frameCount,
+            {1, framesPerSecond}
         ) != 0) {
         const std::string detail = stream == probe.streams.end()
             ? "encoded output has no video stream"
@@ -807,7 +813,7 @@ std::uint64_t verifyOutput(
     }
 
     media::FfmpegVideoFrameReader reader(staging, {}, cancellation);
-    for (std::int64_t index = 0; index < layer.durationFrames; ++index) {
+    for (std::int64_t index = 0; index < frameCount; ++index) {
         checkCancellation(cancellation, "verifyDecode");
         const auto decoded = reader.nextFrame(cancellation);
         if (!decoded.has_value()) {
@@ -817,8 +823,8 @@ std::uint64_t verifyOutput(
                 "encoded stream ended early"
             );
         }
-        if (decoded->width != static_cast<std::int32_t>(layer.canvasWidth)
-            || decoded->height != static_cast<std::int32_t>(layer.canvasHeight)) {
+        if (decoded->width != static_cast<std::int32_t>(canvasWidth)
+            || decoded->height != static_cast<std::int32_t>(canvasHeight)) {
             fail(
                 H264ExportFailureCode::verificationFailed,
                 "verifyDecode",
@@ -828,7 +834,7 @@ std::uint64_t verifyOutput(
         requireExactTimestamp(
             *decoded,
             index,
-            layer.framesPerSecond,
+            framesPerSecond,
             "verifyDecode",
             H264ExportFailureCode::verificationFailed
         );
@@ -840,7 +846,7 @@ std::uint64_t verifyOutput(
             "encoded stream has extra frames"
         );
     }
-    return static_cast<std::uint64_t>(layer.durationFrames);
+    return static_cast<std::uint64_t>(frameCount);
 }
 
 }
@@ -856,9 +862,16 @@ H264ExportError::H264ExportError(
       stage(std::move(errorStage)),
       nativeCode(nativeCodeValue) {}
 
-H264ProjectExportReceipt exportStaticProjectH264Impl(
-    const project::ProjectDocument& document,
-    const H264ProjectExportRequest& request,
+namespace {
+
+H264ProjectExportReceipt exportCompiledStaticTimelineH264(
+    const project_render::StaticVideoTimeline& timeline,
+    std::int64_t firstTimelineFrame,
+    std::int64_t frameCount,
+    const std::vector<H264ProjectExportSource>& sources,
+    const std::filesystem::path& destination,
+    std::int64_t bitRate,
+    bool replaceExisting,
     const H264ExportLimits& limits,
     std::stop_token cancellation,
     const detail::H264ExportTestHooks* hooks
@@ -868,86 +881,104 @@ H264ProjectExportReceipt exportStaticProjectH264Impl(
     if (limits.maximumFrames == 0
         || limits.minimumBitRate <= 0
         || limits.maximumBitRate < limits.minimumBitRate
-        || request.timelineId.empty()
-        || request.trackId.empty()
-        || request.clipId.empty()
-        || !request.input.is_absolute()
-        || !request.destination.is_absolute()
-        || !hasMp4Extension(request.destination)
-        || pathsEqual(request.input, request.destination)
-        || request.bitRate < limits.minimumBitRate
-        || request.bitRate > limits.maximumBitRate) {
+        || timeline.timelineId.empty()
+        || timeline.segments.empty()
+        || sources.size() != timeline.segments.size()
+        || !destination.is_absolute()
+        || !hasMp4Extension(destination)
+        || firstTimelineFrame < 0
+        || frameCount <= 0
+        || firstTimelineFrame > timeline.durationFrames - frameCount
+        || bitRate < limits.minimumBitRate
+        || bitRate > limits.maximumBitRate) {
         fail(
             H264ExportFailureCode::invalidRequest,
             "validateRequest",
             "export request or limits are invalid"
         );
     }
-    requireDirectory(request.destination.parent_path());
-    if (!request.replaceExisting
-        && pathExists(request.destination, "validateDestination")) {
+    requireDirectory(destination.parent_path());
+    if (!replaceExisting && pathExists(destination, "validateDestination")) {
         fail(
             H264ExportFailureCode::destinationExists,
             "validateDestination",
             "destination already exists"
         );
     }
-
-    project_render::StaticVideoLayer layer;
-    try {
-        layer = project_render::compileExclusiveStaticVideoLayer(
-            document,
-            request.timelineId,
-            request.trackId,
-            request.clipId,
-            cancellation
-        );
-    } catch (const project_render::ProjectRenderCompileError& error) {
-        fail(
-            compileFailureCode(error.code),
-            "compileProject",
-            error.code + " at " + error.jsonPointer
-        );
-    }
-    if (layer.canvasWidth < 2
-        || layer.canvasHeight < 2
-        || (layer.canvasWidth % 2) != 0
-        || (layer.canvasHeight % 2) != 0) {
+    if (timeline.canvasWidth < 2
+        || timeline.canvasHeight < 2
+        || (timeline.canvasWidth % 2) != 0
+        || (timeline.canvasHeight % 2) != 0) {
         fail(
             H264ExportFailureCode::unsupportedProject,
-            "validateCompiledLayer",
-            "compiled layer exceeds the static H.264 export contract"
+            "validateCompiledTimeline",
+            "compiled timeline exceeds the static H.264 export contract"
         );
     }
-    if (layer.durationFrames <= 0
-        || static_cast<std::uint64_t>(layer.durationFrames) > limits.maximumFrames
-        || layer.framesPerSecond <= 0
-        || layer.framesPerSecond > 240) {
+    if (static_cast<std::uint64_t>(frameCount) > limits.maximumFrames
+        || timeline.framesPerSecond <= 0
+        || timeline.framesPerSecond > 240) {
         fail(
             H264ExportFailureCode::resourceLimitExceeded,
-            "validateCompiledLayer",
-            "compiled layer exceeds the export resource limits"
+            "validateCompiledTimeline",
+            "compiled timeline exceeds the export resource limits"
         );
     }
 
-    try {
-        requireExactSourceProbe(
-            request.input,
-            layer.framesPerSecond,
-            cancellation
+    std::vector<const std::filesystem::path*> segmentInputs;
+    segmentInputs.reserve(timeline.segments.size());
+    std::vector<std::filesystem::path> probedInputs;
+    probedInputs.reserve(timeline.segments.size());
+    for (const auto& segment : timeline.segments) {
+        checkCancellation(cancellation, "resolveSources");
+        const H264ProjectExportSource* matched = nullptr;
+        for (const auto& source : sources) {
+            if (source.clipId != segment.clipId) continue;
+            if (matched != nullptr) {
+                fail(
+                    H264ExportFailureCode::invalidRequest,
+                    "resolveSources",
+                    "scheduled clip source identity is ambiguous"
+                );
+            }
+            matched = &source;
+        }
+        if (matched == nullptr || matched->input.empty()
+            || !matched->input.is_absolute()
+            || pathsEqual(matched->input, destination)) {
+            fail(
+                H264ExportFailureCode::invalidRequest,
+                "resolveSources",
+                "every scheduled clip requires one distinct local input mapping"
+            );
+        }
+        segmentInputs.push_back(&matched->input);
+        const bool alreadyProbed = std::any_of(
+            probedInputs.begin(),
+            probedInputs.end(),
+            [&](const auto& input) { return pathsEqual(input, matched->input); }
         );
-    } catch (const media::MediaError& error) {
-        fail(
-            error.code == media::MediaFailureCode::cancelled
-                ? H264ExportFailureCode::cancelled
-                : H264ExportFailureCode::unsupportedSourceTiming,
-            "probeSource",
-            error.what(),
-            error.ffmpegCode
-        );
+        if (alreadyProbed) continue;
+        try {
+            requireExactSourceProbe(
+                matched->input,
+                timeline.framesPerSecond,
+                cancellation
+            );
+        } catch (const media::MediaError& error) {
+            fail(
+                error.code == media::MediaFailureCode::cancelled
+                    ? H264ExportFailureCode::cancelled
+                    : H264ExportFailureCode::unsupportedSourceTiming,
+                "probeSource",
+                error.what(),
+                error.ffmpegCode
+            );
+        }
+        probedInputs.push_back(matched->input);
     }
 
-    StagingFile staging(request.destination);
+    StagingFile staging(destination);
     try {
     runCheckpoint(hooks, "afterStaging", cancellation);
     const std::string stagingBytes = pathBytes(staging.path());
@@ -984,13 +1015,13 @@ H264ProjectExportReceipt exportStaticProjectH264Impl(
     }
     codec->codec_id = AV_CODEC_ID_H264;
     codec->codec_type = AVMEDIA_TYPE_VIDEO;
-    codec->width = static_cast<int>(layer.canvasWidth);
-    codec->height = static_cast<int>(layer.canvasHeight);
-    codec->time_base = {1, layer.framesPerSecond};
-    codec->framerate = {layer.framesPerSecond, 1};
+    codec->width = static_cast<int>(timeline.canvasWidth);
+    codec->height = static_cast<int>(timeline.canvasHeight);
+    codec->time_base = {1, timeline.framesPerSecond};
+    codec->framerate = {timeline.framesPerSecond, 1};
     codec->pix_fmt = requireEncoderPixelFormat(encoder, codec.get());
-    codec->bit_rate = request.bitRate;
-    codec->gop_size = layer.framesPerSecond * 2;
+    codec->bit_rate = bitRate;
+    codec->gop_size = timeline.framesPerSecond * 2;
     codec->max_b_frames = 0;
     codec->color_primaries = AVCOL_PRI_BT709;
     codec->color_trc = AVCOL_TRC_BT709;
@@ -1101,66 +1132,79 @@ H264ProjectExportReceipt exportStaticProjectH264Impl(
         );
     }
 
-    const std::uint64_t pixelCount = static_cast<std::uint64_t>(layer.canvasWidth)
-        * static_cast<std::uint64_t>(layer.canvasHeight);
+    const std::uint64_t pixelCount = static_cast<std::uint64_t>(timeline.canvasWidth)
+        * static_cast<std::uint64_t>(timeline.canvasHeight);
     std::vector<std::uint8_t> rgba(static_cast<std::size_t>(pixelCount * 4));
     std::unique_ptr<media::FfmpegVideoFrameReader> reader;
-    try {
-        reader = std::make_unique<media::FfmpegVideoFrameReader>(
-            request.input,
-            media::DecodeFrameStart{
-                layer.sourceStartFrame,
-                {layer.framesPerSecond, 1},
-            },
-            media::DecodeLimits{},
-            cancellation
-        );
-    } catch (const media::MediaError& error) {
-        fail(
-            error.code == media::MediaFailureCode::cancelled
-                ? H264ExportFailureCode::cancelled
-                : H264ExportFailureCode::encodeFailed,
-            "openSource",
-            error.what(),
-            error.ffmpegCode
-        );
-    }
+    const project_render::StaticVideoLayer* activeSegment = nullptr;
     render::CpuRenderer renderer;
-    for (std::int64_t index = 0; index < layer.durationFrames; ++index) {
-        checkCancellation(cancellation, "decodeSource");
-        std::optional<media::DecodedVideoFrame> decoded;
-        try {
-            decoded = reader->nextFrame(cancellation);
-        } catch (const media::MediaError& error) {
-            fail(
-                error.code == media::MediaFailureCode::cancelled
-                    ? H264ExportFailureCode::cancelled
-                    : H264ExportFailureCode::encodeFailed,
-                "decodeSource",
-                error.what(),
-                error.ffmpegCode
-            );
-        }
-        if (!decoded.has_value()) {
-            fail(
-                H264ExportFailureCode::sourceEndedEarly,
-                "decodeSource",
-                "source ended before the compiled clip"
-            );
-        }
-        const std::int64_t timelineFrame = layer.timelineStartFrame + index;
-        const auto plan = project_render::makeRenderPlan(layer, timelineFrame);
-        const auto expectedSourceFrame = plan.layers().front().sourceFrame;
-        requireExactTimestamp(
-            *decoded,
-            expectedSourceFrame,
-            layer.framesPerSecond,
-            "decodeSource",
-            H264ExportFailureCode::unsupportedSourceTiming
+    for (std::int64_t index = 0; index < frameCount; ++index) {
+        checkCancellation(cancellation, "renderTimeline");
+        const std::int64_t timelineFrame = firstTimelineFrame + index;
+        const auto plan = project_render::makeRenderPlan(timeline, timelineFrame);
+        const auto* segment = project_render::staticVideoLayerAt(
+            timeline,
+            timelineFrame
         );
-        const auto source = [&] {
+        std::optional<render::SourceFrame> source;
+        std::int64_t expectedSourceFrame{};
+        if (segment != nullptr) {
+            const auto segmentIndex = static_cast<std::size_t>(
+                segment - timeline.segments.data()
+            );
+            if (activeSegment != segment) {
+                try {
+                    reader = std::make_unique<media::FfmpegVideoFrameReader>(
+                        *segmentInputs[segmentIndex],
+                        media::DecodeFrameStart{
+                            segment->sourceStartFrame,
+                            {segment->framesPerSecond, 1},
+                        },
+                        media::DecodeLimits{},
+                        cancellation
+                    );
+                } catch (const media::MediaError& error) {
+                    fail(
+                        error.code == media::MediaFailureCode::cancelled
+                            ? H264ExportFailureCode::cancelled
+                            : H264ExportFailureCode::encodeFailed,
+                        "openSource",
+                        error.what(),
+                        error.ffmpegCode
+                    );
+                }
+                activeSegment = segment;
+            }
+            std::optional<media::DecodedVideoFrame> decoded;
             try {
-                return media::makeRenderSourceFrame(*decoded, cancellation);
+                decoded = reader->nextFrame(cancellation);
+            } catch (const media::MediaError& error) {
+                fail(
+                    error.code == media::MediaFailureCode::cancelled
+                        ? H264ExportFailureCode::cancelled
+                        : H264ExportFailureCode::encodeFailed,
+                    "decodeSource",
+                    error.what(),
+                    error.ffmpegCode
+                );
+            }
+            if (!decoded.has_value()) {
+                fail(
+                    H264ExportFailureCode::sourceEndedEarly,
+                    "decodeSource",
+                    "source ended before the scheduled clip"
+                );
+            }
+            expectedSourceFrame = plan.layers().front().sourceFrame;
+            requireExactTimestamp(
+                *decoded,
+                expectedSourceFrame,
+                timeline.framesPerSecond,
+                "decodeSource",
+                H264ExportFailureCode::unsupportedSourceTiming
+            );
+            try {
+                source = media::makeRenderSourceFrame(*decoded, cancellation);
             } catch (const media::RenderSourceError& error) {
                 fail(
                     error.code == "cancelled"
@@ -1170,11 +1214,16 @@ H264ProjectExportReceipt exportStaticProjectH264Impl(
                     error.code + " at " + error.pointer
                 );
             }
-        }();
+        } else {
+            reader.reset();
+            activeSegment = nullptr;
+        }
         const auto resolver = [&](std::string_view mediaId, std::int64_t sourceFrame)
             -> const render::SourceFrame* {
-            return mediaId == layer.mediaId && sourceFrame == expectedSourceFrame
-                ? &source
+            return segment != nullptr && source.has_value()
+                && mediaId == segment->mediaId
+                && sourceFrame == expectedSourceFrame
+                ? &*source
                 : nullptr;
         };
         const auto rendered = [&] {
@@ -1250,7 +1299,14 @@ H264ProjectExportReceipt exportStaticProjectH264Impl(
 
     std::uint64_t verifiedFrames = 0;
     try {
-        verifiedFrames = verifyOutput(staging.path(), layer, cancellation);
+        verifiedFrames = verifyOutput(
+            staging.path(),
+            timeline.canvasWidth,
+            timeline.canvasHeight,
+            timeline.framesPerSecond,
+            frameCount,
+            cancellation
+        );
     } catch (const media::MediaError& error) {
         fail(
             error.code == media::MediaFailureCode::cancelled
@@ -1262,21 +1318,120 @@ H264ProjectExportReceipt exportStaticProjectH264Impl(
         );
     }
     H264ProjectExportReceipt receipt{
-        request.destination,
+        destination,
         encoder->name,
-        static_cast<std::uint64_t>(layer.durationFrames),
+        static_cast<std::uint64_t>(frameCount),
         verifiedFrames,
-        layer.canvasWidth,
-        layer.canvasHeight,
-        layer.framesPerSecond,
+        timeline.canvasWidth,
+        timeline.canvasHeight,
+        timeline.framesPerSecond,
     };
     runCheckpoint(hooks, "beforeInstall", cancellation);
-    staging.install(request.destination, request.replaceExisting);
+    staging.install(destination, replaceExisting);
     return receipt;
     } catch (...) {
         staging.cleanup();
         throw;
     }
+}
+
+H264ProjectExportReceipt exportStaticProjectH264Impl(
+    const project::ProjectDocument& document,
+    const H264ProjectExportRequest& request,
+    const H264ExportLimits& limits,
+    std::stop_token cancellation,
+    const detail::H264ExportTestHooks* hooks
+) {
+    checkCancellation(cancellation, "validateRequest");
+    if (request.timelineId.empty() || request.trackId.empty()
+        || request.clipId.empty() || request.input.empty()) {
+        fail(
+            H264ExportFailureCode::invalidRequest,
+            "validateRequest",
+            "timeline, track, clip, and input are required"
+        );
+    }
+    project_render::StaticVideoLayer layer;
+    try {
+        layer = project_render::compileExclusiveStaticVideoLayer(
+            document,
+            request.timelineId,
+            request.trackId,
+            request.clipId,
+            cancellation
+        );
+    } catch (const project_render::ProjectRenderCompileError& error) {
+        fail(
+            compileFailureCode(error.code),
+            "compileProject",
+            error.code + " at " + error.jsonPointer
+        );
+    }
+    project_render::StaticVideoTimeline timeline{
+        layer.canvasWidth,
+        layer.canvasHeight,
+        layer.framesPerSecond,
+        layer.timelineId,
+        layer.timelineStartFrame + layer.durationFrames,
+        {layer},
+    };
+    return exportCompiledStaticTimelineH264(
+        timeline,
+        layer.timelineStartFrame,
+        layer.durationFrames,
+        {{layer.clipId, request.input}},
+        request.destination,
+        request.bitRate,
+        request.replaceExisting,
+        limits,
+        cancellation,
+        hooks
+    );
+}
+
+H264ProjectExportReceipt exportStaticProjectTimelineH264Impl(
+    const project::ProjectDocument& document,
+    const H264ProjectTimelineExportRequest& request,
+    const H264ExportLimits& limits,
+    std::stop_token cancellation,
+    const detail::H264ExportTestHooks* hooks
+) {
+    checkCancellation(cancellation, "validateRequest");
+    if (request.timelineId.empty()) {
+        fail(
+            H264ExportFailureCode::invalidRequest,
+            "validateRequest",
+            "timeline is required"
+        );
+    }
+    project_render::StaticVideoTimeline timeline;
+    try {
+        timeline = project_render::compileStaticVideoTimeline(
+            document,
+            request.timelineId,
+            cancellation
+        );
+    } catch (const project_render::ProjectRenderCompileError& error) {
+        fail(
+            compileFailureCode(error.code),
+            "compileProject",
+            error.code + " at " + error.jsonPointer
+        );
+    }
+    return exportCompiledStaticTimelineH264(
+        timeline,
+        0,
+        timeline.durationFrames,
+        request.sources,
+        request.destination,
+        request.bitRate,
+        request.replaceExisting,
+        limits,
+        cancellation,
+        hooks
+    );
+}
+
 }
 
 H264ProjectExportReceipt exportStaticProjectH264(
@@ -1286,6 +1441,21 @@ H264ProjectExportReceipt exportStaticProjectH264(
     std::stop_token cancellation
 ) {
     return exportStaticProjectH264Impl(
+        document,
+        request,
+        limits,
+        cancellation,
+        nullptr
+    );
+}
+
+H264ProjectExportReceipt exportStaticProjectTimelineH264(
+    const project::ProjectDocument& document,
+    const H264ProjectTimelineExportRequest& request,
+    const H264ExportLimits& limits,
+    std::stop_token cancellation
+) {
+    return exportStaticProjectTimelineH264Impl(
         document,
         request,
         limits,
@@ -1361,6 +1531,22 @@ H264ProjectExportReceipt exportStaticProjectH264ForTesting(
     const H264ExportTestHooks& hooks
 ) {
     return exportStaticProjectH264Impl(
+        document,
+        request,
+        limits,
+        cancellation,
+        &hooks
+    );
+}
+
+H264ProjectExportReceipt exportStaticProjectTimelineH264ForTesting(
+    const project::ProjectDocument& document,
+    const H264ProjectTimelineExportRequest& request,
+    const H264ExportLimits& limits,
+    std::stop_token cancellation,
+    const H264ExportTestHooks& hooks
+) {
+    return exportStaticProjectTimelineH264Impl(
         document,
         request,
         limits,
