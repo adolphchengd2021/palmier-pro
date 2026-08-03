@@ -4197,6 +4197,9 @@ def windows_qt_read_only_shell_contract() -> None:
     export_tests = read_text(
         "windows/app/tests/project_export_controller_tests.cpp"
     )
+    timeline_export_adr = read_text(
+        "docs/windows/adr/0045-integrated-timeline-h264-export.md"
+    )
     persistence_header = read_text(
         "windows/app/include/palmier/windows/project_persistence_controller.hpp"
     )
@@ -4307,7 +4310,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "ExportOperation",
         "activateProject(",
         "observeRuntimePublication(",
-        "exportSelectedClip(",
+        "exportTimeline(",
         "cancel()",
         "requestShutdown()",
         "bool presentationReady = true",
@@ -4320,6 +4323,8 @@ def windows_qt_read_only_shell_contract() -> None:
         "value->setMaxThreadCount(1)",
         "publication->session->revision != presentedRevision_",
         "const auto snapshot = publication->session",
+        "exportProjectTimelineH264(",
+        "ProjectTimelineH264ExportRequest request",
         "8'000'000,\n        false,",
         'QStringLiteral("completedOutdated")',
         'QStringLiteral("exportedOlderState")',
@@ -4339,7 +4344,8 @@ def windows_qt_read_only_shell_contract() -> None:
     for token in [
         "ownsOneBackgroundJobAndRefusesDuplicateAdmission",
         "committedOutputFromChangedRevisionIsCompletedOutdated",
-        "pendingPresentationRefusesStaleSelection",
+        "pendingPresentationRefusesTimelineExport",
+        "receivedTimelineRequest",
         "persistenceOnlyPublicationDoesNotCancel",
         "completedReceiptBecomesOutdatedAfterLaterRevision",
         "packageChangeCancelsAndMarksCommittedOutputOutdated",
@@ -4481,9 +4487,8 @@ def windows_qt_read_only_shell_contract() -> None:
         "extentRatio",
         "AppTheme.",
         "FileDialog",
-        "Export Selected Clip…",
-        "window.selectedTrackId",
-        "exportCoordinator.exportSelectedClip(",
+        "Export Timeline…",
+        "exportCoordinator.exportTimeline(",
         "exportCoordinator.cancel()",
         "exportCloseDialog",
         "MessageDialog.Yes | MessageDialog.No",
@@ -4574,6 +4579,7 @@ def windows_qt_read_only_shell_contract() -> None:
         "editingControllerSetsClipTimingAndUndoes",
         "editingControllerRemovesByStableIdAndUndoes",
         "persistenceShutdownRefreshesAuthoritativeDirtyState",
+        "exportTimelineButton",
     ]:
         if token not in qt_tests:
             raise ContractError(f"Qt shell test missing token {token!r}")
@@ -4649,6 +4655,17 @@ def windows_qt_read_only_shell_contract() -> None:
     ]:
         if token not in editing_adr:
             raise ContractError(f"Qt editing ADR missing token {token!r}")
+    for token in [
+        "Export Timeline",
+        "ProjectExportController::exportTimeline",
+        "exportProjectTimelineH264",
+        "immutable `ProjectSessionSnapshot`",
+        "completedOutdated",
+        "without requiring a clip selection",
+        "Manual Windows testing",
+    ]:
+        if token not in timeline_export_adr:
+            raise ContractError(f"Qt timeline export ADR missing token {token!r}")
 
 
 def windows_qt_preview_host_contract() -> None:

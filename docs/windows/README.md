@@ -173,9 +173,11 @@ drain, and reports a committed result from an older revision as
 decode and atomic installation. The lower-level exporter now also consumes the
 complete bounded `StaticVideoTimeline`, resolves every source by stable clip ID,
 reopens an exact source cursor at each segment, and encodes leading and
-inter-clip gaps from the shared zero-layer black RenderPlan. The Qt action still
-invokes the selected-clip compatibility workflow until its controller migration
-is complete; see ADR 0009, ADR 0024, ADR 0025, ADR 0034, and ADR 0044.
+inter-clip gaps from the shared zero-layer black RenderPlan. The Qt controller
+now captures the current immutable project snapshot and invokes this complete
+timeline workflow from an **Export Timeline** action without requiring a clip
+selection. The selected-clip export path remains an internal compatibility seam; see
+ADR 0009, ADR 0024, ADR 0025, ADR 0034, ADR 0044, and ADR 0045.
 
 The optional FFmpeg prototype activates the first vcpkg manifest dependency:
 

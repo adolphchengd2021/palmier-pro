@@ -52,11 +52,11 @@ QString exportFailureCode(exporting::H264ExportFailureCode code) {
 
 exporting::H264ProjectExportReceipt runProjectExport(
     const project::ProjectDocument& document,
-    const exporting::ProjectClipH264ExportRequest& request,
+    const exporting::ProjectTimelineH264ExportRequest& request,
     const exporting::H264ExportLimits& limits,
     std::stop_token cancellation
 ) {
-    return exporting::exportProjectClipH264(document, request, limits, cancellation);
+    return exporting::exportProjectTimelineH264(document, request, limits, cancellation);
 }
 
 }
@@ -166,11 +166,7 @@ void ProjectExportController::observeRuntimePublication(
     }
 }
 
-void ProjectExportController::exportSelectedClip(
-    const QString& trackId,
-    const QString& clipId,
-    const QUrl& destination
-) {
+void ProjectExportController::exportTimeline(const QUrl& destination) {
     if (shutdownRequested_) {
         refuse(
             QStringLiteral("shutdownInProgress"),
@@ -201,11 +197,11 @@ void ProjectExportController::exportSelectedClip(
         emit exportFinished(false);
         return;
     }
-    if (trackId.isEmpty() || clipId.isEmpty() || !destination.isLocalFile()) {
+    if (!destination.isLocalFile()) {
         setState(QStringLiteral("failed"));
         setErrorCode(QStringLiteral("invalidArguments"));
         setErrorStage(QStringLiteral("admitExport"));
-        setErrorMessage(QStringLiteral("Choose a clip and a local MP4 destination."));
+        setErrorMessage(QStringLiteral("Choose a local MP4 destination."));
         emit exportFinished(false);
         return;
     }
@@ -217,9 +213,9 @@ void ProjectExportController::exportSelectedClip(
         || publication->session->revision != presentedRevision_
     ) {
         setState(QStringLiteral("failed"));
-        setErrorCode(QStringLiteral("staleSelection"));
+        setErrorCode(QStringLiteral("staleTimeline"));
         setErrorStage(QStringLiteral("admitExport"));
-        setErrorMessage(QStringLiteral("Select the clip again after the timeline refreshes."));
+        setErrorMessage(QStringLiteral("Wait for the timeline to finish refreshing."));
         emit exportFinished(false);
         return;
     }
@@ -247,10 +243,8 @@ void ProjectExportController::exportSelectedClip(
     activeJobPackagePath_ = packagePath_;
     const auto snapshot = publication->session;
     const auto operation = operation_;
-    exporting::ProjectClipH264ExportRequest request{
+    exporting::ProjectTimelineH264ExportRequest request{
         packagePath_,
-        trackId.toStdString(),
-        clipId.toStdString(),
         destinationPath,
         8'000'000,
         false,

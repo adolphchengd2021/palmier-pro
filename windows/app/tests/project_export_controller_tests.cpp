@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
 #include <mutex>
 #include <stop_token>
 #include <string>
@@ -53,7 +54,7 @@ std::shared_ptr<const palmier::project::ProjectSessionSnapshot> snapshot(
 }
 
 palmier::exporting::H264ProjectExportReceipt receipt(
-    const palmier::exporting::ProjectClipH264ExportRequest& request
+    const palmier::exporting::ProjectTimelineH264ExportRequest& request
 ) {
     return {
         request.destination,
@@ -151,18 +152,23 @@ private slots:
         ExportGate gate;
         const auto waitAtGate = gate.waiter();
         std::atomic_bool ranOffGuiThread{};
+        std::atomic_bool receivedTimelineRequest{};
         std::atomic_int calls{};
         palmier::windows::ProjectExportController controller(
             fixture.mailbox,
             [&, waitAtGate](
                 const palmier::project::ProjectDocument&,
-                const palmier::exporting::ProjectClipH264ExportRequest& request,
+                const palmier::exporting::ProjectTimelineH264ExportRequest& request,
                 const palmier::exporting::H264ExportLimits&,
                 std::stop_token cancellation
             ) {
                 ++calls;
                 ranOffGuiThread = QThread::currentThread()
                     != QCoreApplication::instance()->thread();
+                receivedTimelineRequest = request.packagePath
+                        == std::filesystem::path(L"C:\\project.palmier")
+                    && request.destination.filename()
+                        == std::filesystem::path(L"first.mp4");
                 if (!waitAtGate(cancellation, true)) {
                     throw palmier::exporting::H264ExportError(
                         palmier::exporting::H264ExportFailureCode::cancelled,
@@ -184,17 +190,13 @@ private slots:
             &controller,
             &palmier::windows::ProjectExportController::exportFinished
         );
-        controller.exportSelectedClip(
-            QStringLiteral("track"),
-            QStringLiteral("clip"),
+        controller.exportTimeline(
             QUrl::fromLocalFile(QStringLiteral("C:/first.mp4"))
         );
         QTRY_VERIFY_WITH_TIMEOUT(gate.entered(), 5000);
         QVERIFY(controller.exporting());
         QVERIFY(controller.canCancel());
-        controller.exportSelectedClip(
-            QStringLiteral("track"),
-            QStringLiteral("clip"),
+        controller.exportTimeline(
             QUrl::fromLocalFile(QStringLiteral("C:/second.mp4"))
         );
         QCOMPARE(refused.count(), 1);
@@ -204,6 +206,7 @@ private slots:
         QVERIFY(waitForSignal(finished));
         QCOMPARE(calls.load(), 1);
         QVERIFY(ranOffGuiThread.load());
+        QVERIFY(receivedTimelineRequest.load());
         QVERIFY(!controller.exporting());
         QCOMPARE(controller.state(), QStringLiteral("completed"));
         QCOMPARE(controller.outputPath(), QStringLiteral("C:\\first.mp4"));
@@ -217,7 +220,7 @@ private slots:
             fixture.mailbox,
             [&, waitAtGate](
                 const palmier::project::ProjectDocument&,
-                const palmier::exporting::ProjectClipH264ExportRequest& request,
+                const palmier::exporting::ProjectTimelineH264ExportRequest& request,
                 const palmier::exporting::H264ExportLimits&,
                 std::stop_token cancellation
             ) {
@@ -232,9 +235,7 @@ private slots:
             &controller,
             &palmier::windows::ProjectExportController::exportFinished
         );
-        controller.exportSelectedClip(
-            QStringLiteral("track"),
-            QStringLiteral("clip"),
+        controller.exportTimeline(
             QUrl::fromLocalFile(QStringLiteral("C:/outdated.mp4"))
         );
         QTRY_VERIFY_WITH_TIMEOUT(gate.entered(), 5000);
@@ -256,7 +257,7 @@ private slots:
         QCOMPARE(controller.outputPath(), QStringLiteral("C:\\outdated.mp4"));
     }
 
-    void pendingPresentationRefusesStaleSelection() {
+    void pendingPresentationRefusesTimelineExport() {
         ControllerFixture fixture;
         std::atomic_int calls{};
         palmier::windows::ProjectExportController controller(
@@ -276,9 +277,7 @@ private slots:
             &controller,
             &palmier::windows::ProjectExportController::exportFinished
         );
-        controller.exportSelectedClip(
-            QStringLiteral("track"),
-            QStringLiteral("clip"),
+        controller.exportTimeline(
             QUrl::fromLocalFile(QStringLiteral("C:/pending.mp4"))
         );
         QCOMPARE(finished.count(), 1);
@@ -321,9 +320,7 @@ private slots:
             &controller,
             &palmier::windows::ProjectExportController::exportFinished
         );
-        controller.exportSelectedClip(
-            QStringLiteral("track"),
-            QStringLiteral("clip"),
+        controller.exportTimeline(
             QUrl::fromLocalFile(QStringLiteral("C:/saved.mp4"))
         );
         QTRY_VERIFY_WITH_TIMEOUT(gate.entered(), 5000);
@@ -357,9 +354,7 @@ private slots:
             &controller,
             &palmier::windows::ProjectExportController::exportFinished
         );
-        controller.exportSelectedClip(
-            QStringLiteral("track"),
-            QStringLiteral("clip"),
+        controller.exportTimeline(
             QUrl::fromLocalFile(QStringLiteral("C:/current.mp4"))
         );
         QVERIFY(waitForSignal(finished));
@@ -391,9 +386,7 @@ private slots:
             &controller,
             &palmier::windows::ProjectExportController::exportFinished
         );
-        controller.exportSelectedClip(
-            QStringLiteral("track"),
-            QStringLiteral("clip"),
+        controller.exportTimeline(
             QUrl::fromLocalFile(QStringLiteral("C:/moved.mp4"))
         );
         QTRY_VERIFY_WITH_TIMEOUT(gate.entered(), 5000);
@@ -414,7 +407,7 @@ private slots:
             fixture.mailbox,
             [&, waitAtGate](
                 const palmier::project::ProjectDocument&,
-                const palmier::exporting::ProjectClipH264ExportRequest& request,
+                const palmier::exporting::ProjectTimelineH264ExportRequest& request,
                 const palmier::exporting::H264ExportLimits&,
                 std::stop_token cancellation
             ) {
@@ -435,9 +428,7 @@ private slots:
             &controller,
             &palmier::windows::ProjectExportController::shutdownReady
         );
-        controller.exportSelectedClip(
-            QStringLiteral("track"),
-            QStringLiteral("clip"),
+        controller.exportTimeline(
             QUrl::fromLocalFile(QStringLiteral("C:/cancelled.mp4"))
         );
         QTRY_VERIFY_WITH_TIMEOUT(gate.entered(), 5000);
@@ -470,9 +461,7 @@ private slots:
             &controller,
             &palmier::windows::ProjectExportController::requestRefused
         );
-        controller.exportSelectedClip(
-            QStringLiteral("track"),
-            QStringLiteral("clip"),
+        controller.exportTimeline(
             QUrl::fromLocalFile(QStringLiteral("C:/late.mp4"))
         );
         QCOMPARE(refused.count(), 1);
@@ -503,7 +492,7 @@ private slots:
                 fixture.mailbox,
                 [failure](
                     const palmier::project::ProjectDocument&,
-                    const palmier::exporting::ProjectClipH264ExportRequest&,
+                    const palmier::exporting::ProjectTimelineH264ExportRequest&,
                     const palmier::exporting::H264ExportLimits&,
                     std::stop_token
                 ) -> palmier::exporting::H264ProjectExportReceipt {
@@ -520,9 +509,7 @@ private slots:
                 &controller,
                 &palmier::windows::ProjectExportController::exportFinished
             );
-            controller.exportSelectedClip(
-                QStringLiteral("track"),
-                QStringLiteral("clip"),
+            controller.exportTimeline(
                 QUrl::fromLocalFile(QStringLiteral("C:/failure.mp4"))
             );
             QVERIFY(waitForSignal(finished));

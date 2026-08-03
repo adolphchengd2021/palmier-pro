@@ -178,15 +178,11 @@ ApplicationWindow {
 
     FileDialog {
         id: exportDialog
-        title: qsTr("Export Selected Clip")
+        title: qsTr("Export Timeline")
         fileMode: FileDialog.SaveFile
         nameFilters: [qsTr("MP4 Video (*.mp4)")]
         defaultSuffix: "mp4"
-        onAccepted: exportCoordinator.exportSelectedClip(
-            window.selectedTrackId,
-            window.selectedClipId,
-            selectedFile
-        )
+        onAccepted: exportCoordinator.exportTimeline(selectedFile)
     }
 
     MessageDialog {
@@ -282,12 +278,9 @@ ApplicationWindow {
                 onClicked: editingCoordinator.redo()
             }
             Button {
-                objectName: "exportSelectedClipButton"
-                text: qsTr("Export Selected Clip…")
-                enabled: window.selectedTrackId.length > 0
-                    && window.selectedClipId.length > 0
-                    && window.selectedMediaType === "video"
-                    && exportCoordinator.hasProject
+                objectName: "exportTimelineButton"
+                text: qsTr("Export Timeline…")
+                enabled: exportCoordinator.hasProject
                     && projectCoordinator.presentationReady
                     && !projectCoordinator.loading
                     && !persistenceCoordinator.saving

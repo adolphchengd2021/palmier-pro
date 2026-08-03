@@ -1,6 +1,6 @@
 # ADR 0034: Integrate selected-clip export with the live Qt project
 
-- Status: Accepted for the Windows technical MVP
+- Status: Superseded for Qt UI by ADR 0045; compatibility workflow retained
 - Applies to: Technical MVP gate G0
 
 ## Decision

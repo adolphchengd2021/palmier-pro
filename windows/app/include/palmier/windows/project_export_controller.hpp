@@ -31,7 +31,7 @@ class ProjectExportController final : public QObject {
 public:
     using ExportOperation = std::function<exporting::H264ProjectExportReceipt(
         const project::ProjectDocument&,
-        const exporting::ProjectClipH264ExportRequest&,
+        const exporting::ProjectTimelineH264ExportRequest&,
         const exporting::H264ExportLimits&,
         std::stop_token
     )>;
@@ -66,11 +66,7 @@ public:
     );
     void observeRuntimePublication(const ProjectRuntimePublication& publication);
 
-    Q_INVOKABLE void exportSelectedClip(
-        const QString& trackId,
-        const QString& clipId,
-        const QUrl& destination
-    );
+    Q_INVOKABLE void exportTimeline(const QUrl& destination);
     Q_INVOKABLE void cancel();
     Q_INVOKABLE bool requestShutdown();
 

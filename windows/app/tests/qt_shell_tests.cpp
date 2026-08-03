@@ -1959,7 +1959,7 @@ private slots:
         auto* root = engine.rootObjects().front();
         QVERIFY(root->findChild<QObject*>(QStringLiteral("timelineTracks")) != nullptr);
         QVERIFY(
-            root->findChild<QObject*>(QStringLiteral("exportSelectedClipButton"))
+            root->findChild<QObject*>(QStringLiteral("exportTimelineButton"))
                 != nullptr
         );
         QVERIFY(root->findChild<QObject*>(QStringLiteral("cancelExportButton")) != nullptr);
