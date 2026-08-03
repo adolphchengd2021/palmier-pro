@@ -560,27 +560,40 @@ std::size_t cancelCount(const std::shared_ptr<FakeSessionState>& state) {
 }
 
 palmier::windows::ProjectPreviewProjection availablePreview(std::string mediaId) {
+    const auto clipId = "clip-" + mediaId;
+    palmier::project_render::StaticVideoLayer layer{
+        1920,
+        1080,
+        30,
+        "timeline",
+        "video-track",
+        clipId,
+        mediaId,
+        0,
+        30,
+        0,
+        {},
+        1,
+        std::nullopt,
+    };
     return {
         palmier::windows::PreviewCandidateAvailability::available,
         {},
         palmier::windows::PreviewMediaCandidateProjection{
-            std::filesystem::path(L"C:\\fixture.mp4"),
             {
                 1920,
                 1080,
                 30,
                 "timeline",
-                "video-track",
-                "clip-" + mediaId,
-                std::move(mediaId),
-                0,
                 30,
-                0,
-                {},
-                1,
-                std::nullopt,
+                {std::move(layer)},
             },
-            true,
+            {{
+                std::filesystem::path(L"C:\\fixture.mp4"),
+                clipId,
+                true,
+                palmier::project::MediaSourceKind::project,
+            }},
         },
     };
 }
@@ -703,7 +716,7 @@ private slots:
         {
             const std::lock_guard lock(state->mutex);
             QCOMPARE(
-                state->candidates.front().renderLayer.mediaId,
+                state->candidates.front().renderTimeline.segments.front().mediaId,
                 std::string("media-a")
             );
             for (const auto thread : state->threads) {
@@ -736,7 +749,7 @@ private slots:
         {
             const std::lock_guard lock(state->mutex);
             QCOMPARE(
-                state->candidates.front().renderLayer.mediaId,
+                state->candidates.front().renderTimeline.segments.front().mediaId,
                 std::string("media-during-attach")
             );
         }
@@ -936,8 +949,8 @@ private slots:
         controller.replaceProjectPreview(1, availablePreview("media-old-target"));
         QTRY_COMPARE_WITH_TIMEOUT(state->tickEntered.available(), 1, 5000);
         auto replacement = availablePreview("media-new-target");
-        replacement.candidate->renderLayer.timelineStartFrame = 10;
-        replacement.candidate->renderLayer.durationFrames = 5;
+        replacement.candidate->renderTimeline.segments.front().timelineStartFrame = 10;
+        replacement.candidate->renderTimeline.segments.front().durationFrames = 5;
         controller.replaceProjectPreview(2, std::move(replacement));
         QTRY_VERIFY_WITH_TIMEOUT(tickCancellationObserved(state), 5000);
         QTRY_COMPARE_WITH_TIMEOUT(playCount(state), std::size_t{2}, 5000);

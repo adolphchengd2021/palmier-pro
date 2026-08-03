@@ -38,7 +38,15 @@ public:
         const PreviewMediaCandidateProjection& candidate,
         std::stop_token cancellation
     ) override {
-        if (candidate.renderLayer.framesPerSecond <= 0) {
+        const auto* layer = candidate.firstRenderLayer();
+        const auto* source = layer == nullptr
+            ? nullptr
+            : candidate.sourceForClip(layer->clipId);
+        if (
+            layer == nullptr
+            || source == nullptr
+            || candidate.renderTimeline.framesPerSecond <= 0
+        ) {
             auto receipt = failedReceipt();
             receipt.outcome = preview::PreviewPresentationOutcome::refused;
             receipt.failure = preview::PreviewPresentationFailureCode::invalidRequest;
@@ -46,10 +54,10 @@ public:
             return receipt;
         }
         return session_.play(
-            candidate.inputPath,
-            candidate.renderLayer.timelineStartFrame,
-            {static_cast<std::uint32_t>(candidate.renderLayer.framesPerSecond), 1},
-            {candidate.renderLayer},
+            source->inputPath,
+            layer->timelineStartFrame,
+            {static_cast<std::uint32_t>(candidate.renderTimeline.framesPerSecond), 1},
+            {*layer},
             cancellation
         );
     }
@@ -314,16 +322,17 @@ void PreviewPresentationController::replaceProjectPreview(
     };
     pendingSeek_.reset();
     if (desiredPreview_->preview.candidate.has_value()) {
-        const auto& layer = desiredPreview_->preview.candidate->renderLayer;
-        if (layer.timelineStartFrame >= 0 && layer.durationFrames > 0
-            && layer.timelineStartFrame
+        const auto* layer = desiredPreview_->preview.candidate->firstRenderLayer();
+        if (layer != nullptr
+            && layer->timelineStartFrame >= 0 && layer->durationFrames > 0
+            && layer->timelineStartFrame
                 <= (std::numeric_limits<std::int64_t>::max)()
-                    - (layer.durationFrames - 1)) {
+                    - (layer->durationFrames - 1)) {
             setPreviewRange(
-                layer.timelineStartFrame,
-                layer.timelineStartFrame + layer.durationFrames - 1
+                layer->timelineStartFrame,
+                layer->timelineStartFrame + layer->durationFrames - 1
             );
-            setCurrentFrame(layer.timelineStartFrame);
+            setCurrentFrame(layer->timelineStartFrame);
         } else {
             setPreviewRange(0, -1);
             setCurrentFrame(0);
@@ -1077,7 +1086,7 @@ void PreviewPresentationController::completeOperation(OperationResult result) {
             scheduleNextTick(
                 result.sourceSerial,
                 playbackGeneration_,
-                desiredPreview_->preview.candidate->renderLayer.framesPerSecond
+                desiredPreview_->preview.candidate->renderTimeline.framesPerSecond
             );
         }
         servicePendingWork();
@@ -1117,7 +1126,7 @@ void PreviewPresentationController::completeOperation(OperationResult result) {
             scheduleNextTick(
                 result.sourceSerial,
                 playbackGeneration_,
-                desiredPreview_->preview.candidate->renderLayer.framesPerSecond
+                desiredPreview_->preview.candidate->renderTimeline.framesPerSecond
             );
         }
         servicePendingWork();
@@ -1147,7 +1156,7 @@ void PreviewPresentationController::completeOperation(OperationResult result) {
             scheduleNextTick(
                 result.sourceSerial,
                 playbackGeneration_,
-                desiredPreview_->preview.candidate->renderLayer.framesPerSecond
+                desiredPreview_->preview.candidate->renderTimeline.framesPerSecond
             );
         }
         servicePendingWork();
@@ -1198,7 +1207,7 @@ void PreviewPresentationController::completeOperation(OperationResult result) {
             scheduleNextTick(
                 result.sourceSerial,
                 playbackGeneration_,
-                desiredPreview_->preview.candidate->renderLayer.framesPerSecond
+                desiredPreview_->preview.candidate->renderTimeline.framesPerSecond
             );
         }
         servicePendingWork();

@@ -7,6 +7,8 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace palmier::windows {
 
@@ -18,11 +20,21 @@ enum class PreviewCandidateAvailability {
     invalidated,
 };
 
-struct PreviewMediaCandidateProjection final {
+struct PreviewMediaSourceProjection final {
     std::filesystem::path inputPath;
-    project_render::StaticVideoLayer renderLayer;
+    std::string clipId;
     std::optional<bool> hasAudio;
     project::MediaSourceKind sourceKind{project::MediaSourceKind::project};
+};
+
+struct PreviewMediaCandidateProjection final {
+    project_render::StaticVideoTimeline renderTimeline;
+    std::vector<PreviewMediaSourceProjection> sources;
+
+    const project_render::StaticVideoLayer* firstRenderLayer() const noexcept;
+    const PreviewMediaSourceProjection* sourceForClip(
+        std::string_view clipId
+    ) const noexcept;
 };
 
 struct ProjectPreviewProjection final {

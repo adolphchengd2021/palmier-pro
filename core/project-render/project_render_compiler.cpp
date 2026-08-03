@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -836,6 +837,7 @@ StaticVideoTimeline compileStaticVideoTimeline(
         std::string pointer;
     };
     std::vector<OrderedClip> ordered;
+    std::set<std::string> clipIds;
     for (std::size_t trackIndex = 0; trackIndex < timeline->tracks.size(); ++trackIndex) {
         checkCancellation(cancellation);
         const auto& track = timeline->tracks[trackIndex];
@@ -847,6 +849,13 @@ StaticVideoTimeline compileStaticVideoTimeline(
             const auto pointer = "/timelines/" + std::to_string(timelineIndex)
                 + "/tracks/" + std::to_string(trackIndex)
                 + "/clips/" + std::to_string(clipIndex);
+            if (!clipIds.insert(clip.id.value).second) {
+                fail(
+                    "duplicateStableId",
+                    pointer + "/id",
+                    "static video timeline clip identity is ambiguous"
+                );
+            }
             if (
                 clip.startFrame < 0
                 || clip.durationFrames <= 0

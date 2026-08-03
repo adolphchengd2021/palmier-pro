@@ -1239,10 +1239,13 @@ private slots:
             palmier::windows::PreviewCandidateAvailability::available,
             {},
             palmier::windows::PreviewMediaCandidateProjection{
-                source / L"Media" / L"clip.mp4",
                 {},
-                true,
-                palmier::project::MediaSourceKind::project,
+                {{
+                    source / L"Media" / L"clip.mp4",
+                    "clip",
+                    true,
+                    palmier::project::MediaSourceKind::project,
+                }},
             },
         };
         palmier::windows::ProjectLoadCoordinator projectCoordinator(
@@ -1256,7 +1259,7 @@ private slots:
         projectCoordinator.adoptPackagePath(destination, 1);
         QVERIFY(projectCoordinator.committedPreview().candidate.has_value());
         QVERIFY(
-            projectCoordinator.committedPreview().candidate->inputPath
+            projectCoordinator.committedPreview().candidate->sources.front().inputPath
                 == destination / L"Media" / L"clip.mp4"
         );
 
@@ -1265,10 +1268,13 @@ private slots:
             palmier::windows::PreviewCandidateAvailability::available,
             {},
             palmier::windows::PreviewMediaCandidateProjection{
-                source / L"external.mp4",
                 {},
-                true,
-                palmier::project::MediaSourceKind::external,
+                {{
+                    source / L"external.mp4",
+                    "clip",
+                    true,
+                    palmier::project::MediaSourceKind::external,
+                }},
             },
         };
         palmier::windows::ProjectLoadCoordinator externalCoordinator(
@@ -1282,7 +1288,7 @@ private slots:
         externalCoordinator.adoptPackagePath(destination, 1);
         QVERIFY(externalCoordinator.committedPreview().candidate.has_value());
         QVERIFY(
-            externalCoordinator.committedPreview().candidate->inputPath
+            externalCoordinator.committedPreview().candidate->sources.front().inputPath
                 == source / L"external.mp4"
         );
     }
@@ -1334,7 +1340,10 @@ private slots:
             palmier::windows::PreviewCandidateAvailability::available
         );
         QVERIFY(preview.candidate.has_value());
-        const auto& layer = preview.candidate->renderLayer;
+        const auto& timeline = preview.candidate->renderTimeline;
+        QCOMPARE(timeline.segments.size(), std::size_t{2});
+        QCOMPARE(preview.candidate->sources.size(), std::size_t{2});
+        const auto& layer = timeline.segments.front();
         QCOMPARE(layer.timelineId, std::string("timeline"));
         QCOMPARE(layer.trackId, std::string("track-a"));
         QCOMPARE(layer.clipId, std::string("clip-first"));
@@ -1462,8 +1471,50 @@ private slots:
             palmier::windows::PreviewCandidateAvailability::available
         );
         QVERIFY(preview.candidate.has_value());
-        QCOMPARE(preview.candidate->renderLayer.clipId, std::string("trimmed"));
-        QCOMPARE(preview.candidate->renderLayer.sourceStartFrame, std::int64_t{1});
+        QCOMPARE(
+            preview.candidate->renderTimeline.segments.front().clipId,
+            std::string("trimmed")
+        );
+        QCOMPARE(
+            preview.candidate->renderTimeline.segments.front().sourceStartFrame,
+            std::int64_t{1}
+        );
+    }
+
+    void unavailableScheduledSegmentRefusesWholePreview() {
+        palmier::windows::ProjectPreviewProjection preview;
+        std::exception_ptr failure;
+        std::jthread worker([&] {
+            try {
+                constexpr auto source = R"({"timelines":[{"id":"timeline","fps":30,"width":1920,"height":1080,"tracks":[{"id":"track","type":"video","clips":[{"id":"first","mediaRef":"media-one","mediaType":"video","sourceClipType":"video","startFrame":0,"durationFrames":30},{"id":"missing","mediaRef":"media-two","mediaType":"video","sourceClipType":"video","startFrame":30,"durationFrames":30}]}]}],"activeTimelineId":"timeline"})";
+                const auto document = palmier::project::readProject(
+                    source,
+                    [] { return std::string("generated"); }
+                );
+                const palmier::project::MediaManifest manifest{{{
+                    "media-one",
+                    "video",
+                    {palmier::project::MediaSourceKind::project, "project.json"},
+                    true,
+                }}};
+                preview = palmier::windows::projectPreviewForActiveTimeline(
+                    document,
+                    manifest,
+                    fixture("current-multitimeline.palmier"),
+                    {}
+                );
+            } catch (...) {
+                failure = std::current_exception();
+            }
+        });
+        worker.join();
+        if (failure) std::rethrow_exception(failure);
+        QCOMPARE(
+            preview.availability,
+            palmier::windows::PreviewCandidateAvailability::offline
+        );
+        QCOMPARE(preview.reasonCode, std::string("mediaEntryMissing"));
+        QVERIFY(!preview.candidate.has_value());
     }
 
     void overlappingVisualLayerIsExplicitlyRefused() {

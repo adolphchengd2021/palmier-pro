@@ -133,15 +133,13 @@ void ProjectLoadCoordinator::adoptPackagePath(
     ) {
         return;
     }
-    if (
-        committedPreview_.candidate
-        && committedPreview_.candidate->sourceKind == project::MediaSourceKind::project
-    ) {
-        const auto relative = committedPreview_.candidate->inputPath.lexically_relative(
-            committedPackagePath_
-        );
-        if (!relative.empty() && *relative.begin() != std::filesystem::path(L"..")) {
-            committedPreview_.candidate->inputPath = packagePath / relative;
+    if (committedPreview_.candidate) {
+        for (auto& source : committedPreview_.candidate->sources) {
+            if (source.sourceKind != project::MediaSourceKind::project) continue;
+            const auto relative = source.inputPath.lexically_relative(committedPackagePath_);
+            if (!relative.empty() && *relative.begin() != std::filesystem::path(L"..")) {
+                source.inputPath = packagePath / relative;
+            }
         }
     }
     committedPackagePath_ = std::move(packagePath);

@@ -602,6 +602,27 @@ void staticVideoTimelineRefusesOverlapUnsupportedContentAndCapacity() {
         "unsupportedTrack"
     );
 
+    const auto duplicateClipIds = rawDocument(R"({
+        "timelines":[{"id":"timeline","fps":30,"width":4,"height":4,
+            "tracks":[
+                {"id":"track-a","type":"video","clips":[{
+                    "id":"duplicate","mediaRef":"first","mediaType":"video",
+                    "sourceClipType":"video","startFrame":0,"durationFrames":2
+                }]},
+                {"id":"track-b","type":"video","clips":[{
+                    "id":"duplicate","mediaRef":"second","mediaType":"video",
+                    "sourceClipType":"video","startFrame":2,"durationFrames":2
+                }]}
+            ]
+        }],"activeTimelineId":"timeline"
+    })");
+    requireCompileError(
+        [&] { static_cast<void>(palmier::project_render::compileStaticVideoTimeline(
+            duplicateClipIds, "timeline")); },
+        "duplicateStableId",
+        "/timelines/0/tracks/1/clips/0/id"
+    );
+
     std::string dense = R"({"timelines":[{"id":"timeline","fps":30,"width":4,"height":4,"tracks":[{"id":"track","type":"video","clips":[)";
     for (std::size_t index = 0;
          index <= palmier::project_render::maximumStaticVideoTimelineSegments;

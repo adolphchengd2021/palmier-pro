@@ -17,7 +17,8 @@ completion.
 Compilation accepts one persisted timeline ID and returns immutable canvas and
 frame-rate settings, an end-exclusive duration, and at most 256 visible static
 video segments. Segments are stable-sorted by start frame, persisted track
-order, then persisted clip order.
+order, then persisted clip order. Clip IDs must be persisted and unique across
+the complete schedule so media resolution and transition receipts are unambiguous.
 
 The timeline domain is `[0, lastSegmentEnd)`. Adjacent segments are valid and
 switch ownership at the exact shared boundary. Any overlap between visible
@@ -46,12 +47,17 @@ It is a technical-MVP capacity limit, not a product project limit.
 - Projection, preview-session, and export-session owners must resolve media for
   every scheduled segment before claiming full timeline playback or export.
 
+The Qt project projection resolves every scheduled segment by stable clip ID
+and publishes no partial candidate. Its presentation adapter still starts only
+the first segment; multi-segment playback and gap cadence remain a later step.
+
 ## Evidence and limits
 
 Deterministic compiler tests cover stable ordering, leading and inter-clip
 gaps, adjacent end-exclusive transitions, source mapping, black gap rendering,
 overlap, unsupported visible content, cancellation, and the segment bound.
+Qt projection tests cover all-source publication and refusal when a later
+scheduled source is unavailable.
 These tests establish the shared schedule contract only. They do not prove A/V
 generation replacement, continuous gap timing, multi-source export, visible UI
 pixels, physical audio/GPU synchronization, VFR, or Windows 10 build 19045.
-

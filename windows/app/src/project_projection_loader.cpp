@@ -7,8 +7,6 @@
 
 #include <QVariantMap>
 
-#include <algorithm>
-#include <cmath>
 #include <limits>
 #include <optional>
 #include <utility>
@@ -33,19 +31,20 @@ std::optional<std::int64_t> checkedClipEnd(const palmier::project::Clip& clip) {
     return clip.startFrame + clip.durationFrames;
 }
 
-bool supportedClip(const palmier::project::Clip& clip) {
-    return checkedClipEnd(clip).has_value()
-        && clip.mediaType == "video"
-        && clip.sourceClipType == "video"
-        && clip.trimStartFrame >= 0
-        && clip.trimEndFrame >= 0
-        && clip.speed == 1
-        && std::isfinite(clip.opacity)
-        && clip.opacity >= 0
-        && clip.opacity <= 1
-        && (!clip.blendMode || *clip.blendMode == "normal");
 }
 
+const project_render::StaticVideoLayer*
+PreviewMediaCandidateProjection::firstRenderLayer() const noexcept {
+    return renderTimeline.segments.empty() ? nullptr : &renderTimeline.segments.front();
+}
+
+const PreviewMediaSourceProjection* PreviewMediaCandidateProjection::sourceForClip(
+    std::string_view clipId
+) const noexcept {
+    for (const auto& source : sources) {
+        if (source.clipId == clipId) return &source;
+    }
+    return nullptr;
 }
 
 ProjectProjectionError::ProjectProjectionError(std::string codeValue, std::string detail)
@@ -145,81 +144,30 @@ ProjectPreviewProjection projectPreviewForActiveTimeline(
         };
     }
 
-    struct OrderedClip final {
-        const palmier::project::Track* track;
-        const palmier::project::Clip* clip;
-        std::size_t trackIndex;
-        std::size_t clipIndex;
-    };
-    std::vector<OrderedClip> ordered;
-    for (std::size_t trackIndex = 0; trackIndex < activeTimeline->tracks.size(); ++trackIndex) {
+    std::optional<project_render::StaticVideoTimeline> renderTimeline;
+    try {
+        renderTimeline = project_render::compileStaticVideoTimeline(
+            document,
+            activeTimeline->id.value,
+            cancellation
+        );
+    } catch (const project_render::ProjectRenderCompileError& error) {
         checkCancellation(cancellation);
-        const auto& track = activeTimeline->tracks[trackIndex];
-        if (track.hidden || track.type != "video") continue;
-        for (std::size_t clipIndex = 0; clipIndex < track.clips.size(); ++clipIndex) {
-            checkCancellation(cancellation);
-            const auto& clip = track.clips[clipIndex];
-            if (clip.mediaType == "video") {
-                ordered.push_back({&track, &clip, trackIndex, clipIndex});
-            }
+        if (error.code == "noVisibleVideoSegments") {
+            return {PreviewCandidateAvailability::noCandidate, "noVideoCandidate", std::nullopt};
         }
-    }
-    std::stable_sort(ordered.begin(), ordered.end(), [](const auto& lhs, const auto& rhs) {
-        if (lhs.clip->startFrame != rhs.clip->startFrame) {
-            return lhs.clip->startFrame < rhs.clip->startFrame;
-        }
-        if (lhs.trackIndex != rhs.trackIndex) return lhs.trackIndex < rhs.trackIndex;
-        return lhs.clipIndex < rhs.clipIndex;
-    });
-    if (ordered.empty()) {
-        return {PreviewCandidateAvailability::noCandidate, "noVideoCandidate", std::nullopt};
+        return {PreviewCandidateAvailability::unsupported, error.code, std::nullopt};
     }
 
-    std::string firstReason = "mediaUnavailable";
-    PreviewCandidateAvailability firstAvailability = PreviewCandidateAvailability::offline;
-    for (const auto& value : ordered) {
+    std::vector<PreviewMediaSourceProjection> sources;
+    sources.reserve(renderTimeline->segments.size());
+    for (const auto& layer : renderTimeline->segments) {
         checkCancellation(cancellation);
-        const auto& track = *value.track;
-        const auto& clip = *value.clip;
-        if (
-            track.id.origin != palmier::project::EntityIdOrigin::persisted
-            || clip.id.origin != palmier::project::EntityIdOrigin::persisted
-        ) {
-            return {
-                PreviewCandidateAvailability::unsupported,
-                "unstableCandidateId",
-                std::nullopt,
-            };
-        }
-        if (!supportedClip(clip)) {
-            return {
-                PreviewCandidateAvailability::unsupported,
-                "unsupportedClipTiming",
-                std::nullopt,
-            };
-        }
-        std::optional<project_render::StaticVideoLayer> renderLayer;
-        try {
-            renderLayer = project_render::compileExclusiveStaticVideoLayer(
-                document,
-                activeTimeline->id.value,
-                track.id.value,
-                clip.id.value,
-                cancellation
-            );
-        } catch (const project_render::ProjectRenderCompileError& error) {
-            checkCancellation(cancellation);
-            return {
-                PreviewCandidateAvailability::unsupported,
-                error.code,
-                std::nullopt,
-            };
-        }
         std::optional<palmier::project::ResolvedProjectMediaReference> resolved;
         try {
             resolved = palmier::project::resolveProjectMediaReference(
                 *manifest,
-                clip.mediaRef,
+                layer.mediaId,
                 "video",
                 packagePath,
                 cancellation
@@ -229,9 +177,11 @@ ProjectPreviewProjection projectPreviewForActiveTimeline(
                 throw ProjectProjectionError("cancelled", error.what());
             }
             if (error.code == "mediaEntryMissing" || error.code == "mediaFileUnavailable") {
-                firstReason = error.code;
-                firstAvailability = PreviewCandidateAvailability::offline;
-                continue;
+                return {
+                    PreviewCandidateAvailability::offline,
+                    error.code,
+                    std::nullopt,
+                };
             }
             return {
                 PreviewCandidateAvailability::unsupported,
@@ -240,22 +190,27 @@ ProjectPreviewProjection projectPreviewForActiveTimeline(
             };
         }
         if (resolved->hasAudio == false) {
-            firstReason = "videoOnlyPlaybackUnsupported";
-            firstAvailability = PreviewCandidateAvailability::unsupported;
-            continue;
+            return {
+                PreviewCandidateAvailability::unsupported,
+                "videoOnlyPlaybackUnsupported",
+                std::nullopt,
+            };
         }
-        return {
-            PreviewCandidateAvailability::available,
-            {},
-            PreviewMediaCandidateProjection{
-                std::move(resolved->path),
-                std::move(*renderLayer),
-                resolved->hasAudio,
-                resolved->sourceKind,
-            },
-        };
+        sources.push_back({
+            std::move(resolved->path),
+            layer.clipId,
+            resolved->hasAudio,
+            resolved->sourceKind,
+        });
     }
-    return {firstAvailability, std::move(firstReason), std::nullopt};
+    return {
+        PreviewCandidateAvailability::available,
+        {},
+        PreviewMediaCandidateProjection{
+            std::move(*renderTimeline),
+            std::move(sources),
+        },
+    };
 }
 
 ProjectProjection projectDocumentForReadOnlyTimeline(

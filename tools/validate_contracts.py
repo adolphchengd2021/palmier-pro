@@ -2015,6 +2015,7 @@ def windows_render_plan_contract() -> None:
         '"overlappingVisibleLayer"',
         '"noVisibleVideoSegments"',
         "maximumStaticVideoTimelineSegments",
+        "std::set<std::string> clipIds",
         "std::stable_sort(ordered.begin(), ordered.end()",
         "staticVideoLayerAt(timeline, timelineFrame)",
         "render::RenderPlan::create(",
@@ -4451,9 +4452,10 @@ def windows_qt_read_only_shell_contract() -> None:
         "skippedUnsafeClipCount",
         "projectPreviewForActiveTimeline",
         "resolveProjectMediaReference",
-        "unstableCandidateId",
         "mediaFileUnavailable",
-        "compileExclusiveStaticVideoLayer",
+        "compileStaticVideoTimeline",
+        "sources.reserve(renderTimeline->segments.size())",
+        "sourceForClip",
     ]:
         if token not in projection:
             raise ContractError(f"Qt project projection missing token {token!r}")
@@ -4531,7 +4533,10 @@ def windows_qt_read_only_shell_contract() -> None:
         "malformedEarlierVisualCannotBeSkippedForLaterCandidate",
         "malformedVisualProperty",
         "trimmedTimingRemainsTheFirstPreviewCandidate",
-        "preview.candidate->renderLayer.sourceStartFrame",
+        "preview.candidate->renderTimeline.segments.front().sourceStartFrame",
+        "preview.candidate->sources.size()",
+        "unavailableScheduledSegmentRefusesWholePreview",
+        "mediaEntryMissing",
         "overlappingVisualLayerIsExplicitlyRefused",
         "overlappingVisibleLayer",
         "failurePreservesPreviousModel",
@@ -4698,6 +4703,7 @@ def windows_qt_preview_host_contract() -> None:
         "Qt preview host exclusions",
         contract.get("excluded"),
         [
+            "multi-segment playback, gap cadence, and A/V generation transition",
             "multi-layer timeline composition and VFR/source-rate conversion",
             "video-only steady-clock playback",
             "visible pixel and overlay correctness",
