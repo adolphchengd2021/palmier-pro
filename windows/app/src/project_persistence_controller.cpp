@@ -13,12 +13,22 @@ namespace palmier::windows {
 namespace {
 
 constexpr auto defaultAutosaveDelay = std::chrono::seconds{30};
+constexpr auto defaultRecoveryDelay = std::chrono::seconds{2};
 
 struct SaveResult final {
     std::optional<project::ProjectPackageWriteReceipt> receipt;
     std::optional<project::ProjectPackageIdentity> adoptedIdentity;
     QString errorCode;
     QString errorMessage;
+    QString recoveryWarningCode;
+    QString recoveryWarningMessage;
+};
+
+struct RecoveryResult final {
+    std::optional<project::ProjectRecoveryJournalWriteReceipt> receipt;
+    QString errorCode;
+    QString errorMessage;
+    bool cancelled{};
 };
 
 QThreadPool* projectSavePool() {
@@ -37,13 +47,13 @@ ProjectPersistenceController::ProjectPersistenceController(
     std::shared_ptr<project::ProjectRuntime> runtime,
     std::shared_ptr<ProjectRuntimeMailbox> runtimeMailbox,
     QObject* parent
-) : ProjectPersistenceController(
-    runtime,
-    std::move(runtimeMailbox),
-    project::writeProjectPackage,
-    defaultAutosaveDelay,
-    parent
-) {}
+) : QObject(parent),
+    runtime_(std::move(runtime)),
+    runtimeMailbox_(std::move(runtimeMailbox)),
+    writer_(project::writeProjectPackage) {
+    configureAutosave(defaultAutosaveDelay);
+    configureDefaultRecovery();
+}
 
 ProjectPersistenceController::ProjectPersistenceController(
     std::shared_ptr<project::ProjectRuntime> runtime,
@@ -55,6 +65,7 @@ ProjectPersistenceController::ProjectPersistenceController(
     runtimeMailbox_(std::move(runtimeMailbox)),
     packageService_(std::move(packageService)) {
     configureAutosave(defaultAutosaveDelay);
+    configureDefaultRecovery();
 }
 
 ProjectPersistenceController::ProjectPersistenceController(
@@ -82,8 +93,28 @@ ProjectPersistenceController::ProjectPersistenceController(
     configureAutosave(autosaveDelay);
 }
 
+ProjectPersistenceController::ProjectPersistenceController(
+    std::shared_ptr<project::ProjectRuntime> runtime,
+    std::shared_ptr<ProjectRuntimeMailbox> runtimeMailbox,
+    Writer writer,
+    RecoveryWriter recoveryWriter,
+    RecoveryRetirer recoveryRetirer,
+    std::chrono::milliseconds autosaveDelay,
+    std::chrono::milliseconds recoveryDelay,
+    QObject* parent
+) : QObject(parent),
+    runtime_(std::move(runtime)),
+    runtimeMailbox_(std::move(runtimeMailbox)),
+    writer_(std::move(writer)),
+    recoveryWriter_(std::move(recoveryWriter)),
+    recoveryRetirer_(std::move(recoveryRetirer)) {
+    configureAutosave(autosaveDelay);
+    configureRecovery(recoveryDelay);
+}
+
 ProjectPersistenceController::~ProjectPersistenceController() {
     stopAutosave();
+    stopRecovery(true);
     stopSource_.request_stop();
 }
 
@@ -92,6 +123,12 @@ bool ProjectPersistenceController::saving() const noexcept { return saving_; }
 bool ProjectPersistenceController::autosavePending() const noexcept {
     return autosavePending_;
 }
+bool ProjectPersistenceController::recoveryPending() const noexcept {
+    return recoveryPending_;
+}
+bool ProjectPersistenceController::recoveryWriting() const noexcept {
+    return recoveryWriting_;
+}
 bool ProjectPersistenceController::hasProject() const noexcept {
     return projectGeneration_ != 0 && !packagePath_.empty();
 }
@@ -99,6 +136,12 @@ QString ProjectPersistenceController::errorCode() const { return errorCode_; }
 QString ProjectPersistenceController::errorMessage() const { return errorMessage_; }
 QString ProjectPersistenceController::warningCode() const { return warningCode_; }
 QString ProjectPersistenceController::warningMessage() const { return warningMessage_; }
+QString ProjectPersistenceController::recoveryErrorCode() const {
+    return recoveryErrorCode_;
+}
+QString ProjectPersistenceController::recoveryErrorMessage() const {
+    return recoveryErrorMessage_;
+}
 bool ProjectPersistenceController::shutdownAdmitted() const noexcept {
     return shutdownRequested_;
 }
@@ -111,7 +154,10 @@ void ProjectPersistenceController::activateProject(
     const bool changed = generation != projectGeneration_ || packagePath != packagePath_;
     if (changed) {
         stopAutosave();
+        stopRecovery(true);
         lastPublicationToken_ = 0;
+        setRecoveryErrorCode({});
+        setRecoveryErrorMessage({});
     }
     projectGeneration_ = generation;
     packagePath_ = std::move(packagePath);
@@ -132,7 +178,10 @@ void ProjectPersistenceController::observeRuntimePublication(
     }
     lastPublicationToken_ = publication.token;
     setDirty(publication.session->dirty());
-    if (dirty_) scheduleAutosave();
+    if (dirty_) {
+        scheduleRecovery();
+        scheduleAutosave();
+    }
 }
 
 void ProjectPersistenceController::save() {
@@ -164,6 +213,7 @@ void ProjectPersistenceController::startSave(
         return;
     }
     stopAutosave();
+    stopRecovery(true);
     if (!destination && !dirty_) {
         setErrorCode({});
         setErrorMessage({});
@@ -196,6 +246,8 @@ void ProjectPersistenceController::startSave(
         if (succeeded) {
             setErrorCode({});
             setErrorMessage({});
+            setRecoveryErrorCode(result.recoveryWarningCode);
+            setRecoveryErrorMessage(result.recoveryWarningMessage);
             if (!result.receipt->runtimeAcknowledged) {
                 setWarningCode(QStringLiteral("saveCommittedRuntimeNotAcknowledged"));
                 setWarningMessage(QStringLiteral(
@@ -221,21 +273,50 @@ void ProjectPersistenceController::startSave(
             setErrorMessage(std::move(result.errorMessage));
         }
         emit saveFinished(succeeded);
-        if (shutdownRequested_) {
+        if (shutdownRequested_ && !recoveryWriting_) {
             emit shutdownReady();
-        } else if (dirty_ && lastPublicationToken_ > admittedPublicationToken) {
-            scheduleAutosave();
+        } else if (dirty_) {
+            if (!succeeded || lastPublicationToken_ > admittedPublicationToken) {
+                scheduleRecovery();
+            }
+            if (lastPublicationToken_ > admittedPublicationToken) {
+                scheduleAutosave();
+            }
         }
     });
     watcher->setFuture(QtConcurrent::run(projectSavePool(), [
         runtime,
         writer,
         packageService,
+        recoveryRetirer = recoveryRetirer_,
         path,
         generation,
         destination = std::move(destination),
         cancellation
     ] {
+        const auto retireRecovery = [&](SaveResult result) {
+            if (!result.receipt || !recoveryRetirer) return result;
+            try {
+                static_cast<void>(recoveryRetirer(
+                    path,
+                    generation,
+                    result.receipt->revision,
+                    {}
+                ));
+            } catch (const project::ProjectRecoveryJournalError& error) {
+                result.recoveryWarningCode = QStringLiteral("recoveryRetirementFailed");
+                result.recoveryWarningMessage = QString::fromUtf8(error.what());
+            } catch (const std::exception& error) {
+                result.recoveryWarningCode = QStringLiteral("recoveryRetirementFailed");
+                result.recoveryWarningMessage = QString::fromUtf8(error.what());
+            } catch (...) {
+                result.recoveryWarningCode = QStringLiteral("recoveryRetirementFailed");
+                result.recoveryWarningMessage = QStringLiteral(
+                    "The saved project recovery state could not be retired."
+                );
+            }
+            return result;
+        };
         try {
             if (packageService) {
                 if (destination) {
@@ -245,19 +326,19 @@ void ProjectPersistenceController::startSave(
                         generation,
                         cancellation
                     );
-                    return SaveResult{
+                    return retireRecovery(SaveResult{
                         std::move(result.write),
                         std::move(result.identity),
                         {},
                         {},
-                    };
+                    });
                 }
-                return SaveResult{
+                return retireRecovery(SaveResult{
                     packageService->save(*runtime, generation, cancellation),
                     std::nullopt,
                     {},
                     {},
-                };
+                });
             }
             if (destination) {
                 return SaveResult{
@@ -267,12 +348,12 @@ void ProjectPersistenceController::startSave(
                     QStringLiteral("Save As is unavailable for this project session."),
                 };
             }
-            return SaveResult{
+            return retireRecovery(SaveResult{
                 writer(*runtime, path, generation, cancellation),
                 std::nullopt,
                 {},
                 {},
-            };
+            });
         } catch (const project::ProjectPackageServiceError& error) {
             return SaveResult{
                 std::nullopt,
@@ -313,7 +394,7 @@ void ProjectPersistenceController::startSave(
 }
 
 bool ProjectPersistenceController::requestShutdown(bool discardUnsavedChanges) {
-    if (shutdownRequested_) return !saving_;
+    if (shutdownRequested_) return !saving_ && !recoveryWriting_;
     refreshFromMailbox();
     if (dirty_ && !discardUnsavedChanges) {
         setErrorCode(QStringLiteral("unsavedChanges"));
@@ -322,7 +403,8 @@ bool ProjectPersistenceController::requestShutdown(bool discardUnsavedChanges) {
     }
     shutdownRequested_ = true;
     stopAutosave();
-    return !saving_;
+    stopRecovery(true);
+    return !saving_ && !recoveryWriting_;
 }
 
 void ProjectPersistenceController::refreshFromMailbox() {
@@ -348,7 +430,10 @@ void ProjectPersistenceController::refreshFromMailbox() {
 void ProjectPersistenceController::setDirty(bool value) {
     if (dirty_ == value) return;
     dirty_ = value;
-    if (!dirty_) stopAutosave();
+    if (!dirty_) {
+        stopAutosave();
+        stopRecovery(true);
+    }
     emit dirtyChanged();
 }
 
@@ -362,6 +447,18 @@ void ProjectPersistenceController::setAutosavePending(bool value) {
     if (autosavePending_ == value) return;
     autosavePending_ = value;
     emit autosavePendingChanged();
+}
+
+void ProjectPersistenceController::setRecoveryPending(bool value) {
+    if (recoveryPending_ == value) return;
+    recoveryPending_ = value;
+    emit recoveryPendingChanged();
+}
+
+void ProjectPersistenceController::setRecoveryWriting(bool value) {
+    if (recoveryWriting_ == value) return;
+    recoveryWriting_ = value;
+    emit recoveryWritingChanged();
 }
 
 void ProjectPersistenceController::configureAutosave(
@@ -380,6 +477,43 @@ void ProjectPersistenceController::configureAutosave(
     });
 }
 
+void ProjectPersistenceController::configureRecovery(
+    std::chrono::milliseconds delay
+) {
+    const auto bounded = std::clamp<std::int64_t>(
+        delay.count(),
+        0,
+        (std::numeric_limits<int>::max)()
+    );
+    recoveryTimer_.setSingleShot(true);
+    recoveryTimer_.setInterval(static_cast<int>(bounded));
+    connect(&recoveryTimer_, &QTimer::timeout, this, [this] {
+        setRecoveryPending(false);
+        startRecovery();
+    });
+}
+
+void ProjectPersistenceController::configureDefaultRecovery() {
+    auto journal = std::make_shared<project::ProjectRecoveryJournal>();
+    recoveryWriter_ = [journal](
+        project::ProjectRuntime& runtime,
+        const std::filesystem::path& packagePath,
+        std::optional<std::uint64_t> generation,
+        std::stop_token cancellation
+    ) {
+        return journal->write(runtime, packagePath, generation, cancellation);
+    };
+    recoveryRetirer_ = [journal](
+        const std::filesystem::path& packagePath,
+        std::uint64_t generation,
+        std::uint64_t revision,
+        std::stop_token cancellation
+    ) {
+        return journal->retire(packagePath, generation, revision, cancellation);
+    };
+    configureRecovery(defaultRecoveryDelay);
+}
+
 void ProjectPersistenceController::scheduleAutosave() {
     if (shutdownRequested_ || saving_ || !hasProject() || !dirty_) return;
     const bool wasPending = autosavePending_;
@@ -390,6 +524,128 @@ void ProjectPersistenceController::scheduleAutosave() {
 void ProjectPersistenceController::stopAutosave() {
     if (autosaveTimer_.isActive()) autosaveTimer_.stop();
     setAutosavePending(false);
+}
+
+void ProjectPersistenceController::scheduleRecovery() {
+    if (
+        !recoveryWriter_
+        || shutdownRequested_
+        || saving_
+        || !hasProject()
+        || !dirty_
+    ) {
+        return;
+    }
+    if (recoveryWriting_) {
+        recoveryFollowUpRequested_ = true;
+        return;
+    }
+    const bool wasPending = recoveryPending_;
+    recoveryTimer_.start();
+    if (!wasPending) setRecoveryPending(true);
+}
+
+void ProjectPersistenceController::stopRecovery(bool cancelActive) {
+    if (recoveryTimer_.isActive()) recoveryTimer_.stop();
+    setRecoveryPending(false);
+    recoveryFollowUpRequested_ = false;
+    if (cancelActive && recoveryWriting_) recoveryStopSource_.request_stop();
+}
+
+void ProjectPersistenceController::startRecovery() {
+    if (
+        !recoveryWriter_
+        || shutdownRequested_
+        || saving_
+        || recoveryWriting_
+        || !hasProject()
+        || !dirty_
+    ) {
+        return;
+    }
+    setRecoveryErrorCode({});
+    setRecoveryErrorMessage({});
+    recoveryFollowUpRequested_ = false;
+    setRecoveryWriting(true);
+    recoveryPublicationToken_ = lastPublicationToken_;
+    recoveryStopSource_ = std::stop_source{};
+    const auto cancellation = recoveryStopSource_.get_token();
+    const auto runtime = runtime_;
+    const auto writer = recoveryWriter_;
+    const auto path = packagePath_;
+    const auto generation = projectGeneration_;
+    auto* watcher = new QFutureWatcher<RecoveryResult>(this);
+    connect(watcher, &QFutureWatcher<RecoveryResult>::finished, this, [this, watcher] {
+        const auto admittedPublicationToken = recoveryPublicationToken_;
+        auto result = watcher->future().takeResult();
+        watcher->deleteLater();
+        setRecoveryWriting(false);
+        const bool followUpRequested = recoveryFollowUpRequested_;
+        recoveryFollowUpRequested_ = false;
+        refreshFromMailbox();
+        const bool succeeded = result.receipt.has_value();
+        if (succeeded) {
+            setRecoveryErrorCode({});
+            setRecoveryErrorMessage({});
+        } else if (!result.cancelled) {
+            setRecoveryErrorCode(std::move(result.errorCode));
+            setRecoveryErrorMessage(std::move(result.errorMessage));
+        }
+        emit recoveryFinished(succeeded);
+        if (shutdownRequested_ && !saving_) {
+            emit shutdownReady();
+        } else if (
+            dirty_
+            && (followUpRequested || lastPublicationToken_ > admittedPublicationToken)
+        ) {
+            scheduleRecovery();
+        }
+    });
+    watcher->setFuture(QtConcurrent::run(projectSavePool(), [
+        runtime,
+        writer,
+        path,
+        generation,
+        cancellation
+    ] {
+        try {
+            return RecoveryResult{
+                writer(*runtime, path, generation, cancellation),
+                {},
+                {},
+                false,
+            };
+        } catch (const project::ProjectRecoveryJournalError& error) {
+            const bool cancelled = error.code == "cancelled" || error.code == "projectClean";
+            return RecoveryResult{
+                std::nullopt,
+                QString::fromStdString(error.code),
+                QString::fromUtf8(error.what()),
+                cancelled,
+            };
+        } catch (const project::ProjectRuntimeError& error) {
+            return RecoveryResult{
+                std::nullopt,
+                QString::fromStdString(error.code),
+                QString::fromUtf8(error.what()),
+                cancellation.stop_requested(),
+            };
+        } catch (const std::exception& error) {
+            return RecoveryResult{
+                std::nullopt,
+                QStringLiteral("recoveryWriteFailed"),
+                QString::fromUtf8(error.what()),
+                cancellation.stop_requested(),
+            };
+        } catch (...) {
+            return RecoveryResult{
+                std::nullopt,
+                QStringLiteral("recoveryWriteFailed"),
+                QStringLiteral("Project recovery state could not be written."),
+                cancellation.stop_requested(),
+            };
+        }
+    }));
 }
 
 void ProjectPersistenceController::setErrorCode(QString value) {
@@ -414,6 +670,18 @@ void ProjectPersistenceController::setWarningMessage(QString value) {
     if (warningMessage_ == value) return;
     warningMessage_ = std::move(value);
     emit warningMessageChanged();
+}
+
+void ProjectPersistenceController::setRecoveryErrorCode(QString value) {
+    if (recoveryErrorCode_ == value) return;
+    recoveryErrorCode_ = std::move(value);
+    emit recoveryErrorCodeChanged();
+}
+
+void ProjectPersistenceController::setRecoveryErrorMessage(QString value) {
+    if (recoveryErrorMessage_ == value) return;
+    recoveryErrorMessage_ = std::move(value);
+    emit recoveryErrorMessageChanged();
 }
 
 }

@@ -50,7 +50,8 @@ ApplicationWindow {
                 discardUnsavedChanges
             )
             if (!persistenceShutdownReady) {
-                if (persistenceCoordinator.dirty) unsavedChangesDialog.open()
+                if (persistenceCoordinator.dirty
+                        && !discardUnsavedChanges) unsavedChangesDialog.open()
                 return
             }
             projectShutdownReady = projectCoordinator.requestShutdown()
@@ -309,6 +310,8 @@ ApplicationWindow {
                     ? qsTr("Opening…")
                     : persistenceCoordinator.saving
                         ? qsTr("Saving…")
+                        : persistenceCoordinator.recoveryWriting
+                            ? qsTr("Protecting Edits…")
                         : persistenceCoordinator.dirty
                             ? qsTr("Edited")
                             : qsTr("Saved")
@@ -533,6 +536,14 @@ ApplicationWindow {
             objectName: "saveWarningState"
             visible: persistenceCoordinator.warningMessage.length > 0
             text: persistenceCoordinator.warningMessage
+            color: AppTheme.warningText
+            wrapMode: Text.Wrap
+        }
+
+        Label {
+            objectName: "recoveryErrorState"
+            visible: persistenceCoordinator.recoveryErrorMessage.length > 0
+            text: persistenceCoordinator.recoveryErrorMessage
             color: AppTheme.warningText
             wrapMode: Text.Wrap
         }

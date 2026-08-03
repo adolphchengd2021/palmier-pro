@@ -169,6 +169,30 @@ if(BUILD_TESTING)
         persistenceManualSaveAndShutdownSupersedeAutosave
     )
     add_palmier_qt_shell_test(
+        persistence_recovery_coalesces_dirty_publications
+        persistenceRecoveryCoalescesDirtyPublications
+    )
+    add_palmier_qt_shell_test(
+        persistence_recovery_failure_waits_for_newer_publication
+        persistenceRecoveryFailureWaitsForNewerPublication
+    )
+    add_palmier_qt_shell_test(
+        persistence_save_cancels_recovery_and_retires
+        persistenceSaveCancelsRecoveryAndRetiresCommittedRevision
+    )
+    add_palmier_qt_shell_test(
+        persistence_failed_save_restores_recovery
+        persistenceFailedSaveRestoresRecoveryProtection
+    )
+    add_palmier_qt_shell_test(
+        persistence_retirement_failure_preserves_save
+        persistenceRetirementFailureDoesNotFailCommittedSave
+    )
+    add_palmier_qt_shell_test(
+        persistence_shutdown_cancels_and_drains_recovery
+        persistenceShutdownCancelsAndDrainsRecovery
+    )
+    add_palmier_qt_shell_test(
         persistence_committed_warning
         persistenceCommittedWarningRemainsObservable
     )

@@ -46,8 +46,18 @@
     "ordering": "journal revision must not be newer than the committed revision",
     "deletion": "deletes the validated open file handle, never an unchecked path target"
   },
+  "qtIntegration": {
+    "owner": "ProjectPersistenceController",
+    "dirtyDebounceMilliseconds": 2000,
+    "executor": "the existing process-lifetime serial project persistence pool",
+    "autosavePolicy": "the 30-second package autosave remains independent",
+    "supersession": "Save and Save As cancel pending or admitted recovery writes before queueing package persistence",
+    "saveFailure": "a failed Save re-arms recovery protection for the unchanged dirty state without re-arming package autosave",
+    "recoveryFailure": "an unchanged failed recovery write remains terminal until a newer runtime publication",
+    "saveSuccess": "retire the old package identity using the committed generation and revision before reporting completion",
+    "shutdown": "cancel and drain admitted recovery work together with any admitted Save"
+  },
   "excluded": [
-    "Qt scheduling",
     "automatic recovery application",
     "recovery choice UI",
     "media payload journaling",

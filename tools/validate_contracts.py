@@ -1761,6 +1761,16 @@ def windows_project_reader_contract() -> None:
         recovery_contract["inspection"]["staleBaseline"],
         "candidate metadata is returned but the payload must not be applied automatically",
     )
+    require_equal(
+        "project recovery Qt owner",
+        recovery_contract["qtIntegration"]["owner"],
+        "ProjectPersistenceController",
+    )
+    require_equal(
+        "project recovery Qt debounce",
+        recovery_contract["qtIntegration"]["dirtyDebounceMilliseconds"],
+        2000,
+    )
     recovery_header = read_text(
         "windows/project-package/include/palmier/project/project_recovery_journal.hpp"
     )
@@ -1772,6 +1782,9 @@ def windows_project_reader_contract() -> None:
     )
     recovery_adr = read_text(
         "docs/windows/adr/0047-bounded-project-recovery-journal.md"
+    )
+    recovery_integration_adr = read_text(
+        "docs/windows/adr/0048-schedule-and-retire-project-recovery.md"
     )
     for token in [
         "ProjectRecoveryJournalStatus",
@@ -1822,6 +1835,63 @@ def windows_project_reader_contract() -> None:
     ]:
         if token not in recovery_adr:
             raise ContractError(f"project recovery ADR missing token {token!r}")
+
+    recovery_qt_header = read_text(
+        "windows/app/include/palmier/windows/project_persistence_controller.hpp"
+    )
+    recovery_qt_source = read_text(
+        "windows/app/src/project_persistence_controller.cpp"
+    )
+    recovery_qt_tests = read_text("windows/app/tests/qt_shell_tests.cpp")
+    recovery_qml = read_text("windows/app/qml/Main.qml")
+    recovery_readme = read_text("docs/windows/README.md")
+    for token in [
+        "recoveryPending",
+        "recoveryWriting",
+        "RecoveryWriter",
+        "RecoveryRetirer",
+        "recoveryFinished",
+        "recoveryErrorCode",
+    ]:
+        if token not in recovery_qt_header:
+            raise ContractError(f"Qt recovery controller missing token {token!r}")
+    for token in [
+        "defaultRecoveryDelay = std::chrono::seconds{2}",
+        "projectSavePool()",
+        "scheduleRecovery()",
+        "recoveryFollowUpRequested_",
+        "stopRecovery(true)",
+        "recoveryRetirer(",
+        "!succeeded || lastPublicationToken_ > admittedPublicationToken",
+        "shutdownRequested_ && !saving_",
+    ]:
+        if token not in recovery_qt_source:
+            raise ContractError(f"Qt recovery implementation missing token {token!r}")
+    for token in [
+        "persistenceRecoveryCoalescesDirtyPublications",
+        "persistenceRecoveryFailureWaitsForNewerPublication",
+        "persistenceSaveCancelsRecoveryAndRetiresCommittedRevision",
+        "persistenceFailedSaveRestoresRecoveryProtection",
+        "persistenceRetirementFailureDoesNotFailCommittedSave",
+        "persistenceShutdownCancelsAndDrainsRecovery",
+    ]:
+        if token not in recovery_qt_tests:
+            raise ContractError(f"Qt recovery test missing token {token!r}")
+    for token in ["Protecting Edits", "recoveryErrorMessage", "discardUnsavedChanges"]:
+        if token not in recovery_qml:
+            raise ContractError(f"Qt recovery UI state missing token {token!r}")
+    for token in [
+        "process-lifetime serial persistence pool",
+        "2-second recovery timer",
+        "recovery re-arming",
+        "last finishing operation",
+        "Startup inspection",
+    ]:
+        if token not in recovery_integration_adr:
+            raise ContractError(f"Qt recovery ADR missing token {token!r}")
+    for token in ["ADR 0047", "ADR 0048", "failed Saves restore recovery protection"]:
+        if token not in recovery_readme:
+            raise ContractError(f"Windows README missing Qt recovery token {token!r}")
 
     qt_persistence_header = read_text(
         "windows/app/include/palmier/windows/project_persistence_controller.hpp"

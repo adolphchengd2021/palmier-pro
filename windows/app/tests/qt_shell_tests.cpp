@@ -194,6 +194,22 @@ struct PersistenceRuntimeFixture final {
     std::shared_ptr<palmier::project::ProjectRuntime> runtime;
 };
 
+palmier::project::ProjectRecoveryJournalWriteReceipt recoveryReceipt(
+    palmier::project::ProjectRuntime& runtime,
+    const std::filesystem::path& packagePath,
+    std::optional<std::uint64_t> generation
+) {
+    const auto snapshot = runtime.saveSnapshot(generation);
+    return {
+        packagePath / L"recovery.json",
+        snapshot.projectGeneration,
+        snapshot.snapshot.revision,
+        snapshot.snapshot.stateId,
+        1,
+        2,
+    };
+}
+
 class QtShellTests final : public QObject {
     Q_OBJECT
 
@@ -910,6 +926,358 @@ private slots:
         QVERIFY(persistence.requestShutdown(true));
         QVERIFY(!persistence.autosavePending());
         QCOMPARE(attempts.load(std::memory_order_relaxed), 1);
+    }
+
+    void persistenceRecoveryCoalescesDirtyPublications() {
+        PersistenceRuntimeFixture fixture{20, "recovery-coalesce"};
+        std::atomic<int> attempts{};
+        QThread* recoveryThread{};
+        palmier::windows::ProjectPersistenceController persistence(
+            fixture.runtime,
+            fixture.mailbox,
+            {},
+            [&attempts, &recoveryThread](
+                palmier::project::ProjectRuntime& runtime,
+                const std::filesystem::path& packagePath,
+                std::optional<std::uint64_t> generation,
+                std::stop_token
+            ) {
+                attempts.fetch_add(1, std::memory_order_relaxed);
+                recoveryThread = QThread::currentThread();
+                return recoveryReceipt(runtime, packagePath, generation);
+            },
+            {},
+            std::chrono::hours{1},
+            std::chrono::milliseconds{0},
+            nullptr
+        );
+        fixture.activate(persistence, L"C:/recovery-coalesce.palmier");
+        QSignalSpy recoveryFinished(
+            &persistence,
+            &palmier::windows::ProjectPersistenceController::recoveryFinished
+        );
+
+        fixture.splitAndPublish(persistence);
+        fixture.setDurationAndPublish(persistence, 8);
+
+        QVERIFY(persistence.recoveryPending());
+        QTRY_COMPARE_WITH_TIMEOUT(recoveryFinished.count(), 1, 5000);
+        QCOMPARE(recoveryFinished.front().front().toBool(), true);
+        QCOMPARE(attempts.load(std::memory_order_relaxed), 1);
+        QVERIFY(recoveryThread != QThread::currentThread());
+        QVERIFY(!persistence.recoveryPending());
+        QVERIFY(!persistence.recoveryWriting());
+        QVERIFY(persistence.dirty());
+        QVERIFY(persistence.recoveryErrorCode().isEmpty());
+    }
+
+    void persistenceRecoveryFailureWaitsForNewerPublication() {
+        PersistenceRuntimeFixture fixture{21, "recovery-retry"};
+        std::atomic<int> attempts{};
+        palmier::windows::ProjectPersistenceController persistence(
+            fixture.runtime,
+            fixture.mailbox,
+            {},
+            [&attempts](
+                palmier::project::ProjectRuntime& runtime,
+                const std::filesystem::path& packagePath,
+                std::optional<std::uint64_t> generation,
+                std::stop_token
+            ) {
+                const auto attempt = attempts.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (attempt == 1) {
+                    throw palmier::project::ProjectRecoveryJournalError(
+                        "recoveryFailed",
+                        "testRecovery",
+                        "injected recovery failure"
+                    );
+                }
+                return recoveryReceipt(runtime, packagePath, generation);
+            },
+            {},
+            std::chrono::hours{1},
+            std::chrono::milliseconds{0},
+            nullptr
+        );
+        fixture.activate(persistence, L"C:/recovery-retry.palmier");
+        QSignalSpy recoveryFinished(
+            &persistence,
+            &palmier::windows::ProjectPersistenceController::recoveryFinished
+        );
+
+        fixture.splitAndPublish(persistence);
+        QTRY_COMPARE_WITH_TIMEOUT(recoveryFinished.count(), 1, 5000);
+        QCOMPARE(recoveryFinished.front().front().toBool(), false);
+        QCOMPARE(attempts.load(std::memory_order_relaxed), 1);
+        QVERIFY(!persistence.recoveryPending());
+        QCOMPARE(persistence.recoveryErrorCode(), QStringLiteral("recoveryFailed"));
+
+        fixture.setDurationAndPublish(persistence, 8);
+        QTRY_COMPARE_WITH_TIMEOUT(recoveryFinished.count(), 2, 5000);
+        QCOMPARE(recoveryFinished.last().front().toBool(), true);
+        QCOMPARE(attempts.load(std::memory_order_relaxed), 2);
+        QVERIFY(persistence.recoveryErrorCode().isEmpty());
+    }
+
+    void persistenceSaveCancelsRecoveryAndRetiresCommittedRevision() {
+        PersistenceRuntimeFixture fixture{22, "recovery-save"};
+        QSemaphore recoveryEntered;
+        std::atomic<int> retireAttempts{};
+        std::atomic<std::uint64_t> retiredGeneration{};
+        std::atomic<std::uint64_t> retiredRevision{};
+        palmier::windows::ProjectPersistenceController persistence(
+            fixture.runtime,
+            fixture.mailbox,
+            [](
+                palmier::project::ProjectRuntime& runtime,
+                const std::filesystem::path&,
+                std::optional<std::uint64_t> generation,
+                std::stop_token
+            ) {
+                const auto snapshot = runtime.saveSnapshot(generation);
+                const auto acknowledged = runtime.markPersisted(
+                    snapshot.snapshot.stateId,
+                    generation
+                );
+                return palmier::project::ProjectPackageWriteReceipt{
+                    snapshot.projectGeneration,
+                    snapshot.snapshot.revision,
+                    snapshot.snapshot.stateId,
+                    1,
+                    true,
+                    acknowledged.session->dirty(),
+                    palmier::project::ProjectPackageWriteWarning::none,
+                };
+            },
+            [&recoveryEntered](
+                palmier::project::ProjectRuntime&,
+                const std::filesystem::path&,
+                std::optional<std::uint64_t>,
+                std::stop_token cancellation
+            ) -> palmier::project::ProjectRecoveryJournalWriteReceipt {
+                recoveryEntered.release();
+                waitForCancellation(cancellation);
+                throw palmier::project::ProjectRecoveryJournalError(
+                    "cancelled",
+                    "testRecovery",
+                    "injected recovery cancellation"
+                );
+            },
+            [&retireAttempts, &retiredGeneration, &retiredRevision](
+                const std::filesystem::path&,
+                std::uint64_t generation,
+                std::uint64_t revision,
+                std::stop_token
+            ) {
+                retireAttempts.fetch_add(1, std::memory_order_relaxed);
+                retiredGeneration.store(generation, std::memory_order_relaxed);
+                retiredRevision.store(revision, std::memory_order_relaxed);
+                return true;
+            },
+            std::chrono::hours{1},
+            std::chrono::milliseconds{0},
+            nullptr
+        );
+        fixture.activate(persistence, L"C:/recovery-save.palmier");
+        QSignalSpy recoveryFinished(
+            &persistence,
+            &palmier::windows::ProjectPersistenceController::recoveryFinished
+        );
+        QSignalSpy saveFinished(
+            &persistence,
+            &palmier::windows::ProjectPersistenceController::saveFinished
+        );
+
+        fixture.splitAndPublish(persistence);
+        QTRY_COMPARE_WITH_TIMEOUT(recoveryEntered.available(), 1, 5000);
+        persistence.save();
+
+        QTRY_COMPARE_WITH_TIMEOUT(recoveryFinished.count(), 1, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(saveFinished.count(), 1, 5000);
+        QCOMPARE(recoveryFinished.front().front().toBool(), false);
+        QCOMPARE(saveFinished.front().front().toBool(), true);
+        QCOMPARE(retireAttempts.load(std::memory_order_relaxed), 1);
+        QCOMPARE(retiredGeneration.load(std::memory_order_relaxed), fixture.generation);
+        QCOMPARE(retiredRevision.load(std::memory_order_relaxed), std::uint64_t{1});
+        QVERIFY(!persistence.dirty());
+        QVERIFY(persistence.recoveryErrorCode().isEmpty());
+    }
+
+    void persistenceFailedSaveRestoresRecoveryProtection() {
+        PersistenceRuntimeFixture fixture{24, "recovery-save-failure"};
+        QSemaphore firstRecoveryEntered;
+        std::atomic<int> recoveryAttempts{};
+        palmier::windows::ProjectPersistenceController persistence(
+            fixture.runtime,
+            fixture.mailbox,
+            [](
+                palmier::project::ProjectRuntime&,
+                const std::filesystem::path&,
+                std::optional<std::uint64_t>,
+                std::stop_token
+            ) -> palmier::project::ProjectPackageWriteReceipt {
+                throw palmier::project::ProjectPackageWriteError(
+                    "writeFailed",
+                    "testSave",
+                    "injected save failure"
+                );
+            },
+            [&firstRecoveryEntered, &recoveryAttempts](
+                palmier::project::ProjectRuntime& runtime,
+                const std::filesystem::path& packagePath,
+                std::optional<std::uint64_t> generation,
+                std::stop_token cancellation
+            ) {
+                const auto attempt = recoveryAttempts.fetch_add(
+                    1,
+                    std::memory_order_relaxed
+                ) + 1;
+                if (attempt == 1) {
+                    firstRecoveryEntered.release();
+                    waitForCancellation(cancellation);
+                    throw palmier::project::ProjectRecoveryJournalError(
+                        "cancelled",
+                        "testRecovery",
+                        "injected recovery cancellation"
+                    );
+                }
+                return recoveryReceipt(runtime, packagePath, generation);
+            },
+            {},
+            std::chrono::hours{1},
+            std::chrono::milliseconds{0},
+            nullptr
+        );
+        fixture.activate(persistence, L"C:/recovery-save-failure.palmier");
+        QSignalSpy recoveryFinished(
+            &persistence,
+            &palmier::windows::ProjectPersistenceController::recoveryFinished
+        );
+        QSignalSpy saveFinished(
+            &persistence,
+            &palmier::windows::ProjectPersistenceController::saveFinished
+        );
+
+        fixture.splitAndPublish(persistence);
+        QTRY_COMPARE_WITH_TIMEOUT(firstRecoveryEntered.available(), 1, 5000);
+        persistence.save();
+
+        QTRY_COMPARE_WITH_TIMEOUT(saveFinished.count(), 1, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(recoveryFinished.count(), 2, 5000);
+        QCOMPARE(saveFinished.front().front().toBool(), false);
+        QCOMPARE(recoveryFinished.last().front().toBool(), true);
+        QCOMPARE(recoveryAttempts.load(std::memory_order_relaxed), 2);
+        QCOMPARE(persistence.errorCode(), QStringLiteral("writeFailed"));
+        QVERIFY(persistence.dirty());
+        QVERIFY(persistence.recoveryErrorCode().isEmpty());
+    }
+
+    void persistenceRetirementFailureDoesNotFailCommittedSave() {
+        PersistenceRuntimeFixture fixture{25, "recovery-retire-failure"};
+        palmier::windows::ProjectPersistenceController persistence(
+            fixture.runtime,
+            fixture.mailbox,
+            [](
+                palmier::project::ProjectRuntime& runtime,
+                const std::filesystem::path&,
+                std::optional<std::uint64_t> generation,
+                std::stop_token
+            ) {
+                const auto snapshot = runtime.saveSnapshot(generation);
+                const auto acknowledged = runtime.markPersisted(
+                    snapshot.snapshot.stateId,
+                    generation
+                );
+                return palmier::project::ProjectPackageWriteReceipt{
+                    snapshot.projectGeneration,
+                    snapshot.snapshot.revision,
+                    snapshot.snapshot.stateId,
+                    1,
+                    true,
+                    acknowledged.session->dirty(),
+                    palmier::project::ProjectPackageWriteWarning::none,
+                };
+            },
+            {},
+            [](
+                const std::filesystem::path&,
+                std::uint64_t,
+                std::uint64_t,
+                std::stop_token
+            ) -> bool {
+                throw palmier::project::ProjectRecoveryJournalError(
+                    "retireFailed",
+                    "testRetirement",
+                    "injected retirement failure"
+                );
+            },
+            std::chrono::hours{1},
+            std::chrono::hours{1},
+            nullptr
+        );
+        fixture.activate(persistence, L"C:/recovery-retire-failure.palmier");
+        QSignalSpy saveFinished(
+            &persistence,
+            &palmier::windows::ProjectPersistenceController::saveFinished
+        );
+
+        fixture.splitAndPublish(persistence);
+        persistence.save();
+
+        QTRY_COMPARE_WITH_TIMEOUT(saveFinished.count(), 1, 5000);
+        QCOMPARE(saveFinished.front().front().toBool(), true);
+        QVERIFY(!persistence.dirty());
+        QCOMPARE(
+            persistence.recoveryErrorCode(),
+            QStringLiteral("recoveryRetirementFailed")
+        );
+        QVERIFY(!persistence.recoveryErrorMessage().isEmpty());
+    }
+
+    void persistenceShutdownCancelsAndDrainsRecovery() {
+        PersistenceRuntimeFixture fixture{23, "recovery-shutdown"};
+        QSemaphore recoveryEntered;
+        palmier::windows::ProjectPersistenceController persistence(
+            fixture.runtime,
+            fixture.mailbox,
+            {},
+            [&recoveryEntered](
+                palmier::project::ProjectRuntime&,
+                const std::filesystem::path&,
+                std::optional<std::uint64_t>,
+                std::stop_token cancellation
+            ) -> palmier::project::ProjectRecoveryJournalWriteReceipt {
+                recoveryEntered.release();
+                waitForCancellation(cancellation);
+                throw palmier::project::ProjectRecoveryJournalError(
+                    "cancelled",
+                    "testRecovery",
+                    "injected recovery cancellation"
+                );
+            },
+            {},
+            std::chrono::hours{1},
+            std::chrono::milliseconds{0},
+            nullptr
+        );
+        fixture.activate(persistence, L"C:/recovery-shutdown.palmier");
+        QSignalSpy recoveryFinished(
+            &persistence,
+            &palmier::windows::ProjectPersistenceController::recoveryFinished
+        );
+        QSignalSpy shutdownReady(
+            &persistence,
+            &palmier::windows::ProjectPersistenceController::shutdownReady
+        );
+
+        fixture.splitAndPublish(persistence);
+        QTRY_COMPARE_WITH_TIMEOUT(recoveryEntered.available(), 1, 5000);
+        QVERIFY(!persistence.requestShutdown(true));
+        QTRY_COMPARE_WITH_TIMEOUT(recoveryFinished.count(), 1, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(shutdownReady.count(), 1, 5000);
+        QVERIFY(!persistence.recoveryPending());
+        QVERIFY(!persistence.recoveryWriting());
+        QVERIFY(persistence.shutdownAdmitted());
     }
 
     void persistenceCommittedWarningRemainsObservable_data() {
