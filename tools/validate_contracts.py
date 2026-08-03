@@ -1771,6 +1771,11 @@ def windows_project_reader_contract() -> None:
         recovery_contract["qtIntegration"]["dirtyDebounceMilliseconds"],
         2000,
     )
+    require_equal(
+        "project recovery session entry point",
+        recovery_contract["sessionInstallation"]["entryPoint"],
+        "ProjectRuntime.installRecovered",
+    )
     recovery_header = read_text(
         "windows/project-package/include/palmier/project/project_recovery_journal.hpp"
     )
@@ -1785,6 +1790,9 @@ def windows_project_reader_contract() -> None:
     )
     recovery_integration_adr = read_text(
         "docs/windows/adr/0048-schedule-and-retire-project-recovery.md"
+    )
+    recovery_session_adr = read_text(
+        "docs/windows/adr/0049-install-recovered-project-session.md"
     )
     for token in [
         "ProjectRecoveryJournalStatus",
@@ -1892,6 +1900,63 @@ def windows_project_reader_contract() -> None:
     for token in ["ADR 0047", "ADR 0048", "failed Saves restore recovery protection"]:
         if token not in recovery_readme:
             raise ContractError(f"Windows README missing Qt recovery token {token!r}")
+
+    recovery_session_header = read_text(
+        "core/project-session/include/palmier/project/project_session.hpp"
+    )
+    recovery_session_source = read_text("core/project-session/project_session.cpp")
+    recovery_session_tests = read_text(
+        "core/project-session/tests/project_session_tests.cpp"
+    )
+    recovery_runtime_header = read_text(
+        "core/project-runtime/include/palmier/project/project_runtime.hpp"
+    )
+    recovery_runtime_source = read_text("core/project-runtime/project_runtime.cpp")
+    recovery_runtime_tests = read_text(
+        "core/project-runtime/tests/project_runtime_tests.cpp"
+    )
+    for token in ["ProjectRecoverySessionState", "persistedStateId"]:
+        if token not in recovery_session_header:
+            raise ContractError(f"recovered session API missing token {token!r}")
+    for token in [
+        "recovery revision must be positive",
+        "recoveryStateClean",
+        "greatestStateId + 1",
+        "stateIdentityOverflow",
+    ]:
+        if token not in recovery_session_source:
+            raise ContractError(f"recovered session invariant missing token {token!r}")
+    for token in ["installRecovered(", "ProjectRecoverySessionState recoveryState"]:
+        if token not in recovery_runtime_header:
+            raise ContractError(f"recovered runtime API missing token {token!r}")
+        if token not in recovery_runtime_source:
+            raise ContractError(f"recovered runtime implementation missing token {token!r}")
+    for token in [
+        "recoveredSessionPreservesDirtyIdentity",
+        "recoveredSessionRejectsInvalidIdentity",
+        "undo after recovery must restore the persisted recovered state",
+    ]:
+        if token not in recovery_session_tests:
+            raise ContractError(f"recovered session test missing token {token!r}")
+    for token in [
+        "recoveredInstallPublishesDirtyIdentityAndRemainsSaveSafe",
+        "invalid recovery replaced runtime",
+        "cancelled recovery replaced runtime",
+    ]:
+        if token not in recovery_runtime_tests:
+            raise ContractError(f"recovered runtime test missing token {token!r}")
+    for token in [
+        "dedicated `ProjectRuntime::installRecovered` operation",
+        "empty Undo and Redo journals",
+        "max(stateId, persistedStateId) + 1",
+        "prior runtime unchanged",
+        "cross-process journal rekey",
+    ]:
+        if token not in recovery_session_adr:
+            raise ContractError(f"recovered session ADR missing token {token!r}")
+    for token in ["dedicated recovered-session install", "ADR 0049"]:
+        if token not in recovery_readme:
+            raise ContractError(f"Windows README missing recovered session token {token!r}")
 
     qt_persistence_header = read_text(
         "windows/app/include/palmier/windows/project_persistence_controller.hpp"
@@ -5552,9 +5617,10 @@ def windows_mcp_project_session_contract() -> None:
     for token in [
         "maximumPendingOperations",
         "reentrantRuntimeCall",
-        "runtime.session && runtime.session->dirty() && !allowDiscardDirty",
-        "projectGeneration <= runtime.projectGeneration",
-        "runtime.session.swap(candidate)",
+        "ProjectRuntimeState installProject(",
+        "session && session->dirty() && !allowDiscardDirty",
+        "requestedGeneration <= projectGeneration",
+        "session.swap(candidate)",
         "runtime.requireProjectGeneration(expectedProjectGeneration)",
         "runtime.observer->operationCommitted()",
         "runtime.requireSession().redo(cancellation)",

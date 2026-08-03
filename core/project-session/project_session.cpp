@@ -721,6 +721,45 @@ ProjectSession::ProjectSession(
     }
 }
 
+ProjectSession::ProjectSession(
+    const ProjectDocument& document,
+    IdGenerator idGenerator,
+    ProjectRecoverySessionState recoveryState,
+    ProjectSessionPublicationFactory publicationFactory
+)
+    : source_(std::make_unique<Value>(document.source())),
+      rootKind_(document.rootKind()),
+      project_(document.project()),
+      diagnostics_(document.diagnostics()),
+      idGenerator_(std::move(idGenerator)),
+      publicationFactory_(std::move(publicationFactory)),
+      unsafeClipIds_(unsafeClipIds(document)),
+      revision_(recoveryState.revision),
+      stateId_(recoveryState.stateId),
+      persistedStateId_(recoveryState.persistedStateId) {
+    if (!idGenerator_) {
+        throw CommandError("invalidIdGenerator", "project session requires an ID generator");
+    }
+    if (recoveryState.revision == 0) {
+        throw CommandError("invalidRecoveryState", "recovery revision must be positive");
+    }
+    if (recoveryState.revision >= maximumRevision) {
+        throw CommandError("revisionOverflow", "recovery revision cannot advance");
+    }
+    if (recoveryState.stateId == recoveryState.persistedStateId) {
+        throw CommandError("recoveryStateClean", "recovery session state must be dirty");
+    }
+    const auto greatestStateId = (std::max)(
+        recoveryState.stateId,
+        recoveryState.persistedStateId
+    );
+    const auto maximumStateId = (std::numeric_limits<std::uint64_t>::max)();
+    if (greatestStateId >= maximumStateId - 1) {
+        throw CommandError("stateIdentityOverflow", "recovery state identity cannot advance");
+    }
+    nextStateId_ = greatestStateId + 1;
+}
+
 std::shared_ptr<const ProjectSessionSnapshot> ProjectSession::preparePublication(
     ProjectSessionSnapshot snapshot
 ) const {

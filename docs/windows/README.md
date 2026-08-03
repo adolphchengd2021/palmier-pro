@@ -125,6 +125,14 @@ Startup discovery, recovery choice UI, and media transactions remain open; see
 ADR 0047, ADR 0048, and
 `contracts/project/v1/windows-recovery-journal.json`.
 
+The runtime also exposes a dedicated recovered-session install. It restores the
+exact journal revision, state ID, and persisted state ID as dirty, starts with
+empty Undo/Redo history, and allocates the next state identity above both
+restored IDs. Normal Save can then mark that state persisted, while a later
+edit and Undo use the same session rules as a disk-loaded project. Startup
+inspection, cross-process journal rekey, and recovery choice UI remain open;
+see ADR 0049.
+
 The shared session also keeps a process-local Redo branch for Split, Move, and
 Remove. Undo captures the exact post-action source DOM; Redo restores that state
 without replaying command arguments, including stable generated IDs. A changed

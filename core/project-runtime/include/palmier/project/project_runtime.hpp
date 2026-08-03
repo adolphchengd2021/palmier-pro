@@ -63,6 +63,14 @@ public:
         bool allowDiscardDirty = false,
         std::stop_token cancellation = {}
     );
+    ProjectRuntimeState installRecovered(
+        ProjectDocument document,
+        std::uint64_t projectGeneration,
+        IdGenerator idGenerator,
+        ProjectRecoverySessionState recoveryState,
+        bool allowDiscardDirty = false,
+        std::stop_token cancellation = {}
+    );
     ProjectRuntimeState snapshot(
         std::optional<std::uint64_t> expectedProjectGeneration = {},
         std::stop_token cancellation = {}

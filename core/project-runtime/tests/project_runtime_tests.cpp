@@ -20,6 +20,7 @@ using palmier::project::MoveClipsCommand;
 using palmier::project::ProjectRuntime;
 using palmier::project::ProjectRuntimeError;
 using palmier::project::ProjectRuntimeObserver;
+using palmier::project::ProjectRecoverySessionState;
 using palmier::project::RemoveClipsCommand;
 using palmier::project::SetClipPropertiesCommand;
 using palmier::project::SplitClipsCommand;
@@ -373,6 +374,100 @@ void saveSnapshotCarriesExactRuntimeIdentity() {
     );
 }
 
+void recoveredInstallPublishesDirtyIdentityAndRemainsSaveSafe() {
+    auto observer = std::make_shared<RuntimeObserver>();
+    ProjectRuntime runtime(observer);
+    int nextId{};
+    const auto installed = runtime.installRecovered(
+        projectDocument("Recovered"),
+        4,
+        [&nextId] { return "recovered-runtime-id-" + std::to_string(++nextId); },
+        ProjectRecoverySessionState{9, 17, 5}
+    );
+    require(
+        installed.projectGeneration == 4
+            && installed.session->revision == 9
+            && installed.session->stateId == 17
+            && installed.session->persistedStateId == 5
+            && installed.session->dirty(),
+        "recovered runtime install identity"
+    );
+    require(
+        installed.session->undoDepth == 0 && installed.session->redoDepth == 0,
+        "recovered runtime install must not invent history"
+    );
+    const auto publications = observer->publications();
+    require(
+        publications.size() == 1
+            && publications.front().projectGeneration == 4
+            && publications.front().revision == 9
+            && publications.front().stateId == 17
+            && publications.front().persistedStateId == 5,
+        "recovered runtime publication identity"
+    );
+    const auto saved = runtime.saveSnapshot(4);
+    require(
+        saved.snapshot.revision == 9
+            && saved.snapshot.stateId == 17
+            && saved.snapshot.persistedStateId == 5
+            && saved.snapshot.dirty(),
+        "recovered runtime save snapshot"
+    );
+    const auto persisted = runtime.markPersisted(17, 4);
+    require(!persisted.session->dirty(), "recovered runtime persistence acknowledgement");
+
+    const auto split = runtime.splitClips(
+        SplitClipsCommand{
+            std::vector<SplitPoint>{{"target", 40}}, std::nullopt, std::nullopt,
+        },
+        4
+    );
+    require(
+        split.session->revision == 10
+            && split.session->stateId == 18
+            && split.session->dirty(),
+        "post-recovery edit identity"
+    );
+    const auto undone = runtime.undo(4);
+    require(
+        undone.session->revision == 11
+            && undone.session->stateId == 17
+            && !undone.session->dirty(),
+        "post-recovery undo identity"
+    );
+
+    requireRuntimeError(
+        [&] {
+            static_cast<void>(runtime.installRecovered(
+                projectDocument("Invalid Recovery"),
+                5,
+                [] { return std::string("invalid-recovery-id"); },
+                ProjectRecoverySessionState{1, 3, 3},
+                true
+            ));
+        },
+        "recoveryStateClean"
+    );
+    require(runtime.snapshot(4).session->revision == 11, "invalid recovery replaced runtime");
+
+    std::stop_source cancellation;
+    cancellation.request_stop();
+    requireRuntimeError(
+        [&] {
+            static_cast<void>(runtime.installRecovered(
+                projectDocument("Cancelled Recovery"),
+                5,
+                [] { return std::string("cancelled-recovery-id"); },
+                ProjectRecoverySessionState{1, 2, 0},
+                true,
+                cancellation.get_token()
+            ));
+        },
+        "cancelled"
+    );
+    require(runtime.snapshot(4).session->revision == 11, "cancelled recovery replaced runtime");
+}
+
 void operationsAreSerializedAndQueuedCancellationDoesNotCommit() {
     auto observer = std::make_shared<RuntimeObserver>();
     ProjectRuntime runtime(observer);
@@ -501,6 +596,7 @@ int main() {
         dirtyAndGenerationGatesProtectReplacement();
         persistenceAcknowledgementPublishesOnlyOnChange();
         saveSnapshotCarriesExactRuntimeIdentity();
+        recoveredInstallPublishesDirtyIdentityAndRemainsSaveSafe();
         operationsAreSerializedAndQueuedCancellationDoesNotCommit();
         cancellationAfterCommitStillPublishesSuccess();
         reentrancyAndCloseAreTerminal();

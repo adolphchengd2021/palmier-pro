@@ -87,6 +87,12 @@ struct ProjectSaveSnapshot final {
     bool dirty() const noexcept { return stateId != persistedStateId; }
 };
 
+struct ProjectRecoverySessionState final {
+    std::uint64_t revision;
+    std::uint64_t stateId;
+    std::uint64_t persistedStateId;
+};
+
 class CommandError final : public std::runtime_error {
 public:
     CommandError(std::string code, std::string detail);
@@ -99,6 +105,12 @@ public:
     ProjectSession(
         const ProjectDocument& document,
         IdGenerator idGenerator,
+        ProjectSessionPublicationFactory publicationFactory = {}
+    );
+    ProjectSession(
+        const ProjectDocument& document,
+        IdGenerator idGenerator,
+        ProjectRecoverySessionState recoveryState,
         ProjectSessionPublicationFactory publicationFactory = {}
     );
 

@@ -84,6 +84,44 @@ struct ProjectRuntime::Implementation final {
         return *session;
     }
 
+    template<typename SessionFactory>
+    ProjectRuntimeState installProject(
+        std::uint64_t requestedGeneration,
+        bool allowDiscardDirty,
+        std::stop_token cancellation,
+        SessionFactory sessionFactory
+    ) {
+        checkCancellation(cancellation);
+        if (requestedGeneration == 0) {
+            throw ProjectRuntimeError(
+                "invalidProjectGeneration",
+                "project generation must be positive"
+            );
+        }
+        if (requestedGeneration <= projectGeneration) {
+            throw ProjectRuntimeError(
+                "staleProjectGeneration",
+                "project generation must advance monotonically"
+            );
+        }
+        if (session && session->dirty() && !allowDiscardDirty) {
+            throw ProjectRuntimeError(
+                "dirtyProject",
+                "save or explicitly discard the current project before replacement"
+            );
+        }
+        auto candidate = sessionFactory();
+        auto state = std::make_shared<const ProjectSessionSnapshot>(
+            candidate->snapshot(cancellation)
+        );
+        checkCancellation(cancellation);
+        session.swap(candidate);
+        projectGeneration = requestedGeneration;
+        ProjectRuntimeState result{requestedGeneration, std::move(state)};
+        publishState(result);
+        return result;
+    }
+
     void requireProjectGeneration(
         const std::optional<std::uint64_t>& expectedProjectGeneration
     ) const {
@@ -179,35 +217,52 @@ ProjectRuntimeState ProjectRuntime::install(
         allowDiscardDirty,
         cancellation
     ](Implementation& runtime) mutable {
-        checkCancellation(cancellation);
-        if (projectGeneration == 0) {
-            throw ProjectRuntimeError(
-                "invalidProjectGeneration",
-                "project generation must be positive"
-            );
-        }
-        if (projectGeneration <= runtime.projectGeneration) {
-            throw ProjectRuntimeError(
-                "staleProjectGeneration",
-                "project generation must advance monotonically"
-            );
-        }
-        if (runtime.session && runtime.session->dirty() && !allowDiscardDirty) {
-            throw ProjectRuntimeError(
-                "dirtyProject",
-                "save or explicitly discard the current project before replacement"
-            );
-        }
-        auto candidate = std::make_unique<ProjectSession>(document, std::move(idGenerator));
-        auto state = std::make_shared<const ProjectSessionSnapshot>(
-            candidate->snapshot(cancellation)
+        return runtime.installProject(
+            projectGeneration,
+            allowDiscardDirty,
+            cancellation,
+            [&] {
+                return std::make_unique<ProjectSession>(
+                    document,
+                    std::move(idGenerator)
+                );
+            }
         );
-        checkCancellation(cancellation);
-        runtime.session.swap(candidate);
-        runtime.projectGeneration = projectGeneration;
-        ProjectRuntimeState result{projectGeneration, std::move(state)};
-        runtime.publishState(result);
-        return result;
+    });
+}
+
+ProjectRuntimeState ProjectRuntime::installRecovered(
+    ProjectDocument document,
+    std::uint64_t projectGeneration,
+    IdGenerator idGenerator,
+    ProjectRecoverySessionState recoveryState,
+    bool allowDiscardDirty,
+    std::stop_token cancellation
+) {
+    return implementation_->invoke<ProjectRuntimeState>([
+        document = std::move(document),
+        projectGeneration,
+        idGenerator = std::move(idGenerator),
+        recoveryState,
+        allowDiscardDirty,
+        cancellation
+    ](Implementation& runtime) mutable {
+        try {
+            return runtime.installProject(
+                projectGeneration,
+                allowDiscardDirty,
+                cancellation,
+                [&] {
+                    return std::make_unique<ProjectSession>(
+                        document,
+                        std::move(idGenerator),
+                        recoveryState
+                    );
+                }
+            );
+        } catch (const CommandError& error) {
+            throw ProjectRuntimeError(error.code, error.what());
+        }
     });
 }
 

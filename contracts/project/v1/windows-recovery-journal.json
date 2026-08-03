@@ -57,9 +57,20 @@
     "saveSuccess": "retire the old package identity using the committed generation and revision before reporting completion",
     "shutdown": "cancel and drain admitted recovery work together with any admitted Save"
   },
+  "sessionInstallation": {
+    "entryPoint": "ProjectRuntime.installRecovered",
+    "runtimeGeneration": "the caller supplies the current process generation; the prior journal generation remains recovery-object identity until rekey or retirement",
+    "revision": "restore the exact positive journal revision while leaving one representable next revision in the MCP signed integer domain",
+    "stateIdentity": "restore exact stateId and persistedStateId; they must differ and leave a representable next state identity and allocation cursor",
+    "dirty": "the first published runtime snapshot remains dirty until the recovered state is successfully persisted",
+    "history": "start with empty Undo and Redo journals because the recovery payload contains no command history",
+    "mutation": "the next edit advances revision and allocates max(stateId, persistedStateId) plus one",
+    "failure": "invalid identity, cancellation, stale generation, or dirty replacement refusal cannot replace the active runtime"
+  },
   "excluded": [
     "automatic recovery application",
     "recovery choice UI",
+    "cross-process journal generation rekey",
     "media payload journaling",
     "package transaction recovery",
     "cross-process recovery cleanup"

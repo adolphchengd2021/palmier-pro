@@ -19,6 +19,7 @@ using palmier::project::CommandError;
 using palmier::project::ClipMove;
 using palmier::project::MoveClipsCommand;
 using palmier::project::ProjectSession;
+using palmier::project::ProjectRecoverySessionState;
 using palmier::project::RemoveClipsCommand;
 using palmier::project::SetClipPropertiesCommand;
 using palmier::project::SplitClipsCommand;
@@ -107,6 +108,118 @@ ProjectSession fixtureSession(const std::filesystem::path& root, int& nextId) {
     return ProjectSession(document, [&nextId] {
         return "session-id-" + std::to_string(++nextId);
     });
+}
+
+void recoveredSessionPreservesDirtyIdentity(const std::filesystem::path& root) {
+    const auto source = readFile(
+        root / "fixtures/contracts/projects/current-multitimeline.palmier/project.json"
+    );
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    int nextId{};
+    ProjectSession session(
+        document,
+        [&nextId] { return "recovered-id-" + std::to_string(++nextId); },
+        ProjectRecoverySessionState{7, 12, 4}
+    );
+
+    const auto recovered = session.snapshot();
+    require(
+        recovered.revision == 7
+            && recovered.stateId == 12
+            && recovered.persistedStateId == 4
+            && recovered.dirty(),
+        "recovered session identity"
+    );
+    require(
+        recovered.undoDepth == 0 && recovered.redoDepth == 0,
+        "recovered session must not invent history"
+    );
+    const auto saved = session.saveSnapshot();
+    require(
+        saved.revision == 7
+            && saved.stateId == 12
+            && saved.persistedStateId == 4
+            && saved.dirty(),
+        "recovered save snapshot identity"
+    );
+
+    const auto persisted = session.markPersisted(12);
+    require(!persisted->dirty(), "persisting recovered state must clear dirty state");
+    const auto split = session.splitClips(SplitClipsCommand{
+        std::vector<SplitPoint>{{"clip-main-1", 60}}, std::nullopt, std::nullopt,
+    });
+    require(
+        split.revisionAfter == 8
+            && split.publication->stateId == 13
+            && split.publication->dirty(),
+        "edit after recovery must advance identity"
+    );
+    const auto undone = session.undo();
+    require(
+        undone.publication->revision == 9
+            && undone.publication->stateId == 12
+            && !undone.publication->dirty(),
+        "undo after recovery must restore the persisted recovered state"
+    );
+}
+
+void recoveredSessionRejectsInvalidIdentity(const std::filesystem::path& root) {
+    const auto source = readFile(
+        root / "fixtures/contracts/projects/current-multitimeline.palmier/project.json"
+    );
+    const auto document = palmier::project::readProject(source, [] {
+        return std::string("unexpected-reader-id");
+    });
+    requireCommandError(
+        [&] {
+            static_cast<void>(ProjectSession(
+                document,
+                [] { return std::string("invalid-revision-id"); },
+                ProjectRecoverySessionState{0, 1, 0}
+            ));
+        },
+        "invalidRecoveryState"
+    );
+    requireCommandError(
+        [&] {
+            static_cast<void>(ProjectSession(
+                document,
+                [] { return std::string("overflow-revision-id"); },
+                ProjectRecoverySessionState{
+                    static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()),
+                    1,
+                    0,
+                }
+            ));
+        },
+        "revisionOverflow"
+    );
+    requireCommandError(
+        [&] {
+            static_cast<void>(ProjectSession(
+                document,
+                [] { return std::string("clean-recovery-id"); },
+                ProjectRecoverySessionState{1, 4, 4}
+            ));
+        },
+        "recoveryStateClean"
+    );
+    requireCommandError(
+        [&] {
+            static_cast<void>(ProjectSession(
+                document,
+                [] { return std::string("overflow-state-id"); },
+                ProjectRecoverySessionState{
+                    1,
+                    (std::numeric_limits<std::uint64_t>::max)() - 1,
+                    0,
+                }
+            ));
+        },
+        "stateIdentityOverflow"
+    );
 }
 
 void explicitSplitAndUndo(const std::filesystem::path& root) {
@@ -1566,6 +1679,8 @@ int wmain(int argumentCount, wchar_t* arguments[]) {
         }
         const std::filesystem::path root(arguments[1]);
         explicitSplitAndUndo(root);
+        recoveredSessionPreservesDirtyIdentity(root);
+        recoveredSessionRejectsInvalidIdentity(root);
         moveAcrossTrackPrunesAndUndoesExactly();
         linkedMoveAndNoOpShareOneHistory();
         overlappingMovesDoNotConsumeGeneratedIds();
