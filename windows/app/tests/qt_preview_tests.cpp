@@ -286,6 +286,7 @@ struct FakeSessionState final {
     bool gateTick{};
     bool gateSeek{};
     bool staleTick{};
+    bool transitionTick{};
     bool tickCancellationObserved{};
     bool seekCancellationObserved{};
     bool failClose{};
@@ -393,6 +394,15 @@ public:
             if (state_->staleTick) {
                 auto receipt = playingReceipt(expectedGeneration + 1);
                 receipt.outcome = PreviewPresentationOutcome::stale;
+                return receipt;
+            }
+            if (state_->transitionTick) {
+                state_->transitionTick = false;
+                ++state_->generation;
+                auto receipt = playingReceipt(state_->generation);
+                receipt.outcome = PreviewPresentationOutcome::presented;
+                receipt.hasTargetTimelineFrame = true;
+                receipt.targetTimelineFrame = 1;
                 return receipt;
             }
             if (state_->playingTicks > 0) {
@@ -898,6 +908,47 @@ private slots:
         root.reset();
     }
 
+    void timelineRangeAdmitsCrossClipSeekAndRefusesEnd() {
+        auto state = std::make_shared<FakeSessionState>();
+        state->playingTicks = 100;
+        palmier::windows::PreviewPresentationController controller(
+            [state](HWND) { return std::make_unique<FakeSession>(state); },
+            nullptr
+        );
+        QQmlEngine engine;
+        auto root = createPreviewWindow(engine, controller);
+        QVERIFY(root != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(controller.ready(), 5000);
+
+        auto preview = availablePreview("media-first");
+        auto second = preview.candidate->renderTimeline.segments.front();
+        second.clipId = "clip-media-second";
+        second.mediaId = "media-second";
+        second.timelineStartFrame = 35;
+        second.durationFrames = 5;
+        preview.candidate->renderTimeline.durationFrames = 40;
+        preview.candidate->renderTimeline.segments.push_back(second);
+        preview.candidate->sources.push_back({
+            std::filesystem::path(L"C:\\fixture-second.mp4"),
+            second.clipId,
+            true,
+            palmier::project::MediaSourceKind::project,
+        });
+        controller.replaceProjectPreview(1, std::move(preview));
+        QTRY_COMPARE_WITH_TIMEOUT(playCount(state), std::size_t{1}, 5000);
+        QCOMPARE(controller.minimumFrame(), qint64{0});
+        QCOMPARE(controller.maximumFrame(), qint64{39});
+        QVERIFY(!controller.seekToFrame(32));
+        QCOMPARE(controller.currentFrame(), qint64{0});
+        QVERIFY(controller.seekToFrame(37));
+        QTRY_COMPARE_WITH_TIMEOUT(controller.currentFrame(), qint64{37}, 5000);
+        QVERIFY(!controller.seekToFrame(40));
+
+        static_cast<void>(controller.requestShutdown());
+        QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);
+        root.reset();
+    }
+
     void rapidSeekUsesTheCommittedReplacementGeneration() {
         auto state = std::make_shared<FakeSessionState>();
         state->gateTick = true;
@@ -956,6 +1007,33 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(playCount(state), std::size_t{2}, 5000);
         QTRY_COMPARE_WITH_TIMEOUT(controller.state(), QStringLiteral("completed"), 5000);
         QCOMPARE(controller.currentFrame(), qint64{10});
+
+        static_cast<void>(controller.requestShutdown());
+        QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);
+        root.reset();
+    }
+
+    void tickGenerationTransitionContinuesCadence() {
+        auto state = std::make_shared<FakeSessionState>();
+        state->transitionTick = true;
+        palmier::windows::PreviewPresentationController controller(
+            [state](HWND) { return std::make_unique<FakeSession>(state); },
+            nullptr
+        );
+        QQmlEngine engine;
+        auto root = createPreviewWindow(engine, controller);
+        QVERIFY(root != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(controller.ready(), 5000);
+
+        controller.replaceProjectPreview(1, availablePreview("media-transition"));
+        QTRY_COMPARE_WITH_TIMEOUT(controller.currentFrame(), qint64{1}, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.state(), QStringLiteral("completed"), 5000);
+        QCOMPARE(controller.errorCode(), QString{});
+        {
+            const std::lock_guard lock(state->mutex);
+            QCOMPARE(state->generation, std::uint64_t{2});
+            QCOMPARE(state->tickCalls, std::size_t{2});
+        }
 
         static_cast<void>(controller.requestShutdown());
         QTRY_VERIFY_WITH_TIMEOUT(controller.shutdownComplete(), 5000);

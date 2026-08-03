@@ -87,6 +87,7 @@ struct PreviewPresentationReceipt final {
     bool hasSourcePresentationTimestamp{};
     std::int64_t sourcePresentationTimestamp{};
     bool hasCachedFrame{};
+    bool reachedClipBoundary{};
     std::uint64_t renderSerial{};
     std::uint64_t presentSerial{};
 };
@@ -202,6 +203,15 @@ public:
         media::HeadlessAvPlaybackSeekMode mode,
         std::stop_token cancellation = {}
     );
+    PreviewPresentationReceipt seekSource(
+        std::uint64_t expectedGeneration,
+        const std::filesystem::path& input,
+        std::int64_t targetTimelineFrame,
+        audio::FrameRate timelineFrameRate,
+        PreviewPresentationSettings settings,
+        media::HeadlessAvPlaybackSeekMode mode,
+        std::stop_token cancellation = {}
+    );
     PreviewPresentationReceipt pause(std::uint64_t expectedGeneration);
     PreviewPresentationReceipt resume(std::uint64_t expectedGeneration);
     PreviewPresentationReceipt resize(
@@ -240,6 +250,15 @@ private:
     void clearFrameState();
     PreviewPresentationReceipt presentCurrentFrame(
         PreviewPresentationOutcome playbackOutcome,
+        std::stop_token cancellation
+    );
+    PreviewPresentationReceipt seekSourceLocked(
+        std::uint64_t expectedGeneration,
+        const std::filesystem::path& input,
+        std::int64_t targetTimelineFrame,
+        audio::FrameRate timelineFrameRate,
+        PreviewPresentationSettings settings,
+        media::HeadlessAvPlaybackSeekMode mode,
         std::stop_token cancellation
     );
 

@@ -61,6 +61,7 @@
     "hasSourcePresentationTimestamp",
     "sourcePresentationTimestamp",
     "hasCachedFrame",
+    "reachedClipBoundary",
     "renderSerial",
     "presentSerial"
   ],
@@ -74,8 +75,8 @@
     "cancellation": "close requests the admitted operation stop source before waiting for serialized ownership; cancellation is rechecked before render and Present, and no work is admitted after close",
     "settings": "the boundary accepts one immutable project-compiled static video layer, passes its exact-CFR source start to playback, requires a new playback generation for source-mapping changes, and rebuilds every timeline frame through the shared project RenderPlan compiler before rendering",
     "transport": "pause and resume preserve the generation, compiled settings, selected source frame, rendered-frame cache, and visible surface; paused ticks do not reach the A/V clock",
-    "seek": "seek validates the exact current generation and the end-exclusive compiled clip interval, maps the requested timeline frame through the existing static layer source offset with checked arithmetic, replaces playback with one newer generation, and renders and presents its exact first frame without clearing the old surface first",
-    "clipBoundary": "the first target frame at or beyond the compiled clip interval stops source playback, preserves the last valid frame, and completes without rendering inactive content"
+    "seek": "seek validates the exact current generation and the end-exclusive compiled clip interval, may atomically replace the input and compiled layer for a different scheduled clip, maps the requested timeline frame through that layer's source offset with checked arithmetic, replaces playback with one newer generation, and renders and presents its exact first frame without clearing the old surface first",
+    "clipBoundary": "the first target frame at or beyond the compiled clip interval stops source playback, preserves the last valid frame, completes without rendering inactive content, and is the only path that publishes reachedClipBoundary for a timeline owner"
   },
   "excluded": [
     "Qt timer and window integration",

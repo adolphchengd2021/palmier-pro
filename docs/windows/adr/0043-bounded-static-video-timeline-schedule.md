@@ -48,8 +48,14 @@ It is a technical-MVP capacity limit, not a product project limit.
   every scheduled segment before claiming full timeline playback or export.
 
 The Qt project projection resolves every scheduled segment by stable clip ID
-and publishes no partial candidate. Its presentation adapter still starts only
-the first segment; multi-segment playback and gap cadence remain a later step.
+and publishes no partial candidate. Its presentation adapter starts the first
+segment, atomically replaces the A/V generation at an adjacent clip boundary,
+and routes direct seek to the active scheduled source. The controller refuses
+gap seek and step targets before background admission. Leading and inter-clip
+gap cadence remain a later step.
+The underlying presentation session can atomically seek to a different input
+and compiled layer, including paused preparation without starting audio. This
+is the generation-safe transition primitive for the timeline owner.
 
 ## Evidence and limits
 
@@ -57,7 +63,9 @@ Deterministic compiler tests cover stable ordering, leading and inter-clip
 gaps, adjacent end-exclusive transitions, source mapping, black gap rendering,
 overlap, unsupported visible content, cancellation, and the segment bound.
 Qt projection tests cover all-source publication and refusal when a later
-scheduled source is unavailable.
+scheduled source is unavailable. Presentation tests cover atomic cross-source
+mapping, while Qt controller tests cover acceptance of a newer transition
+generation and continued bounded cadence.
 These tests establish the shared schedule contract only. They do not prove A/V
 generation replacement, continuous gap timing, multi-source export, visible UI
 pixels, physical audio/GPU synchronization, VFR, or Windows 10 build 19045.

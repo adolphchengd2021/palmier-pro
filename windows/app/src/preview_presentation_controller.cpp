@@ -38,6 +38,8 @@ public:
         const PreviewMediaCandidateProjection& candidate,
         std::stop_token cancellation
     ) override {
+        candidate_.reset();
+        activeSegmentIndex_ = 0;
         const auto* layer = candidate.firstRenderLayer();
         const auto* source = layer == nullptr
             ? nullptr
@@ -53,20 +55,82 @@ public:
             receipt.hresult = E_INVALIDARG;
             return receipt;
         }
-        return session_.play(
+        for (const auto& segment : candidate.renderTimeline.segments) {
+            const auto* segmentSource = candidate.sourceForClip(segment.clipId);
+            if (segmentSource == nullptr || segmentSource->inputPath.empty()) {
+                auto receipt = failedReceipt();
+                receipt.outcome = preview::PreviewPresentationOutcome::refused;
+                receipt.failure = preview::PreviewPresentationFailureCode::invalidRequest;
+                receipt.hresult = E_INVALIDARG;
+                return receipt;
+            }
+        }
+        auto receipt = session_.play(
             source->inputPath,
             layer->timelineStartFrame,
             {static_cast<std::uint32_t>(candidate.renderTimeline.framesPerSecond), 1},
             {*layer},
             cancellation
         );
+        if (
+            receipt.generation != 0
+            && (receipt.outcome == preview::PreviewPresentationOutcome::changed
+                || receipt.outcome == preview::PreviewPresentationOutcome::noOp)
+        ) {
+            candidate_ = candidate;
+            activeSegmentIndex_ = 0;
+        }
+        return receipt;
     }
 
     preview::PreviewPresentationReceipt tick(
         std::uint64_t expectedGeneration,
         std::stop_token cancellation
     ) override {
-        return session_.tick(expectedGeneration, cancellation);
+        auto receipt = session_.tick(expectedGeneration, cancellation);
+        if (
+            receipt.state != preview::PreviewPresentationState::completed
+            || !receipt.reachedClipBoundary
+            || !candidate_.has_value()
+            || activeSegmentIndex_ + 1 >= candidate_->renderTimeline.segments.size()
+        ) {
+            return receipt;
+        }
+        const auto& current = candidate_->renderTimeline.segments[activeSegmentIndex_];
+        const auto& next = candidate_->renderTimeline.segments[activeSegmentIndex_ + 1];
+        if (
+            current.timelineStartFrame > (std::numeric_limits<std::int64_t>::max)()
+                - current.durationFrames
+            || next.timelineStartFrame
+                != current.timelineStartFrame + current.durationFrames
+        ) {
+            return receipt;
+        }
+        const auto* source = candidate_->sourceForClip(next.clipId);
+        if (source == nullptr) return receipt;
+        auto transitioned = session_.seekSource(
+            receipt.generation,
+            source->inputPath,
+            next.timelineStartFrame,
+            {
+                static_cast<std::uint32_t>(candidate_->renderTimeline.framesPerSecond),
+                1,
+            },
+            {next},
+            media::HeadlessAvPlaybackSeekMode::playing,
+            cancellation
+        );
+        if (
+            transitioned.generation != receipt.generation
+            && transitioned.outcome != preview::PreviewPresentationOutcome::stale
+            && transitioned.outcome != preview::PreviewPresentationOutcome::cancelled
+            && transitioned.outcome != preview::PreviewPresentationOutcome::refused
+            && transitioned.outcome != preview::PreviewPresentationOutcome::failed
+            && transitioned.outcome != preview::PreviewPresentationOutcome::invalidated
+        ) {
+            ++activeSegmentIndex_;
+        }
+        return transitioned;
     }
 
     preview::PreviewPresentationReceipt seek(
@@ -75,18 +139,80 @@ public:
         media::HeadlessAvPlaybackSeekMode mode,
         std::stop_token cancellation
     ) override {
-        return session_.seek(
+        if (!candidate_.has_value()) {
+            return session_.seek(
+                expectedGeneration,
+                targetTimelineFrame,
+                mode,
+                cancellation
+            );
+        }
+        const auto* layer = project_render::staticVideoLayerAt(
+            candidate_->renderTimeline,
+            targetTimelineFrame
+        );
+        if (layer == nullptr) {
+            return session_.seek(
+                expectedGeneration,
+                targetTimelineFrame,
+                mode,
+                cancellation
+            );
+        }
+        const auto index = static_cast<std::size_t>(
+            layer - candidate_->renderTimeline.segments.data()
+        );
+        if (index == activeSegmentIndex_) {
+            return session_.seek(
+                expectedGeneration,
+                targetTimelineFrame,
+                mode,
+                cancellation
+            );
+        }
+        const auto* source = candidate_->sourceForClip(layer->clipId);
+        if (source == nullptr) {
+            auto receipt = failedReceipt();
+            receipt.generation = expectedGeneration;
+            receipt.outcome = preview::PreviewPresentationOutcome::refused;
+            receipt.failure = preview::PreviewPresentationFailureCode::invalidRequest;
+            receipt.hresult = E_INVALIDARG;
+            return receipt;
+        }
+        auto receipt = session_.seekSource(
             expectedGeneration,
+            source->inputPath,
             targetTimelineFrame,
+            {
+                static_cast<std::uint32_t>(candidate_->renderTimeline.framesPerSecond),
+                1,
+            },
+            {*layer},
             mode,
             cancellation
         );
+        if (
+            receipt.generation != expectedGeneration
+            && receipt.outcome != preview::PreviewPresentationOutcome::stale
+            && receipt.outcome != preview::PreviewPresentationOutcome::cancelled
+            && receipt.outcome != preview::PreviewPresentationOutcome::refused
+            && receipt.outcome != preview::PreviewPresentationOutcome::failed
+            && receipt.outcome != preview::PreviewPresentationOutcome::invalidated
+        ) {
+            activeSegmentIndex_ = index;
+        }
+        return receipt;
     }
 
     preview::PreviewPresentationReceipt cancel(
         std::uint64_t expectedGeneration
     ) override {
-        return session_.cancel(expectedGeneration);
+        auto receipt = session_.cancel(expectedGeneration);
+        if (receipt.outcome != preview::PreviewPresentationOutcome::stale) {
+            candidate_.reset();
+            activeSegmentIndex_ = 0;
+        }
+        return receipt;
     }
 
     preview::PreviewPresentationReceipt pause(
@@ -101,10 +227,16 @@ public:
         return session_.resume(expectedGeneration);
     }
 
-    preview::PreviewPresentationReceipt close() override { return session_.close(); }
+    preview::PreviewPresentationReceipt close() override {
+        candidate_.reset();
+        activeSegmentIndex_ = 0;
+        return session_.close();
+    }
 
 private:
     preview::PreviewPresentationSession session_;
+    std::optional<PreviewMediaCandidateProjection> candidate_;
+    std::size_t activeSegmentIndex_{};
 };
 
 QThread* previewPresentationThread() {
@@ -322,15 +454,12 @@ void PreviewPresentationController::replaceProjectPreview(
     };
     pendingSeek_.reset();
     if (desiredPreview_->preview.candidate.has_value()) {
+        const auto& timeline = desiredPreview_->preview.candidate->renderTimeline;
         const auto* layer = desiredPreview_->preview.candidate->firstRenderLayer();
-        if (layer != nullptr
-            && layer->timelineStartFrame >= 0 && layer->durationFrames > 0
-            && layer->timelineStartFrame
-                <= (std::numeric_limits<std::int64_t>::max)()
-                    - (layer->durationFrames - 1)) {
+        if (layer != nullptr && timeline.durationFrames > 0) {
             setPreviewRange(
-                layer->timelineStartFrame,
-                layer->timelineStartFrame + layer->durationFrames - 1
+                0,
+                timeline.durationFrames - 1
             );
             setCurrentFrame(layer->timelineStartFrame);
         } else {
@@ -411,6 +540,12 @@ bool PreviewPresentationController::seekToFrame(qint64 targetTimelineFrame) {
             && state_ != QStringLiteral("completed"))) {
         return false;
     }
+    if (project_render::staticVideoLayerAt(
+            desiredPreview_->preview.candidate->renderTimeline,
+            targetTimelineFrame
+        ) == nullptr) {
+        return false;
+    }
     pendingSeek_ = PendingSeek{
         activePreviewSerial_,
         playbackGeneration_,
@@ -447,6 +582,12 @@ bool PreviewPresentationController::stepFrame(int delta) {
         return false;
     }
     const auto target = currentFrame_ + delta;
+    if (project_render::staticVideoLayerAt(
+            desiredPreview_->preview.candidate->renderTimeline,
+            target
+        ) == nullptr) {
+        return false;
+    }
     pendingSeek_ = PendingSeek{
         activePreviewSerial_,
         playbackGeneration_,
@@ -1171,9 +1312,19 @@ void PreviewPresentationController::completeOperation(OperationResult result) {
             servicePendingWork();
             return;
         }
+        const bool generationTransition =
+            result.receipt.generation != 0
+            && result.receipt.generation != result.playbackGeneration
+            && result.receipt.state == preview::PreviewPresentationState::playing
+            && (outcome == preview::PreviewPresentationOutcome::changed
+                || outcome == preview::PreviewPresentationOutcome::presented
+                || outcome == preview::PreviewPresentationOutcome::occluded);
+        if (generationTransition) {
+            playbackGeneration_ = result.receipt.generation;
+        }
         if (
             outcome == preview::PreviewPresentationOutcome::stale
-            || (result.receipt.generation != 0
+            || (!generationTransition && result.receipt.generation != 0
                 && result.receipt.generation != result.playbackGeneration)
         ) {
             tickScheduled_ = false;

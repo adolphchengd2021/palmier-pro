@@ -127,6 +127,7 @@ struct PlaybackState final {
     std::int64_t targetTimelineFrame{};
     std::optional<palmier::media::DecodeFrameStart> decodeStart;
     std::optional<palmier::media::HeadlessAvPlaybackSeekMode> seekMode;
+    std::filesystem::path seekInput;
     std::function<void()> afterTick;
     std::mutex mutex;
     std::condition_variable condition;
@@ -238,7 +239,7 @@ public:
 
     HeadlessAvPlaybackReceipt seek(
         std::uint64_t expectedGeneration,
-        const std::filesystem::path&,
+        const std::filesystem::path& input,
         std::int64_t targetTimelineFrame,
         palmier::audio::FrameRate,
         palmier::media::DecodeFrameStart decodeStart,
@@ -268,6 +269,7 @@ public:
         state_->targetTimelineFrame = targetTimelineFrame;
         state_->decodeStart = decodeStart;
         state_->seekMode = mode;
+        state_->seekInput = input;
         auto value = playbackReceipt(
             state_->generation,
             state_->state,
@@ -683,6 +685,7 @@ void clipEndCompletesWithoutRenderingPastBoundary() {
     fixture.playback->ticks.push_back(std::move(boundary));
     const auto completed = fixture.session->tick(1);
     require(completed.state == PreviewPresentationState::completed, "clip end did not complete");
+    require(completed.reachedClipBoundary, "clip end lost its boundary receipt");
     require(completed.outcome == PreviewPresentationOutcome::changed, "clip end was hidden");
     require(completed.sourcePresentationTimestamp == 7, "clip end replaced the last valid frame");
     require(fixture.playback->cancelCalls == 1, "clip end did not stop source playback");
@@ -691,6 +694,10 @@ void clipEndCompletesWithoutRenderingPastBoundary() {
     require(
         fixture.session->tick(1).outcome == PreviewPresentationOutcome::noOp,
         "completed clip consumed another playback tick"
+    );
+    require(
+        !fixture.session->tick(1).reachedClipBoundary,
+        "completed no-op repeated the clip boundary"
     );
     require(fixture.playback->tickCalls == 2, "completed clip reached playback again");
 
@@ -1004,6 +1011,62 @@ void seekPresentsExactFramesAndEnforcesGenerationAndBounds() {
     require(fixture.session->close().state == PreviewPresentationState::closed, "seek close failed");
 }
 
+void seekSourceReplacesInputAndRenderMappingAtomically() {
+    Fixture fixture;
+    start(fixture);
+    auto replacement = settings(1);
+    replacement.renderLayer.clipId = "replacement-clip";
+    replacement.renderLayer.mediaId = "replacement-media";
+    replacement.renderLayer.timelineStartFrame = 10;
+    replacement.renderLayer.durationFrames = 5;
+    replacement.renderLayer.sourceStartFrame = 20;
+
+    const auto changed = fixture.session->seekSource(
+        1,
+        "replacement.mov",
+        12,
+        {10, 1},
+        replacement,
+        palmier::media::HeadlessAvPlaybackSeekMode::paused
+    );
+    require(changed.outcome == PreviewPresentationOutcome::presented, "source seek did not present");
+    require(changed.generation == 2, "source seek did not replace generation");
+    require(changed.state == PreviewPresentationState::paused, "source seek started audio");
+    require(changed.targetTimelineFrame == 12, "source seek target changed");
+    require(fixture.playback->seekInput == std::filesystem::path("replacement.mov"), "source seek input changed");
+    require(
+        fixture.playback->decodeStart.has_value()
+            && fixture.playback->decodeStart->frameIndex == 22,
+        "source seek frame mapping changed"
+    );
+    require(fixture.renderer->lastTargetTimelineFrame == 12, "replacement render target changed");
+
+    const auto continued = fixture.session->seek(
+        2,
+        13,
+        palmier::media::HeadlessAvPlaybackSeekMode::paused
+    );
+    require(continued.generation == 3, "replacement mapping was not retained");
+    require(
+        fixture.playback->decodeStart.has_value()
+            && fixture.playback->decodeStart->frameIndex == 23,
+        "retained replacement source mapping changed"
+    );
+    const auto calls = fixture.playback->seekCalls;
+    require(
+        fixture.session->seekSource(
+            3,
+            "replacement.mov",
+            15,
+            {10, 1},
+            replacement,
+            palmier::media::HeadlessAvPlaybackSeekMode::paused
+        ).outcome == PreviewPresentationOutcome::refused,
+        "end-exclusive replacement source seek was accepted"
+    );
+    require(fixture.playback->seekCalls == calls, "invalid source seek reached playback");
+}
+
 void terminalSurfaceStopsPlayback() {
     Fixture fixture;
     fixture.surface->presentOutcomes = {D3d11PreviewSurfaceOutcome::invalidated};
@@ -1212,6 +1275,7 @@ int main() {
         invalidAndStaleRequestsDoNotReachOwnedPorts();
         pauseResumePreservesGenerationAndCachedFrame();
         seekPresentsExactFramesAndEnforcesGenerationAndBounds();
+        seekSourceReplacesInputAndRenderMappingAtomically();
         terminalSurfaceStopsPlayback();
         renderFailureStopsPlayback();
         cancellationAfterPlaybackStopsBeforeRender();
