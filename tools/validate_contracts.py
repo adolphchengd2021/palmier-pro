@@ -4200,6 +4200,9 @@ def windows_qt_read_only_shell_contract() -> None:
     timeline_export_adr = read_text(
         "docs/windows/adr/0045-integrated-timeline-h264-export.md"
     )
+    autosave_adr = read_text(
+        "docs/windows/adr/0046-qt-deterministic-autosave.md"
+    )
     persistence_header = read_text(
         "windows/app/include/palmier/windows/project_persistence_controller.hpp"
     )
@@ -4290,6 +4293,10 @@ def windows_qt_read_only_shell_contract() -> None:
         "supersededInstalledProjectWaitsForLatestLoadOutcome",
         "persistenceSaveRunsOffGuiAndShutdownWaits",
         "persistenceFailurePreservesDirtyState",
+        "persistenceAutosaveCoalescesDirtyPublications",
+        "persistenceAutosaveFailureWaitsForNewerPublication",
+        "persistenceAutosaveRearmsForEditDuringSave",
+        "persistenceManualSaveAndShutdownSupersedeAutosave",
         "persistenceCommittedWarningRemainsObservable",
         "persistenceWorkerRetainsRuntimeAfterControllerTeardown",
         "dirtyRuntimeRefusesProjectReplacement",
@@ -4412,6 +4419,7 @@ def windows_qt_read_only_shell_contract() -> None:
     for token in [
         "Q_PROPERTY(bool dirty READ dirty NOTIFY dirtyChanged)",
         "Q_PROPERTY(bool saving READ saving NOTIFY savingChanged)",
+        "Q_PROPERTY(bool autosavePending READ autosavePending NOTIFY autosavePendingChanged)",
         "Q_PROPERTY(QString warningCode READ warningCode NOTIFY warningCodeChanged)",
         "Q_INVOKABLE void save()",
         "requestShutdown(bool discardUnsavedChanges = false)",
@@ -4423,7 +4431,9 @@ def windows_qt_read_only_shell_contract() -> None:
         "QtConcurrent::run(projectSavePool()",
         "writer(*runtime, path, generation, cancellation)",
         "refreshFromMailbox()",
-        "if (shutdownRequested_) emit shutdownReady()",
+        "lastPublicationToken_ > admittedPublicationToken",
+        "autosaveTimer_.setSingleShot(true)",
+        "autosaveTimer_.start()",
         "if (dirty_ && !discardUnsavedChanges)",
         "saveCommittedRuntimeNotAcknowledged",
         "saveCommittedNewerChangesRemain",
@@ -4644,6 +4654,16 @@ def windows_qt_read_only_shell_contract() -> None:
     ]:
         if token not in persistence_adr:
             raise ContractError(f"Qt persistence ADR missing token {token!r}")
+    for token in [
+        "30-second single-shot autosave timer",
+        "monotonic runtime publication token",
+        "does not poll, back off, or repeatedly retry",
+        "Manual Save and Save As supersede a pending autosave",
+        "edit during an admitted save",
+        "does not add a recovery journal",
+    ]:
+        if token not in autosave_adr:
+            raise ContractError(f"Qt autosave ADR missing token {token!r}")
     editing_adr = read_text("docs/windows/adr/0032-qt-safe-edit-controls.md")
     for token in [
         "stable clip ID",

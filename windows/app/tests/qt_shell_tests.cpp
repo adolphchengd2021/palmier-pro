@@ -20,6 +20,7 @@
 
 #include <condition_variable>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <exception>
@@ -137,6 +138,61 @@ std::string projectJsonWithClips(std::size_t clipCount, std::string_view timelin
 }
 
 constexpr std::string_view splittableProjectJson = R"({"timelines":[{"id":"timeline","name":"Timeline","fps":30,"width":1920,"height":1080,"tracks":[{"id":"track","type":"video","clips":[{"id":"clip","mediaRef":"media","mediaType":"video","sourceClipType":"video","startFrame":0,"durationFrames":20,"speed":1,"opacity":1,"blendMode":"normal"}]}]}],"activeTimelineId":"timeline","openTimelineIds":["timeline"]})";
+
+struct PersistenceRuntimeFixture final {
+    explicit PersistenceRuntimeFixture(std::uint64_t generationValue, std::string idPrefix)
+        : generation(generationValue),
+          mailbox(std::make_shared<palmier::windows::ProjectRuntimeMailbox>()),
+          runtime(std::make_shared<palmier::project::ProjectRuntime>(mailbox)) {
+        auto document = palmier::project::readProject(
+            splittableProjectJson,
+            [] { return std::string("generated"); }
+        );
+        static_cast<void>(runtime->install(
+            std::move(document),
+            generation,
+            [prefix = std::move(idPrefix), nextId = 0]() mutable {
+                return prefix + '-' + std::to_string(++nextId);
+            }
+        ));
+    }
+
+    void activate(
+        palmier::windows::ProjectPersistenceController& persistence,
+        const std::filesystem::path& path
+    ) const {
+        persistence.activateProject(path, generation);
+    }
+
+    void splitAndPublish(
+        palmier::windows::ProjectPersistenceController& persistence
+    ) const {
+        static_cast<void>(runtime->splitClips({
+            std::vector<palmier::project::SplitPoint>{{"clip", 10}},
+            std::nullopt,
+            std::nullopt,
+        }));
+        persistence.observeRuntimePublication(*mailbox->latest());
+    }
+
+    void setDurationAndPublish(
+        palmier::windows::ProjectPersistenceController& persistence,
+        std::int64_t durationFrames
+    ) const {
+        static_cast<void>(runtime->setClipProperties({
+            std::vector<std::string>{"clip"},
+            durationFrames,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+        }));
+        persistence.observeRuntimePublication(*mailbox->latest());
+    }
+
+    std::uint64_t generation;
+    std::shared_ptr<palmier::windows::ProjectRuntimeMailbox> mailbox;
+    std::shared_ptr<palmier::project::ProjectRuntime> runtime;
+};
 
 class QtShellTests final : public QObject {
     Q_OBJECT
@@ -646,6 +702,214 @@ private slots:
         QCOMPARE(saveFinished.at(0).at(0).toBool(), false);
         QCOMPARE(persistence.errorCode(), QStringLiteral("cancelled"));
         QVERIFY(persistence.dirty());
+    }
+
+    void persistenceAutosaveCoalescesDirtyPublications() {
+        PersistenceRuntimeFixture fixture{16, "autosave-coalesce"};
+        std::atomic<int> attempts{};
+        std::atomic<std::uint64_t> savedRevision{};
+        QThread* writerThread{};
+        palmier::windows::ProjectPersistenceController persistence(
+            fixture.runtime,
+            fixture.mailbox,
+            [&attempts, &savedRevision, &writerThread](
+                palmier::project::ProjectRuntime& targetRuntime,
+                const std::filesystem::path&,
+                std::optional<std::uint64_t> generation,
+                std::stop_token
+            ) {
+                attempts.fetch_add(1, std::memory_order_relaxed);
+                writerThread = QThread::currentThread();
+                const auto snapshot = targetRuntime.snapshot(generation);
+                savedRevision.store(snapshot.session->revision, std::memory_order_relaxed);
+                const auto acknowledged = targetRuntime.markPersisted(snapshot.session->stateId);
+                return palmier::project::ProjectPackageWriteReceipt{
+                    generation.value_or(0),
+                    acknowledged.session->revision,
+                    acknowledged.session->stateId,
+                    1,
+                    true,
+                    acknowledged.session->dirty(),
+                    palmier::project::ProjectPackageWriteWarning::none,
+                };
+            },
+            std::chrono::milliseconds{0},
+            nullptr
+        );
+        fixture.activate(persistence, L"C:/autosave-coalesce.palmier");
+        QSignalSpy saveFinished(
+            &persistence,
+            &palmier::windows::ProjectPersistenceController::saveFinished
+        );
+
+        fixture.splitAndPublish(persistence);
+        fixture.setDurationAndPublish(persistence, 8);
+
+        QVERIFY(persistence.autosavePending());
+        QTRY_COMPARE_WITH_TIMEOUT(saveFinished.count(), 1, 5000);
+        QCOMPARE(attempts.load(std::memory_order_relaxed), 1);
+        QCOMPARE(savedRevision.load(std::memory_order_relaxed), std::uint64_t{2});
+        QVERIFY(writerThread != QThread::currentThread());
+        QVERIFY(!persistence.autosavePending());
+        QVERIFY(!persistence.dirty());
+    }
+
+    void persistenceAutosaveFailureWaitsForNewerPublication() {
+        PersistenceRuntimeFixture fixture{17, "autosave-retry"};
+        std::atomic<int> attempts{};
+        palmier::windows::ProjectPersistenceController persistence(
+            fixture.runtime,
+            fixture.mailbox,
+            [&attempts](
+                palmier::project::ProjectRuntime& targetRuntime,
+                const std::filesystem::path&,
+                std::optional<std::uint64_t> generation,
+                std::stop_token
+            ) -> palmier::project::ProjectPackageWriteReceipt {
+                const auto attempt = attempts.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (attempt == 1) {
+                    throw palmier::project::ProjectPackageWriteError(
+                        "writeFailed",
+                        "autosave",
+                        "injected autosave failure"
+                    );
+                }
+                const auto snapshot = targetRuntime.snapshot(generation);
+                const auto acknowledged = targetRuntime.markPersisted(snapshot.session->stateId);
+                return {
+                    generation.value_or(0),
+                    acknowledged.session->revision,
+                    acknowledged.session->stateId,
+                    1,
+                    true,
+                    acknowledged.session->dirty(),
+                    palmier::project::ProjectPackageWriteWarning::none,
+                };
+            },
+            std::chrono::milliseconds{0},
+            nullptr
+        );
+        fixture.activate(persistence, L"C:/autosave-retry.palmier");
+        QSignalSpy saveFinished(
+            &persistence,
+            &palmier::windows::ProjectPersistenceController::saveFinished
+        );
+
+        fixture.splitAndPublish(persistence);
+        QTRY_COMPARE_WITH_TIMEOUT(saveFinished.count(), 1, 5000);
+        QCOMPARE(attempts.load(std::memory_order_relaxed), 1);
+        QVERIFY(!persistence.autosavePending());
+        QVERIFY(persistence.dirty());
+        QCOMPARE(persistence.errorCode(), QStringLiteral("writeFailed"));
+
+        fixture.setDurationAndPublish(persistence, 9);
+        QTRY_COMPARE_WITH_TIMEOUT(saveFinished.count(), 2, 5000);
+        QCOMPARE(attempts.load(std::memory_order_relaxed), 2);
+        QCOMPARE(saveFinished.last().at(0).toBool(), true);
+        QVERIFY(!persistence.dirty());
+    }
+
+    void persistenceAutosaveRearmsForEditDuringSave() {
+        PersistenceRuntimeFixture fixture{18, "autosave-newer"};
+        std::atomic<int> attempts{};
+        QSemaphore firstWriterEntered;
+        QSemaphore firstWriterGate;
+        QSemaphoreReleaser releaseWriterOnExit(firstWriterGate);
+        palmier::windows::ProjectPersistenceController persistence(
+            fixture.runtime,
+            fixture.mailbox,
+            [&attempts, &firstWriterEntered, &firstWriterGate](
+                palmier::project::ProjectRuntime& targetRuntime,
+                const std::filesystem::path&,
+                std::optional<std::uint64_t> generation,
+                std::stop_token
+            ) {
+                const auto snapshot = targetRuntime.snapshot(generation);
+                const auto attempt = attempts.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (attempt == 1) {
+                    firstWriterEntered.release();
+                    firstWriterGate.acquire();
+                }
+                const auto acknowledged = targetRuntime.markPersisted(snapshot.session->stateId);
+                return palmier::project::ProjectPackageWriteReceipt{
+                    generation.value_or(0),
+                    acknowledged.session->revision,
+                    acknowledged.session->stateId,
+                    1,
+                    true,
+                    acknowledged.session->dirty(),
+                    palmier::project::ProjectPackageWriteWarning::none,
+                };
+            },
+            std::chrono::milliseconds{0},
+            nullptr
+        );
+        fixture.activate(persistence, L"C:/autosave-newer.palmier");
+        QSignalSpy saveFinished(
+            &persistence,
+            &palmier::windows::ProjectPersistenceController::saveFinished
+        );
+
+        fixture.splitAndPublish(persistence);
+        QTRY_COMPARE_WITH_TIMEOUT(firstWriterEntered.available(), 1, 5000);
+        fixture.setDurationAndPublish(persistence, 8);
+        firstWriterGate.release();
+        static_cast<void>(releaseWriterOnExit.cancel());
+
+        QTRY_COMPARE_WITH_TIMEOUT(saveFinished.count(), 2, 5000);
+        QCOMPARE(attempts.load(std::memory_order_relaxed), 2);
+        QCOMPARE(saveFinished.at(0).at(0).toBool(), true);
+        QCOMPARE(saveFinished.at(1).at(0).toBool(), true);
+        QVERIFY(!persistence.autosavePending());
+        QVERIFY(!persistence.dirty());
+    }
+
+    void persistenceManualSaveAndShutdownSupersedeAutosave() {
+        PersistenceRuntimeFixture fixture{19, "autosave-supersede"};
+        std::atomic<int> attempts{};
+        palmier::windows::ProjectPersistenceController persistence(
+            fixture.runtime,
+            fixture.mailbox,
+            [&attempts](
+                palmier::project::ProjectRuntime& targetRuntime,
+                const std::filesystem::path&,
+                std::optional<std::uint64_t> generation,
+                std::stop_token
+            ) {
+                attempts.fetch_add(1, std::memory_order_relaxed);
+                const auto snapshot = targetRuntime.snapshot(generation);
+                const auto acknowledged = targetRuntime.markPersisted(snapshot.session->stateId);
+                return palmier::project::ProjectPackageWriteReceipt{
+                    generation.value_or(0),
+                    acknowledged.session->revision,
+                    acknowledged.session->stateId,
+                    1,
+                    true,
+                    acknowledged.session->dirty(),
+                    palmier::project::ProjectPackageWriteWarning::none,
+                };
+            },
+            std::chrono::hours{1},
+            nullptr
+        );
+        fixture.activate(persistence, L"C:/autosave-supersede.palmier");
+        QSignalSpy saveFinished(
+            &persistence,
+            &palmier::windows::ProjectPersistenceController::saveFinished
+        );
+
+        fixture.splitAndPublish(persistence);
+        QVERIFY(persistence.autosavePending());
+        persistence.save();
+        QVERIFY(!persistence.autosavePending());
+        QTRY_COMPARE_WITH_TIMEOUT(saveFinished.count(), 1, 5000);
+        QCOMPARE(attempts.load(std::memory_order_relaxed), 1);
+
+        fixture.setDurationAndPublish(persistence, 8);
+        QVERIFY(persistence.autosavePending());
+        QVERIFY(persistence.requestShutdown(true));
+        QVERIFY(!persistence.autosavePending());
+        QCOMPARE(attempts.load(std::memory_order_relaxed), 1);
     }
 
     void persistenceCommittedWarningRemainsObservable_data() {

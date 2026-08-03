@@ -153,6 +153,22 @@ if(BUILD_TESTING)
         persistenceCancellationReachesAdmittedSave
     )
     add_palmier_qt_shell_test(
+        persistence_autosave_coalesces_dirty_publications
+        persistenceAutosaveCoalescesDirtyPublications
+    )
+    add_palmier_qt_shell_test(
+        persistence_autosave_failure_waits_for_newer_publication
+        persistenceAutosaveFailureWaitsForNewerPublication
+    )
+    add_palmier_qt_shell_test(
+        persistence_autosave_rearms_for_edit_during_save
+        persistenceAutosaveRearmsForEditDuringSave
+    )
+    add_palmier_qt_shell_test(
+        persistence_manual_save_and_shutdown_supersede_autosave
+        persistenceManualSaveAndShutdownSupersedeAutosave
+    )
+    add_palmier_qt_shell_test(
         persistence_committed_warning
         persistenceCommittedWarningRemainsObservable
     )

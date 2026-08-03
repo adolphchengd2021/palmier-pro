@@ -15,10 +15,11 @@ one bounded project-driven H.264 export slice, a five-tool loopback MCP editing
 builds an unsigned x64 prototype installer with a runtime hash manifest and
 distribution evidence, then tests isolated staging, install, launch, uninstall,
    and external user-data preservation. It now also owns the active package
-   identity, holds a process-visible write lease, and provides crash-safe Save
-   As without discarding unknown package files. It does not yet provide general timeline
-   editing, autosave, audio export, general timeline export, a signed
-release installer, or clean Windows 10 19045 acceptance.
+   identity, holds a process-visible write lease, provides crash-safe Save As,
+   and debounces automatic saves without discarding unknown package files or
+   retrying an unchanged failure. It does not yet provide general timeline
+   editing, audio export, H.265 export, a signed release installer, or clean
+   Windows 10 19045 acceptance.
 
 - Requirements: `docs/WINDOWS_10_PORT_REQUIREMENTS.zh-CN.md`
 - Decisions: `docs/windows/adr/`
@@ -101,8 +102,11 @@ pool, blocks dirty project replacement, waits for an admitted save during close,
    and presents Save, Save As, Discard, and Cancel for dirty windows. Save As
    builds a complete same-volume sibling package, verifies every copied file,
    atomically installs a new destination, and switches identity only after the
-   exact runtime snapshot is acknowledged. Autosave and broader concurrent media
-   mutation coordination remain open; see ADR 0028 through ADR 0031 and ADR 0035.
+   exact runtime snapshot is acknowledged. One 30-second single-shot autosave
+   timer coalesces dirty publications, reuses the same serial atomic Save path,
+   and re-arms only when the runtime publication token advances. Recovery and
+   broader concurrent media mutation coordination remain open; see ADR 0028
+   through ADR 0031, ADR 0035, and ADR 0046.
 
 The shared session also keeps a process-local Redo branch for Split, Move, and
 Remove. Undo captures the exact post-action source DOM; Redo restores that state

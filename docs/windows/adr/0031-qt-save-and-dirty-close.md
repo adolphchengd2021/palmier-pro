@@ -46,7 +46,7 @@ new persistence participant.
 ## Evidence boundary
 
 This slice provides explicit manual Save and window-close protection for the
-current safe-edit project operations. It does not add autosave, Save As,
-package-wide media mutation, crash recovery, external-process locking, direct
-timeline editing controls, or Windows 10 19045 runtime certification. The
-Save, Discard, and Cancel dialog still requires manual Windows UI verification.
+current safe-edit project operations. Save As and deterministic autosave are
+defined by ADR 0035 and ADR 0046. It does not add package-wide media mutation,
+crash recovery, direct timeline editing controls, or Windows 10 19045 runtime
+certification. The dialog still requires manual Windows UI verification.

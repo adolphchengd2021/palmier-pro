@@ -4,8 +4,10 @@
 #include "palmier/windows/project_runtime_mailbox.hpp"
 
 #include <QObject>
+#include <QTimer>
 #include <QUrl>
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -19,6 +21,7 @@ class ProjectPersistenceController final : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool dirty READ dirty NOTIFY dirtyChanged)
     Q_PROPERTY(bool saving READ saving NOTIFY savingChanged)
+    Q_PROPERTY(bool autosavePending READ autosavePending NOTIFY autosavePendingChanged)
     Q_PROPERTY(bool hasProject READ hasProject NOTIFY projectChanged)
     Q_PROPERTY(QString errorCode READ errorCode NOTIFY errorCodeChanged)
     Q_PROPERTY(QString errorMessage READ errorMessage NOTIFY errorMessageChanged)
@@ -50,10 +53,18 @@ public:
         Writer writer,
         QObject* parent
     );
+    ProjectPersistenceController(
+        std::shared_ptr<project::ProjectRuntime> runtime,
+        std::shared_ptr<ProjectRuntimeMailbox> runtimeMailbox,
+        Writer writer,
+        std::chrono::milliseconds autosaveDelay,
+        QObject* parent
+    );
     ~ProjectPersistenceController() override;
 
     bool dirty() const noexcept;
     bool saving() const noexcept;
+    bool autosavePending() const noexcept;
     bool hasProject() const noexcept;
     QString errorCode() const;
     QString errorMessage() const;
@@ -72,6 +83,7 @@ public:
 signals:
     void dirtyChanged();
     void savingChanged();
+    void autosavePendingChanged();
     void projectChanged();
     void errorCodeChanged();
     void errorMessageChanged();
@@ -84,11 +96,15 @@ signals:
 private:
     void setDirty(bool value);
     void setSaving(bool value);
+    void setAutosavePending(bool value);
     void setErrorCode(QString value);
     void setErrorMessage(QString value);
     void setWarningCode(QString value);
     void setWarningMessage(QString value);
     void refreshFromMailbox();
+    void configureAutosave(std::chrono::milliseconds delay);
+    void scheduleAutosave();
+    void stopAutosave();
     void startSave(std::optional<std::filesystem::path> destination);
 
     std::shared_ptr<project::ProjectRuntime> runtime_;
@@ -98,8 +114,12 @@ private:
     std::filesystem::path packagePath_;
     std::uint64_t projectGeneration_{};
     std::stop_source stopSource_;
+    QTimer autosaveTimer_;
+    std::uint64_t lastPublicationToken_{};
+    std::uint64_t savePublicationToken_{};
     bool dirty_{};
     bool saving_{};
+    bool autosavePending_{};
     bool shutdownRequested_{};
     QString errorCode_;
     QString errorMessage_;

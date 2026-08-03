@@ -4,11 +4,15 @@
 #include <QFutureWatcher>
 #include <QThreadPool>
 
+#include <algorithm>
 #include <exception>
+#include <limits>
 #include <utility>
 
 namespace palmier::windows {
 namespace {
+
+constexpr auto defaultAutosaveDelay = std::chrono::seconds{30};
 
 struct SaveResult final {
     std::optional<project::ProjectPackageWriteReceipt> receipt;
@@ -37,6 +41,7 @@ ProjectPersistenceController::ProjectPersistenceController(
     runtime,
     std::move(runtimeMailbox),
     project::writeProjectPackage,
+    defaultAutosaveDelay,
     parent
 ) {}
 
@@ -48,7 +53,9 @@ ProjectPersistenceController::ProjectPersistenceController(
 ) : QObject(parent),
     runtime_(std::move(runtime)),
     runtimeMailbox_(std::move(runtimeMailbox)),
-    packageService_(std::move(packageService)) {}
+    packageService_(std::move(packageService)) {
+    configureAutosave(defaultAutosaveDelay);
+}
 
 ProjectPersistenceController::ProjectPersistenceController(
     std::shared_ptr<project::ProjectRuntime> runtime,
@@ -58,14 +65,33 @@ ProjectPersistenceController::ProjectPersistenceController(
 ) : QObject(parent),
     runtime_(std::move(runtime)),
     runtimeMailbox_(std::move(runtimeMailbox)),
-    writer_(std::move(writer)) {}
+    writer_(std::move(writer)) {
+    configureAutosave(defaultAutosaveDelay);
+}
+
+ProjectPersistenceController::ProjectPersistenceController(
+    std::shared_ptr<project::ProjectRuntime> runtime,
+    std::shared_ptr<ProjectRuntimeMailbox> runtimeMailbox,
+    Writer writer,
+    std::chrono::milliseconds autosaveDelay,
+    QObject* parent
+) : QObject(parent),
+    runtime_(std::move(runtime)),
+    runtimeMailbox_(std::move(runtimeMailbox)),
+    writer_(std::move(writer)) {
+    configureAutosave(autosaveDelay);
+}
 
 ProjectPersistenceController::~ProjectPersistenceController() {
+    stopAutosave();
     stopSource_.request_stop();
 }
 
 bool ProjectPersistenceController::dirty() const noexcept { return dirty_; }
 bool ProjectPersistenceController::saving() const noexcept { return saving_; }
+bool ProjectPersistenceController::autosavePending() const noexcept {
+    return autosavePending_;
+}
 bool ProjectPersistenceController::hasProject() const noexcept {
     return projectGeneration_ != 0 && !packagePath_.empty();
 }
@@ -83,6 +109,10 @@ void ProjectPersistenceController::activateProject(
 ) {
     if (shutdownRequested_ || generation == 0 || packagePath.empty()) return;
     const bool changed = generation != projectGeneration_ || packagePath != packagePath_;
+    if (changed) {
+        stopAutosave();
+        lastPublicationToken_ = 0;
+    }
     projectGeneration_ = generation;
     packagePath_ = std::move(packagePath);
     refreshFromMailbox();
@@ -96,10 +126,13 @@ void ProjectPersistenceController::observeRuntimePublication(
         shutdownRequested_
         || !publication.session
         || publication.projectGeneration != projectGeneration_
+        || publication.token <= lastPublicationToken_
     ) {
         return;
     }
+    lastPublicationToken_ = publication.token;
     setDirty(publication.session->dirty());
+    if (dirty_) scheduleAutosave();
 }
 
 void ProjectPersistenceController::save() {
@@ -130,6 +163,7 @@ void ProjectPersistenceController::startSave(
         emit saveFinished(false);
         return;
     }
+    stopAutosave();
     if (!destination && !dirty_) {
         setErrorCode({});
         setErrorMessage({});
@@ -143,6 +177,7 @@ void ProjectPersistenceController::startSave(
     setWarningCode({});
     setWarningMessage({});
     setSaving(true);
+    savePublicationToken_ = lastPublicationToken_;
     stopSource_ = std::stop_source{};
     const auto cancellation = stopSource_.get_token();
     const auto generation = projectGeneration_;
@@ -152,6 +187,7 @@ void ProjectPersistenceController::startSave(
     const auto packageService = packageService_;
     auto* watcher = new QFutureWatcher<SaveResult>(this);
     connect(watcher, &QFutureWatcher<SaveResult>::finished, this, [this, watcher] {
+        const auto admittedPublicationToken = savePublicationToken_;
         auto result = watcher->future().takeResult();
         watcher->deleteLater();
         setSaving(false);
@@ -185,7 +221,11 @@ void ProjectPersistenceController::startSave(
             setErrorMessage(std::move(result.errorMessage));
         }
         emit saveFinished(succeeded);
-        if (shutdownRequested_) emit shutdownReady();
+        if (shutdownRequested_) {
+            emit shutdownReady();
+        } else if (dirty_ && lastPublicationToken_ > admittedPublicationToken) {
+            scheduleAutosave();
+        }
     });
     watcher->setFuture(QtConcurrent::run(projectSavePool(), [
         runtime,
@@ -281,6 +321,7 @@ bool ProjectPersistenceController::requestShutdown(bool discardUnsavedChanges) {
         return false;
     }
     shutdownRequested_ = true;
+    stopAutosave();
     return !saving_;
 }
 
@@ -298,12 +339,16 @@ void ProjectPersistenceController::refreshFromMailbox() {
         setDirty(false);
         return;
     }
+    if (publication->token > lastPublicationToken_) {
+        lastPublicationToken_ = publication->token;
+    }
     setDirty(publication->session->dirty());
 }
 
 void ProjectPersistenceController::setDirty(bool value) {
     if (dirty_ == value) return;
     dirty_ = value;
+    if (!dirty_) stopAutosave();
     emit dirtyChanged();
 }
 
@@ -311,6 +356,40 @@ void ProjectPersistenceController::setSaving(bool value) {
     if (saving_ == value) return;
     saving_ = value;
     emit savingChanged();
+}
+
+void ProjectPersistenceController::setAutosavePending(bool value) {
+    if (autosavePending_ == value) return;
+    autosavePending_ = value;
+    emit autosavePendingChanged();
+}
+
+void ProjectPersistenceController::configureAutosave(
+    std::chrono::milliseconds delay
+) {
+    const auto bounded = std::clamp<std::int64_t>(
+        delay.count(),
+        0,
+        (std::numeric_limits<int>::max)()
+    );
+    autosaveTimer_.setSingleShot(true);
+    autosaveTimer_.setInterval(static_cast<int>(bounded));
+    connect(&autosaveTimer_, &QTimer::timeout, this, [this] {
+        setAutosavePending(false);
+        startSave(std::nullopt);
+    });
+}
+
+void ProjectPersistenceController::scheduleAutosave() {
+    if (shutdownRequested_ || saving_ || !hasProject() || !dirty_) return;
+    const bool wasPending = autosavePending_;
+    autosaveTimer_.start();
+    if (!wasPending) setAutosavePending(true);
+}
+
+void ProjectPersistenceController::stopAutosave() {
+    if (autosaveTimer_.isActive()) autosaveTimer_.stop();
+    setAutosavePending(false);
 }
 
 void ProjectPersistenceController::setErrorCode(QString value) {
